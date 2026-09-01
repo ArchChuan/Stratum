@@ -124,7 +124,7 @@ func TestPgRunRepository_dimensionsFailureReasonRoundTrip(t *testing.T) {
 	// SaveRun 侧：dimensions 序列化为 JSON 数组，failure_reason 原样写入。
 	expectTenantTx(writeMock)
 	writeMock.ExpectExec("INSERT INTO eval_runs").
-		WithArgs("run-rt", "prompt", "r-1", "rev-1", "s-1", true, 1, 1, `{"pass_rate":1}`, now).
+		WithArgs("run-rt", "prompt", "r-1", "rev-1", "s-1", true, 1, 1, `{"pass_rate":1}`, "", now).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	writeMock.ExpectExec("INSERT INTO eval_case_results").
 		WithArgs("case-rt", "run-rt", "case-1", true, `{"ok":true}`, "m", "", "tr-1", 5, 0.1, 2,
@@ -144,8 +144,8 @@ func TestPgRunRepository_dimensionsFailureReasonRoundTrip(t *testing.T) {
 		WithArgs("run-rt").
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "resource_kind", "resource_id", "revision_id", "suite_revision_id",
-			"passed", "total_cases", "passed_cases", "metrics", "created_at",
-		}).AddRow("run-rt", "prompt", "r-1", "rev-1", "s-1", true, 1, 1, []byte(`{"pass_rate":1}`), now))
+			"passed", "total_cases", "passed_cases", "metrics", "created_by", "created_at",
+		}).AddRow("run-rt", "prompt", "r-1", "rev-1", "s-1", true, 1, 1, []byte(`{"pass_rate":1}`), "creator-1", now))
 	readMock.ExpectQuery("SELECT case_id, passed, actual_output").
 		WithArgs("run-rt").
 		WillReturnRows(pgxmock.NewRows([]string{
@@ -219,7 +219,7 @@ func TestPgRunRepository_processAndToolRoundTrip(t *testing.T) {
 	// SaveRun 侧：process_pass/failure 原样，tool_sequence 为脱敏后的工具序列 JSON。
 	expectTenantTx(writeMock)
 	writeMock.ExpectExec("INSERT INTO eval_runs").
-		WithArgs("run-pt", "prompt", "r-1", "rev-1", "s-1", true, 1, 1, `{"pass_rate":1}`, now).
+		WithArgs("run-pt", "prompt", "r-1", "rev-1", "s-1", true, 1, 1, `{"pass_rate":1}`, "", now).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	writeMock.ExpectExec("INSERT INTO eval_case_results").
 		WithArgs("case-pt", "run-pt", "case-1", true, `{"ok":true}`, "m", "", "tr-1", 5, 0.1, 2,
@@ -237,8 +237,8 @@ func TestPgRunRepository_processAndToolRoundTrip(t *testing.T) {
 		WithArgs("run-pt").
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "resource_kind", "resource_id", "revision_id", "suite_revision_id",
-			"passed", "total_cases", "passed_cases", "metrics", "created_at",
-		}).AddRow("run-pt", "prompt", "r-1", "rev-1", "s-1", true, 1, 1, []byte(`{"pass_rate":1}`), now))
+			"passed", "total_cases", "passed_cases", "metrics", "created_by", "created_at",
+		}).AddRow("run-pt", "prompt", "r-1", "rev-1", "s-1", true, 1, 1, []byte(`{"pass_rate":1}`), "creator-1", now))
 	readMock.ExpectQuery("SELECT case_id, passed, actual_output").
 		WithArgs("run-pt").
 		WillReturnRows(pgxmock.NewRows([]string{

@@ -180,54 +180,52 @@ func registerEvaluations(r *gin.Engine, c *wiring.Container, requireActive gin.H
 		c.Logger,
 	).WithBaselineService(c.Evaluation.BaselineService).WithAgentRevisionApplier(c.Evaluation.AgentRevisionApplier).
 		WithTestCaseGenerator(c.Evaluation.TestCaseGenerator).WithObservationService(c.Evaluation.ObservationService).
-		WithReviewService(c.Evaluation.ReviewService)
-	if c.Agent != nil && c.Agent.ApprovalService != nil {
-		// D4：member 写操作创建审批（缺装配时 handler 内部 fail closed 503）。
-		h = h.WithApprovalService(c.Agent.ApprovalService)
-		// 角色分流现查（单事实源）：不信任 JWT role claim 的陈旧窗口。
-		// 仅当完整 resource stack 装配时注入；否则 handler 回退 claim（测试路径）。
-		if roles := c.Agent.RoleResolver; roles != nil {
-			h = h.WithRoleResolver(roles)
-		}
-	}
+		WithReviewService(c.Evaluation.ReviewService).WithDeleteService(c.Evaluation.DeleteService)
 	requireAdmin := middleware.RequireTenantRole("admin")
 	evaluations := r.Group("/evaluations", protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))...)
 	{
-		// 读端点收 admin（D6）：评估中心数据（runs/candidates/overview/jobs）暴露
-		// 检索质量与实验结果，仅管理员可读；其余只读资源仍对 member 开放。
-		evaluations.GET("/overview", requireAdmin, h.Overview)
+		// 读放开：评测相关内容对租户全部用户可见（推翻 D6），不再 requireAdmin；
+		// 写操作由 requireAdmin 门禁（member 审批分流 D4 已整体移除）。
+		evaluations.GET("/overview", h.Overview)
 		evaluations.GET("/resources", h.ListResources)
 		evaluations.GET("/suites", h.ListSuites)
-		evaluations.GET("/runs", requireAdmin, h.ListRuns)
-		evaluations.GET("/candidates", requireAdmin, h.ListCandidates)
+		evaluations.GET("/runs", h.ListRuns)
+		evaluations.GET("/candidates", h.ListCandidates)
 		evaluations.GET("/experiments", h.ListExperiments)
 		evaluations.GET("/resources/:kind/:id/timeline", h.Timeline)
 		// P1a 运行态观测查询：租户自有运行数据，member 可读（无需 requireAdmin）。
 		// handler 内部在观测服务未装配时 fail closed 503（Task 12 wiring 注入）。
 		evaluations.GET("/observations", h.ListObservations)
 		evaluations.GET("/observations/:id", h.GetObservation)
-		// P1c 评审池：人工评审结论暴露检索质量与产品缺陷，仅管理员可读/回写。
-		evaluations.GET("/review", requireAdmin, h.ListReviewItems)
-		evaluations.GET("/review/:id", requireAdmin, h.GetReviewItem)
+		// P1c 评审池：读对 member 放开；评审决策回写仍 requireAdmin。
+		evaluations.GET("/review", h.ListReviewItems)
+		evaluations.GET("/review/:id", h.GetReviewItem)
 		evaluations.POST("/review/:id/decision", requireAdmin, h.DecideReviewItem)
-		// D4：11 个评测写端点放宽为 requireActive，handler 内按角色分流——
-		// member 创建 evaluation_action 审批返回 202，admin/owner 直接执行。
-		evaluations.POST("/resources/:kind/:id/baseline", requireActive, h.CreateBaseline)
-		evaluations.POST("/suites", requireActive, h.CreateSuite)
-		evaluations.POST("/suites/:id/publish", requireActive, h.PublishSuite)
-		evaluations.POST("/suites/:id/generate", requireActive, h.GenerateSuiteCases)
-		evaluations.GET("/suites/:id/draft", requireAdmin, requireActive, h.GetSuiteDraft)
+		// 写收紧：评测写端点一律 requireAdmin（D4 member→evaluation_action 分流已移除）。
+		evaluations.POST("/resources/:kind/:id/baseline", requireAdmin, requireActive, h.CreateBaseline)
+		evaluations.POST("/suites", requireAdmin, requireActive, h.CreateSuite)
+		evaluations.POST("/suites/:id/publish", requireAdmin, requireActive, h.PublishSuite)
+		evaluations.POST("/suites/:id/generate", requireAdmin, requireActive, h.GenerateSuiteCases)
+		evaluations.GET("/suites/:id/draft", requireActive, h.GetSuiteDraft)
 		evaluations.PUT("/suites/:id/draft/cases/:caseId", requireAdmin, requireActive, h.UpdateDraftCase)
-		evaluations.POST("/runs", requireActive, h.EnqueueRun)
-		evaluations.GET("/runs/:id", requireAdmin, h.GetRun)
-		evaluations.GET("/jobs/:id", requireAdmin, h.GetJob)
-		evaluations.POST("/optimizations", requireActive, h.GenerateOptimization)
-		evaluations.POST("/experiments", requireActive, h.CreateExperiment)
-		evaluations.POST("/candidates/:id/reject", requireActive, h.RejectCandidate)
-		evaluations.POST("/experiments/:id/pause", requireActive, h.PauseExperiment)
-		evaluations.POST("/experiments/:id/promote", requireActive, h.PromoteExperiment)
-		evaluations.POST("/experiments/:id/rollback", requireActive, h.RollbackExperiment)
-		evaluations.POST("/feedback", requireActive, h.RecordFeedback)
+		evaluations.POST("/runs", requireAdmin, requireActive, h.EnqueueRun)
+		evaluations.GET("/runs/:id", h.GetRun)
+		evaluations.GET("/jobs/:id", h.GetJob)
+		evaluations.POST("/optimizations", requireAdmin, requireActive, h.GenerateOptimization)
+		evaluations.POST("/experiments", requireAdmin, requireActive, h.CreateExperiment)
+		evaluations.POST("/candidates/:id/reject", requireAdmin, requireActive, h.RejectCandidate)
+		evaluations.POST("/experiments/:id/pause", requireAdmin, requireActive, h.PauseExperiment)
+		evaluations.POST("/experiments/:id/promote", requireAdmin, requireActive, h.PromoteExperiment)
+		evaluations.POST("/experiments/:id/rollback", requireAdmin, requireActive, h.RollbackExperiment)
+		evaluations.POST("/feedback", requireAdmin, requireActive, h.RecordFeedback)
+		// 删除：owner-or-creator 门禁（应用层 fail-closed），admin+ 才可触发。
+		evaluations.DELETE("/suites/:id", requireAdmin, requireActive, h.DeleteSuite)
+		evaluations.DELETE("/runs/:id", requireAdmin, requireActive, h.DeleteRun)
+		evaluations.DELETE("/jobs/:id", requireAdmin, requireActive, h.DeleteJob)
+		evaluations.DELETE("/experiments/:id", requireAdmin, requireActive, h.DeleteExperiment)
+		evaluations.DELETE("/candidates/:id", requireAdmin, requireActive, h.DeleteCandidate)
+		evaluations.DELETE("/review/:id", requireAdmin, requireActive, h.DeleteReviewItem)
+		evaluations.DELETE("/feedback/:id", requireAdmin, requireActive, h.DeleteFeedback)
 	}
 }
 

@@ -1,5 +1,5 @@
 import { ExperimentOutlined, PlusOutlined } from '@ant-design/icons';
-import { Alert, Button, Drawer, Empty, Flex, Select, Skeleton, Space, Table, Tabs, Typography, message } from 'antd';
+import { Alert, Button, Drawer, Empty, Flex, Modal, Select, Skeleton, Space, Table, Tabs, Typography, message } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
@@ -24,6 +24,7 @@ import { resourceKindSchema } from '../model/evaluation';
 import type { CandidateSummary, ExperimentSummary, ResourceKind, RunSummary } from '../model/evaluation';
 
 import { useResponsive } from '@/shared/hooks';
+import { extractErrorMessage } from '@/shared/lib';
 import { createIdempotencyKey } from '@/shared/lib/idempotencyKey';
 
 const resourceOptions = ['skill', 'agent', 'mcp', 'knowledge'].map((value) => ({ value, label: displayLabel(value) }));
@@ -72,6 +73,25 @@ export const EvaluationCenterPage = () => {
     try { await action(); message.success({ content: success, duration: 2 }); }
     catch (error) { message.error({ content: error instanceof Error ? error.message : '操作失败', duration: 3 }); }
   };
+  // confirmDelete 二次确认后执行删除（RBAC 后端 fail-closed：403 时提取后端
+  // {"error":...} 文案展示）。删除成功后 managedCommand 已触发 center.reload()。
+  const confirmDelete = (title: string, action: () => Promise<unknown>) => {
+    Modal.confirm({
+      title,
+      okText: '删除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          await action();
+          message.success({ content: '已删除', duration: 2 });
+        } catch (error) {
+          message.error({ content: extractErrorMessage(error) || '删除失败', duration: 3 });
+          throw error;
+        }
+      },
+    });
+  };
   const setKind = (value: ResourceKind | undefined) => {
     const next = new URLSearchParams(searchParams);
     if (value) next.set('kind', value); else next.delete('kind');
@@ -97,18 +117,25 @@ export const EvaluationCenterPage = () => {
     <ResourceTable resources={center.resources.items} loading={center.loading} filtered={!!kind || !!status} onOpen={(row) => setResourceId(row.id)} />
     <Tabs style={{ marginTop: 16 }} items={[
       { key: 'runs', label: `运行记录 ${center.runs.items.length}`, children: <CompactList rows={center.runs.items}
-        empty="运行记录还是空的" onOpen={(row) => setRunId(row.id)} /> },
+        empty="运行记录还是空的" onOpen={(row) => setRunId(row.id)}
+        canDelete={(row) => center.canDeleteEntity(row.created_by)}
+        onDelete={(row) => confirmDelete('删除该运行记录？', () => center.deleteRun(row.id))} /> },
       { key: 'candidates', label: `候选版本 ${center.candidates.items.length}`, children: <>
         {center.canManageEvaluation && <Button icon={<ExperimentOutlined />} style={{ marginBottom: 12 }}
           onClick={() => setEvolutionOpen(true)}>进化操作</Button>}
-        <CompactList rows={center.candidates.items} empty="候选版本还是空的" onOpen={(row) => setCandidateId(row.id)} />
+        <CompactList rows={center.candidates.items} empty="候选版本还是空的" onOpen={(row) => setCandidateId(row.id)}
+          canDelete={(row) => center.canDeleteEntity(row.created_by)}
+          onDelete={(row) => confirmDelete('删除该候选版本？', () => center.deleteCandidate(row.id))} />
       </> },
       { key: 'experiments', label: `金丝雀实验 ${center.experiments.items.length}`, children: <CompactList rows={center.experiments.items}
-        empty="金丝雀实验还是空的" onOpen={(row) => setExperimentId(row.id)} /> },
+        empty="金丝雀实验还是空的" onOpen={(row) => setExperimentId(row.id)}
+        canDelete={(row) => center.canDeleteEntity(row.created_by)}
+        onDelete={(row) => confirmDelete('删除该金丝雀实验？', () => center.deleteExperiment(row.id))} /> },
       { key: 'suites', label: `套件 ${center.suites.items.length}`, children: <SuitesPanel suites={center.suites.items}
         loading={center.loading} canManage={center.canManageEvaluation} onOpen={(row) => setSuiteId(row.id)}
-        onCreate={() => setSuiteCreateOpen(true)} /> },
-      { key: 'review', label: '人工评审池', children: <ReviewPoolPanel /> },
+        onCreate={() => setSuiteCreateOpen(true)} canDelete={(row) => center.canDeleteEntity(row.created_by)}
+        onDelete={(row) => confirmDelete(`删除套件「${row.name}」？`, () => center.deleteSuite(row.id))} /> },
+      { key: 'review', label: '人工评审池', children: <ReviewPoolPanel canDelete={(item) => center.canDeleteEntity(item.created_by)} /> },
     ]} />
     <Drawer title="资源详情" open={!!resource} onClose={() => setResourceId('')} width={drawerWidth(isMobile)} destroyOnHidden>
       {resource && <><Typography.Title level={5}>观测事实</Typography.Title>
@@ -224,13 +251,17 @@ export const EvaluationCenterPage = () => {
   </div>;
 };
 
-const CompactList = <T extends RunSummary | CandidateSummary | ExperimentSummary>({ rows, empty, onOpen }: {
+const CompactList = <T extends RunSummary | CandidateSummary | ExperimentSummary>({ rows, empty, onOpen, canDelete, onDelete }: {
   rows: T[]; empty: string; onOpen: (row: T) => void;
+  canDelete?: (row: T) => boolean; onDelete?: (row: T) => void;
 }) => <Table<T> size="small" rowKey="id" dataSource={rows} pagination={false}
   locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={empty} /> }} columns={[
     { title: '记录', dataIndex: 'id', ellipsis: true },
     { title: '资源', dataIndex: 'resource_id', ellipsis: true },
     { title: '状态', dataIndex: 'status', width: 120, render: (value: string, row) => <StatusTag
       value={'passed' in row ? runDisplayStatus(value, row.passed) : value} /> },
-    { title: '操作', width: 80, render: (_, row) => <Button type="link" size="small" onClick={() => onOpen(row)}>详情</Button> },
+    { title: '操作', width: 120, render: (_, row) => <Space>
+      <Button type="link" size="small" onClick={() => onOpen(row)}>详情</Button>
+      {canDelete?.(row) && onDelete && <Button type="link" size="small" danger onClick={() => onDelete(row)}>删除</Button>}
+    </Space> },
   ]} />;

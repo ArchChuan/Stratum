@@ -9,14 +9,11 @@ import (
 
 	"github.com/byteBuilderX/stratum/api/http/dto/gen"
 	"github.com/byteBuilderX/stratum/api/middleware"
-	agentapp "github.com/byteBuilderX/stratum/internal/agent/application"
-	agentdomain "github.com/byteBuilderX/stratum/internal/agent/domain"
 	evalapp "github.com/byteBuilderX/stratum/internal/evaluation/application"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
 
@@ -82,6 +79,17 @@ type evaluationFeedbackService interface {
 	) (evalapp.FeedbackResult, error)
 }
 
+// evaluationDeleteService 全实体删除服务（owner-or-creator 门禁，fail-closed）。
+type evaluationDeleteService interface {
+	DeleteSuite(ctx context.Context, tenantID, suiteID, actorID string) error
+	DeleteRun(ctx context.Context, tenantID, runID, actorID string) error
+	DeleteJob(ctx context.Context, tenantID, jobID, actorID string) error
+	DeleteExperiment(ctx context.Context, tenantID, experimentID, actorID string) error
+	DeleteCandidate(ctx context.Context, tenantID, candidateID, actorID string) error
+	DeleteReviewItem(ctx context.Context, tenantID, reviewID, actorID string) error
+	DeleteFeedback(ctx context.Context, tenantID, feedbackID, actorID string) error
+}
+
 type evaluationBaselineService interface {
 	CreatePublishedBaseline(
 		ctx context.Context, tenantID string, kind domain.ResourceKind, resourceID string,
@@ -90,18 +98,6 @@ type evaluationBaselineService interface {
 
 type evaluationAgentRevisionApplier interface {
 	ApplyPublishedRevision(ctx context.Context, tenantID, agentID, revisionID string) error
-}
-
-// evaluationApprovalService 创建审批请求（D4 member 写操作分流）。
-// *agentapp.ToolApprovalService 满足该接口。
-type evaluationApprovalService interface {
-	Request(ctx context.Context, payload agentapp.ToolApprovalPayload) (string, error)
-}
-
-// evaluationRoleResolver 现查 actor 的租户角色（单事实源）。wiring 注入
-// tenantRoleAdapter；resolver 缺失（测试/降级）时 currentRole 回退 JWT role claim。
-type evaluationRoleResolver interface {
-	ResolveTenantRole(ctx context.Context, tenantID, userID string) (string, error)
 }
 
 // evaluationObservationQueryService 运行态观测查询服务（P1a 查询 API）。
@@ -119,10 +115,6 @@ type evaluationReviewService interface {
 		reason string) (*domain.ReviewItem, error)
 }
 
-// policyVersionEvaluationAction 标记评测动作审批的策略版本（审批协议演进时的
-// 兼容性锚点；Digest 校验使其与创建时版本强绑定）。
-const policyVersionEvaluationAction = "action-v1"
-
 type EvaluationHandler struct {
 	suites       evaluationSuiteService
 	jobs         evaluationJobService
@@ -135,10 +127,9 @@ type EvaluationHandler struct {
 	baselines    evaluationBaselineService
 	agentApplier evaluationAgentRevisionApplier
 	casegen      evaluationCaseGenerator
-	approvals    evaluationApprovalService
-	roles        evaluationRoleResolver
 	observations evaluationObservationQueryService
 	review       evaluationReviewService
+	deletes      evaluationDeleteService
 	logger       *zap.Logger
 }
 
@@ -174,18 +165,6 @@ func (h *EvaluationHandler) WithTestCaseGenerator(generator evaluationCaseGenera
 	return h
 }
 
-func (h *EvaluationHandler) WithApprovalService(service evaluationApprovalService) *EvaluationHandler {
-	h.approvals = service
-	return h
-}
-
-// WithRoleResolver 注入租户角色现查 resolver（wiring 提供 DB-backed adapter）。
-// resolver 未注入时 currentRole 回退 JWT role claim（仅测试路径）。
-func (h *EvaluationHandler) WithRoleResolver(roles evaluationRoleResolver) *EvaluationHandler {
-	h.roles = roles
-	return h
-}
-
 // WithObservationService 注入运行态观测查询服务（P1a 查询 API）。
 func (h *EvaluationHandler) WithObservationService(service evaluationObservationQueryService) *EvaluationHandler {
 	h.observations = service
@@ -198,25 +177,10 @@ func (h *EvaluationHandler) WithReviewService(service evaluationReviewService) *
 	return h
 }
 
-// currentRole 优先现查（单事实源，fail closed）；identity 缺失或解析失败返回 ""。
-// 仅当 resolver 未装配（测试/降级）时回退 JWT role claim。
-func (h *EvaluationHandler) currentRole(c *gin.Context) string {
-	if h.roles != nil {
-		tenantID, ok := tenantIDFromCtx(c)
-		if !ok {
-			return ""
-		}
-		actor, ok := userIDFromCtx(c)
-		if !ok {
-			return ""
-		}
-		role, err := h.roles.ResolveTenantRole(c.Request.Context(), tenantID, actor)
-		if err != nil {
-			return ""
-		}
-		return role
-	}
-	return c.GetString(middleware.ContextKeyRole)
+// WithDeleteService 注入全实体删除服务（owner-or-creator 门禁）。
+func (h *EvaluationHandler) WithDeleteService(service evaluationDeleteService) *EvaluationHandler {
+	h.deletes = service
+	return h
 }
 
 func (h *EvaluationHandler) CreateBaseline(c *gin.Context) {
@@ -234,14 +198,12 @@ func (h *EvaluationHandler) CreateBaseline(c *gin.Context) {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
-	args := map[string]any{"operation": "create_baseline", "resourceKind": string(kind), "resourceID": c.Param("id")}
-	h.requireApprovalOrExecute(c, "evaluation.create_baseline", args, http.StatusCreated, func() (any, error) {
-		ref, err := h.baselines.CreatePublishedBaseline(c.Request.Context(), tenantID, kind, c.Param("id"))
-		if err != nil {
-			return nil, err
-		}
-		return ref, nil
-	})
+	ref, err := h.baselines.CreatePublishedBaseline(c.Request.Context(), tenantID, kind, c.Param("id"))
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusCreated, ref)
 }
 
 func (h *EvaluationHandler) CreateSuite(c *gin.Context) {
@@ -259,21 +221,20 @@ func (h *EvaluationHandler) CreateSuite(c *gin.Context) {
 	for _, item := range req.Cases {
 		cases = append(cases, toDomainCase(item))
 	}
-	caseArgs := make([]any, 0, len(cases))
-	for _, cs := range cases {
-		caseArgs = append(caseArgs, caseAuditArg(cs))
+	actorID, ok := userIDFromCtx(c)
+	if !ok {
+		respondMissingUser(c)
+		return
 	}
-	args := map[string]any{"operation": "create_suite", "name": req.Name, "description": req.Description,
-		"resource_kind": string(req.ResourceKind), "cases": caseArgs}
-	h.requireApprovalOrExecute(c, "evaluation.create_suite", args, http.StatusCreated, func() (any, error) {
-		suite, revision, err := h.suites.Create(c.Request.Context(), tenantID, evalapp.CreateSuiteInput{
-			Name: req.Name, Description: req.Description, ResourceKind: domain.ResourceKind(req.ResourceKind), Cases: cases,
-		})
-		if err != nil {
-			return nil, err
-		}
-		return gin.H{"suite": suite, "revision": revision}, nil
+	suite, revision, err := h.suites.Create(c.Request.Context(), tenantID, evalapp.CreateSuiteInput{
+		Name: req.Name, Description: req.Description, ResourceKind: domain.ResourceKind(req.ResourceKind), Cases: cases,
+		ActorID: actorID,
 	})
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"suite": suite, "revision": revision})
 }
 
 // toDomainCase converts one create-suite request case into a domain.EvalCase,
@@ -303,42 +264,18 @@ func toDomainCase(item gen.EvaluationCaseRequest) domain.EvalCase {
 	return testCase
 }
 
-// caseAuditArg builds the audit payload for one case, including the process
-// assertion config (tool_spec / step_judge) for approver review (§6.5).
-func caseAuditArg(cs domain.EvalCase) map[string]any {
-	caseArg := map[string]any{
-		"name": cs.Name, "input": cs.Input, "expected_output": cs.ExpectedOutput,
-		"assertion_mode": string(cs.AssertionMode), "enabled": cs.Enabled,
-	}
-	if cs.JudgeSpec != nil {
-		caseArg["judge_spec"] = map[string]any{"model": cs.JudgeSpec.Model, "rubric": cs.JudgeSpec.Rubric}
-	}
-	if cs.ToolSpec != nil {
-		caseArg["tool_spec"] = map[string]any{
-			"must_call": cs.ToolSpec.MustCall, "must_not_call": cs.ToolSpec.MustNotCall,
-			"order": cs.ToolSpec.Order, "max_calls": cs.ToolSpec.MaxCalls,
-		}
-	}
-	if cs.StepJudge != nil {
-		caseArg["step_judge"] = map[string]any{"criteria": cs.StepJudge.Criteria}
-	}
-	return caseArg
-}
-
 func (h *EvaluationHandler) PublishSuite(c *gin.Context) {
 	tenantID, ok := tenantIDFromCtx(c)
 	if !ok {
 		respondMissingTenant(c)
 		return
 	}
-	args := map[string]any{"operation": "publish_suite", "suiteID": c.Param("id")}
-	h.requireApprovalOrExecute(c, "evaluation.publish_suite", args, http.StatusOK, func() (any, error) {
-		revision, err := h.suites.Publish(c.Request.Context(), tenantID, c.Param("id"))
-		if err != nil {
-			return nil, err
-		}
-		return revision, nil
-	})
+	revision, err := h.suites.Publish(c.Request.Context(), tenantID, c.Param("id"))
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, revision)
 }
 
 // GenerateSuiteCases samples production interactions for the suite's
@@ -363,20 +300,17 @@ func (h *EvaluationHandler) GenerateSuiteCases(c *gin.Context) {
 	if req.MaxCases > 0 {
 		limit = int(req.MaxCases)
 	}
-	args := map[string]any{"operation": "generate_suite_cases", "suiteID": c.Param("id"),
-		"samplePolicy": string(req.SamplePolicy), "maxCases": limit}
-	h.requireApprovalOrExecute(c, "evaluation.generate_suite_cases", args, http.StatusOK, func() (any, error) {
-		result, err := h.casegen.Generate(c.Request.Context(), evalapp.GenerateInput{
-			TenantID: tenantID,
-			SuiteID:  c.Param("id"),
-			Policy:   domain.SamplePolicy(req.SamplePolicy),
-			MaxCases: limit,
-		})
-		if err != nil {
-			return nil, err
-		}
-		return result, nil
+	result, err := h.casegen.Generate(c.Request.Context(), evalapp.GenerateInput{
+		TenantID: tenantID,
+		SuiteID:  c.Param("id"),
+		Policy:   domain.SamplePolicy(req.SamplePolicy),
+		MaxCases: limit,
 	})
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, result)
 }
 
 func (h *EvaluationHandler) GetSuiteDraft(c *gin.Context) {
@@ -441,23 +375,19 @@ func (h *EvaluationHandler) EnqueueRun(c *gin.Context) {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
-	args := map[string]any{"operation": "enqueue_run",
-		"resource":        map[string]any{"kind": string(req.Resource.Kind), "id": req.Resource.ResourceID, "revision_id": req.Resource.RevisionID},
-		"suiteRevisionID": req.SuiteRevisionID, "idempotencyKey": req.IdempotencyKey}
-	h.requireApprovalOrExecute(c, "evaluation.enqueue_run", args, http.StatusAccepted, func() (any, error) {
-		job, err := h.jobs.EnqueueRun(c.Request.Context(), tenantID, evalapp.EnqueueRunInput{
-			Resource: domain.ResourceRef{
-				Kind: domain.ResourceKind(req.Resource.Kind), ResourceID: req.Resource.ResourceID, RevisionID: req.Resource.RevisionID,
-			},
-			SuiteRevisionID: req.SuiteRevisionID,
-			IdempotencyKey:  req.IdempotencyKey,
-			RequestedBy:     requestedBy,
-		})
-		if err != nil {
-			return nil, err
-		}
-		return gen.EvaluationJobResponse{JobID: job.ID, Status: string(job.Status)}, nil
+	job, err := h.jobs.EnqueueRun(c.Request.Context(), tenantID, evalapp.EnqueueRunInput{
+		Resource: domain.ResourceRef{
+			Kind: domain.ResourceKind(req.Resource.Kind), ResourceID: req.Resource.ResourceID, RevisionID: req.Resource.RevisionID,
+		},
+		SuiteRevisionID: req.SuiteRevisionID,
+		IdempotencyKey:  req.IdempotencyKey,
+		RequestedBy:     requestedBy,
 	})
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusAccepted, gen.EvaluationJobResponse{JobID: job.ID, Status: string(job.Status)})
 }
 
 func (h *EvaluationHandler) GetJob(c *gin.Context) {
@@ -501,25 +431,25 @@ func (h *EvaluationHandler) GenerateOptimization(c *gin.Context) {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
-	args := map[string]any{"operation": "generate_optimization",
-		"idempotencyKey":  firstNonEmpty(req.IdempotencyKey, c.GetHeader("Idempotency-Key")),
-		"baseline":        map[string]any{"kind": string(req.Baseline.Kind), "id": req.Baseline.ResourceID, "revision_id": req.Baseline.RevisionID},
-		"suiteRevisionID": req.SuiteRevisionID, "searchSpace": req.SearchSpace, "failureSummaries": req.FailureSummaries}
-	h.requireApprovalOrExecute(c, "evaluation.generate_optimization", args, http.StatusCreated, func() (any, error) {
-		job, candidates, err := h.optimization.Generate(c.Request.Context(), tenantID, evalapp.GenerateCandidatesInput{
-			IdempotencyKey: firstNonEmpty(req.IdempotencyKey, c.GetHeader("Idempotency-Key")),
-			Baseline: domain.ResourceRef{
-				Kind: domain.ResourceKind(req.Baseline.Kind), ResourceID: req.Baseline.ResourceID,
-				RevisionID: req.Baseline.RevisionID,
-			},
-			SuiteRevisionID: req.SuiteRevisionID, SearchSpace: req.SearchSpace,
-			FailureSummaries: req.FailureSummaries,
-		})
-		if err != nil {
-			return nil, err
-		}
-		return gin.H{"job": job, "candidates": candidates}, nil
+	actorID, ok := userIDFromCtx(c)
+	if !ok {
+		respondMissingUser(c)
+		return
+	}
+	job, candidates, err := h.optimization.Generate(c.Request.Context(), tenantID, evalapp.GenerateCandidatesInput{
+		IdempotencyKey: firstNonEmpty(req.IdempotencyKey, c.GetHeader("Idempotency-Key")),
+		Baseline: domain.ResourceRef{
+			Kind: domain.ResourceKind(req.Baseline.Kind), ResourceID: req.Baseline.ResourceID,
+			RevisionID: req.Baseline.RevisionID,
+		},
+		SuiteRevisionID: req.SuiteRevisionID, SearchSpace: req.SearchSpace,
+		FailureSummaries: req.FailureSummaries, ActorID: actorID,
 	})
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"job": job, "candidates": candidates})
 }
 
 func firstNonEmpty(values ...string) string {
@@ -546,20 +476,19 @@ func (h *EvaluationHandler) CreateExperiment(c *gin.Context) {
 		return domain.ResourceRef{Kind: domain.ResourceKind(ref.Kind), ResourceID: ref.ResourceID, RevisionID: ref.RevisionID}
 	}
 	stable, canary := toRef(req.Stable), toRef(req.Canary)
-	args := map[string]any{"operation": "create_experiment",
-		"stable":          map[string]any{"kind": string(stable.Kind), "id": stable.ResourceID, "revision_id": stable.RevisionID},
-		"canary":          map[string]any{"kind": string(canary.Kind), "id": canary.ResourceID, "revision_id": canary.RevisionID},
-		"suiteRevisionID": req.SuiteRevisionID}
-	h.requireApprovalOrExecute(c, "evaluation.create_experiment", args, http.StatusCreated, func() (any, error) {
-		actorID, _ := userIDFromCtx(c)
-		experiment, deployment, err := h.experiments.Create(c.Request.Context(), tenantID, evalapp.CreateExperimentInput{
-			Stable: stable, Canary: canary, SuiteRevisionID: req.SuiteRevisionID, ActorID: actorID,
-		})
-		if err != nil {
-			return nil, err
-		}
-		return gin.H{"experiment": experiment, "deployment": deployment}, nil
+	actorID, ok := userIDFromCtx(c)
+	if !ok {
+		respondMissingUser(c)
+		return
+	}
+	experiment, deployment, err := h.experiments.Create(c.Request.Context(), tenantID, evalapp.CreateExperimentInput{
+		Stable: stable, Canary: canary, SuiteRevisionID: req.SuiteRevisionID, ActorID: actorID,
 	})
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"experiment": experiment, "deployment": deployment})
 }
 
 func (h *EvaluationHandler) Overview(c *gin.Context) {
@@ -668,16 +597,12 @@ func (h *EvaluationHandler) experimentCommand(c *gin.Context, operation string, 
 	if !ok {
 		return
 	}
-	args := map[string]any{"operation": operation, "experimentID": c.Param("id"),
-		"reason": input.Reason, "idempotencyKey": input.IdempotencyKey,
-		"expectedStateVersion": input.ExpectedStateVersion}
-	h.requireApprovalOrExecute(c, "evaluation."+operation, args, http.StatusOK, func() (any, error) {
-		result, err := call(c.Request.Context(), tenantID, c.Param("id"), input)
-		if err != nil {
-			return nil, err
-		}
-		return result, nil
-	})
+	result, err := call(c.Request.Context(), tenantID, c.Param("id"), input)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, result)
 }
 func (h *EvaluationHandler) PauseExperiment(c *gin.Context) {
 	h.experimentCommand(c, "pause_experiment", h.experiments.Pause)
@@ -696,28 +621,24 @@ func (h *EvaluationHandler) PromoteExperiment(c *gin.Context) {
 	if !ok {
 		return
 	}
-	args := map[string]any{"operation": "promote_experiment", "experimentID": c.Param("id"),
-		"reason": input.Reason, "idempotencyKey": input.IdempotencyKey,
-		"expectedStateVersion": input.ExpectedStateVersion}
-	h.requireApprovalOrExecute(c, "evaluation.promote_experiment", args, http.StatusOK, func() (any, error) {
-		result, err := h.experiments.Promote(c.Request.Context(), tenantID, c.Param("id"), input)
-		if err != nil {
-			return nil, err
+	result, err := h.experiments.Promote(c.Request.Context(), tenantID, c.Param("id"), input)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	// Write optimized Agent revision back to the production agents table.
+	if result.ResourceKind == domain.ResourceKindAgent && h.agentApplier != nil {
+		if applyErr := h.agentApplier.ApplyPublishedRevision(
+			c.Request.Context(), tenantID, result.ResourceID, result.CanaryRevisionID,
+		); applyErr != nil {
+			h.logger.Warn("promote experiment: agent write-back failed",
+				zap.String("agent_id", result.ResourceID),
+				zap.String("revision_id", result.CanaryRevisionID),
+				zap.Error(applyErr),
+			)
 		}
-		// Write optimized Agent revision back to the production agents table.
-		if result.ResourceKind == domain.ResourceKindAgent && h.agentApplier != nil {
-			if applyErr := h.agentApplier.ApplyPublishedRevision(
-				c.Request.Context(), tenantID, result.ResourceID, result.CanaryRevisionID,
-			); applyErr != nil {
-				h.logger.Warn("promote experiment: agent write-back failed",
-					zap.String("agent_id", result.ResourceID),
-					zap.String("revision_id", result.CanaryRevisionID),
-					zap.Error(applyErr),
-				)
-			}
-		}
-		return result, nil
-	})
+	}
+	c.JSON(http.StatusOK, result)
 }
 func (h *EvaluationHandler) RollbackExperiment(c *gin.Context) {
 	h.experimentCommand(c, "rollback_experiment", h.experiments.Rollback)
@@ -733,16 +654,12 @@ func (h *EvaluationHandler) RejectCandidate(c *gin.Context) {
 	if !ok {
 		return
 	}
-	args := map[string]any{"operation": "reject_candidate", "candidateID": c.Param("id"),
-		"reason": input.Reason, "idempotencyKey": input.IdempotencyKey,
-		"expectedStateVersion": input.ExpectedStateVersion}
-	h.requireApprovalOrExecute(c, "evaluation.reject_candidate", args, http.StatusOK, func() (any, error) {
-		result, err := h.candidates.Reject(c.Request.Context(), tenantID, c.Param("id"), evalapp.CandidateCommandInput(input))
-		if err != nil {
-			return nil, err
-		}
-		return result, nil
-	})
+	result, err := h.candidates.Reject(c.Request.Context(), tenantID, c.Param("id"), evalapp.CandidateCommandInput(input))
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, result)
 }
 
 func (h *EvaluationHandler) RecordFeedback(c *gin.Context) {
@@ -771,69 +688,6 @@ func (h *EvaluationHandler) RecordFeedback(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusCreated, result)
-}
-
-// evaluationApprovalPayload 构造评测动作审批 payload（D4：member 发起 → 审批）。
-// tenant/user 缺失时返回 401（身份上下文必须齐备，否则无法归属审批请求）。
-func evaluationApprovalPayload(c *gin.Context, toolName string, args map[string]any) (agentapp.ToolApprovalPayload, error) {
-	tenantID, ok := tenantIDFromCtx(c)
-	if !ok {
-		return agentapp.ToolApprovalPayload{}, middleware.NewHTTPError(http.StatusUnauthorized, errMissingTenant)
-	}
-	userID, ok := userIDFromCtx(c)
-	if !ok {
-		return agentapp.ToolApprovalPayload{}, middleware.NewHTTPError(http.StatusUnauthorized, errMissingUser)
-	}
-	return agentapp.ToolApprovalPayload{
-		TenantID: tenantID, UserID: userID,
-		ExecutionID: uuid.NewString(), ToolCallID: uuid.NewString(),
-		ToolName: toolName, SubjectKind: agentdomain.SubjectKindEvaluationAction,
-		RiskLevel: agentdomain.ToolRiskUnclassified, Arguments: args, PolicyVersion: policyVersionEvaluationAction,
-	}, nil
-}
-
-// requestApprovalForMember 创建审批并写 202 响应；返回 true 表示响应已由审批路径消化。
-func (h *EvaluationHandler) requestApprovalForMember(c *gin.Context, toolName string, args map[string]any) (bool, error) {
-	if h.approvals == nil {
-		return false, middleware.NewHTTPError(http.StatusServiceUnavailable, errors.New("approval service unavailable"))
-	}
-	payload, err := evaluationApprovalPayload(c, toolName, args)
-	if err != nil {
-		return false, err
-	}
-	id, err := h.approvals.Request(c.Request.Context(), payload)
-	if err != nil {
-		return false, err
-	}
-	c.JSON(http.StatusAccepted, gin.H{"status": "pending_approval", "approval_id": id})
-	return true, nil
-}
-
-// requireApprovalOrExecute 角色分流：admin/owner 直接执行；member 创建审批；
-// 角色未知 fail closed（拒绝）。角色由 resolver 现查（单事实源，不信任 JWT claim
-// 的陈旧窗口），resolver 未注入时才回退 claim。execute 成功时以 successStatus 写响应。
-func (h *EvaluationHandler) requireApprovalOrExecute(c *gin.Context, toolName string, args map[string]any, successStatus int, execute func() (any, error)) {
-	roleClass := h.currentRole(c)
-	if roleClass != "admin" && roleClass != "owner" {
-		if roleClass == "member" {
-			handled, err := h.requestApprovalForMember(c, toolName, args)
-			if err != nil {
-				_ = c.Error(err)
-				return
-			}
-			if handled {
-				return
-			}
-		}
-		_ = c.Error(middleware.NewHTTPError(http.StatusForbidden, errors.New("insufficient tenant role")))
-		return
-	}
-	result, err := execute()
-	if err != nil {
-		_ = c.Error(err)
-		return
-	}
-	c.JSON(successStatus, result)
 }
 
 // ListObservationsQuery 观测分页查询参数（from/to 可选，RFC3339）。
@@ -1014,4 +868,73 @@ func (h *EvaluationHandler) DecideReviewItem(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, item)
+}
+
+// deleteEntity 统一删除 handler 形状：tenant→actor→service；服务未装配时
+// 503 fail-closed；成功 204 空体；失败交给统一错误中间件映射。
+func (h *EvaluationHandler) deleteEntity(c *gin.Context, del func(context.Context, string, string, string) error) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	actorID, ok := userIDFromCtx(c)
+	if !ok {
+		respondMissingUser(c)
+		return
+	}
+	if h.deletes == nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusServiceUnavailable, errors.New("evaluation delete unavailable")))
+		return
+	}
+	if err := del(c.Request.Context(), tenantID, c.Param("id"), actorID); err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+func (h *EvaluationHandler) DeleteSuite(c *gin.Context) {
+	// 闭包内才解引用 h.deletes：若直接传 h.deletes.DeleteSuite 方法值，
+	// nil 接口在参数求值阶段就 panic，deleteEntity 的 nil 检查形同虚设
+	// （503 fail-closed 无法生效）。
+	h.deleteEntity(c, func(ctx context.Context, tenantID, id, actorID string) error {
+		return h.deletes.DeleteSuite(ctx, tenantID, id, actorID)
+	})
+}
+
+func (h *EvaluationHandler) DeleteRun(c *gin.Context) {
+	h.deleteEntity(c, func(ctx context.Context, tenantID, id, actorID string) error {
+		return h.deletes.DeleteRun(ctx, tenantID, id, actorID)
+	})
+}
+
+func (h *EvaluationHandler) DeleteJob(c *gin.Context) {
+	h.deleteEntity(c, func(ctx context.Context, tenantID, id, actorID string) error {
+		return h.deletes.DeleteJob(ctx, tenantID, id, actorID)
+	})
+}
+
+func (h *EvaluationHandler) DeleteExperiment(c *gin.Context) {
+	h.deleteEntity(c, func(ctx context.Context, tenantID, id, actorID string) error {
+		return h.deletes.DeleteExperiment(ctx, tenantID, id, actorID)
+	})
+}
+
+func (h *EvaluationHandler) DeleteCandidate(c *gin.Context) {
+	h.deleteEntity(c, func(ctx context.Context, tenantID, id, actorID string) error {
+		return h.deletes.DeleteCandidate(ctx, tenantID, id, actorID)
+	})
+}
+
+func (h *EvaluationHandler) DeleteReviewItem(c *gin.Context) {
+	h.deleteEntity(c, func(ctx context.Context, tenantID, id, actorID string) error {
+		return h.deletes.DeleteReviewItem(ctx, tenantID, id, actorID)
+	})
+}
+
+func (h *EvaluationHandler) DeleteFeedback(c *gin.Context) {
+	h.deleteEntity(c, func(ctx context.Context, tenantID, id, actorID string) error {
+		return h.deletes.DeleteFeedback(ctx, tenantID, id, actorID)
+	})
 }

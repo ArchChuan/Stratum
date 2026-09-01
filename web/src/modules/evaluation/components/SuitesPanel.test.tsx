@@ -13,7 +13,8 @@ const suites: SuiteSummary[] = [
 describe('SuitesPanel', () => {
   it('lets an admin manage draft suites and create new ones', () => {
     const onOpen = vi.fn();
-    render(<SuitesPanel suites={suites} loading={false} canManage onOpen={onOpen} onCreate={vi.fn()} />);
+    render(<SuitesPanel suites={suites} loading={false} canManage onOpen={onOpen} onCreate={vi.fn()}
+      onDelete={vi.fn()} canDelete={() => false} />);
 
     fireEvent.click(screen.getByRole('button', { name: '管理' }));
     expect(onOpen).toHaveBeenCalledWith(suites[0]);
@@ -22,8 +23,21 @@ describe('SuitesPanel', () => {
   });
 
   it('keeps suite authoring read-only for members', () => {
-    render(<SuitesPanel suites={suites} loading={false} canManage={false} onOpen={vi.fn()} onCreate={vi.fn()} />);
+    render(<SuitesPanel suites={suites} loading={false} canManage={false} onOpen={vi.fn()} onCreate={vi.fn()}
+      onDelete={vi.fn()} canDelete={() => false} />);
     expect(screen.queryByRole('button', { name: /新建套件/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '管理' })).not.toBeInTheDocument();
+  });
+
+  it('shows delete only for rows the caller authorizes and fires onDelete', () => {
+    const onDelete = vi.fn();
+    render(<SuitesPanel suites={suites} loading={false} canManage={false} onOpen={vi.fn()} onCreate={vi.fn()}
+      onDelete={onDelete} canDelete={(suite) => suite.id === 's1'} />);
+
+    // 仅 s1 授权删除，s2 不显示删除按钮（type="link" 按钮不插入空格，文本为「删除」）
+    const deleteButtons = screen.getAllByRole('button', { name: '删除' });
+    expect(deleteButtons).toHaveLength(1);
+    fireEvent.click(deleteButtons[0]);
+    expect(onDelete).toHaveBeenCalledWith(suites[0]);
   });
 });

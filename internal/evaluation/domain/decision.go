@@ -26,6 +26,11 @@ var (
 	ErrOptimizationIdempotencyConflict = errors.New("optimization idempotency conflict")
 	ErrFeedbackIdempotencyConflict     = errors.New("feedback idempotency conflict")
 	ErrFeedbackTraceForbidden          = errors.New("feedback trace belongs to another user")
+	// ErrDeleteForbidden 表示删除被授权门禁拒绝：仅租户 owner 或资源创建者可删，
+	// 角色解析失败 / actor 缺失一律 fail-closed。
+	ErrDeleteForbidden = errors.New("evaluation delete not authorized")
+	// ErrEntityReferenced 表示被删实体仍被其它实体引用，禁止删除（禁级联破坏）。
+	ErrEntityReferenced = errors.New("evaluation entity is referenced and cannot be deleted")
 )
 
 type CandidateCommand struct {

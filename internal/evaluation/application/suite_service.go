@@ -21,6 +21,7 @@ type CreateSuiteInput struct {
 	Description  string
 	ResourceKind domain.ResourceKind
 	Cases        []domain.EvalCase
+	ActorID      string
 }
 
 type SuiteService struct {
@@ -49,10 +50,11 @@ func (s *SuiteService) Create(ctx context.Context, tenantID string, input Create
 	revisionID := uuid.Must(uuid.NewV7()).String()
 	suite := domain.EvalSuite{
 		ID: suiteID, Name: input.Name, Description: input.Description, DraftRevisionID: revisionID,
+		CreatedBy: input.ActorID,
 	}
 	revision := domain.EvalSuiteRevision{
 		ID: revisionID, SuiteID: suiteID, Status: domain.SuiteRevisionDraft,
-		ResourceKind: input.ResourceKind, Cases: input.Cases,
+		ResourceKind: input.ResourceKind, Cases: input.Cases, CreatedBy: input.ActorID,
 	}
 	if err := s.repo.CreateSuite(ctx, tenantID, suite, revision); err != nil {
 		return domain.EvalSuite{}, domain.EvalSuiteRevision{}, err

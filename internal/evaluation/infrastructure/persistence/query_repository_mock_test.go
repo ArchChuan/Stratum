@@ -114,9 +114,9 @@ func TestPgCenterQueryRepository_ListSuites_paginated(t *testing.T) {
 	expectTenantTx(mock)
 	mock.ExpectQuery("SELECT s.id,s.name").
 		WithArgs("", "", "", (*time.Time)(nil), (*string)(nil), 2).
-		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "description", "status", "created_at"}).
-			AddRow("suite-2", "s2", "d2", "published", now.Add(-1*time.Hour)).
-			AddRow("suite-1", "s1", "", "draft", now.Add(-2*time.Hour)))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "description", "status", "created_by", "created_at"}).
+			AddRow("suite-2", "s2", "d2", "published", "user-2", now.Add(-1*time.Hour)).
+			AddRow("suite-1", "s1", "", "draft", "", now.Add(-2*time.Hour)))
 	mock.ExpectCommit()
 
 	page, err := repo.ListSuites(context.Background(), "t1", port.CenterFilter{Limit: 1})
@@ -136,9 +136,9 @@ func TestPgCenterQueryRepository_ListRuns_paginated(t *testing.T) {
 	mock.ExpectQuery("SELECT id,resource_kind,resource_id,revision_id").
 		WithArgs("", "", "", (*time.Time)(nil), (*string)(nil), 2).
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "resource_kind", "resource_id", "revision_id", "status", "passed", "total_cases", "passed_cases", "created_at",
-		}).AddRow("run-2", "prompt", "r-1", "rev-2", "succeeded", true, 10, 10, now.Add(-1*time.Hour)).
-			AddRow("run-1", "prompt", "r-1", "rev-1", "failed", false, 10, 3, now.Add(-2*time.Hour)))
+			"id", "resource_kind", "resource_id", "revision_id", "status", "passed", "total_cases", "passed_cases", "created_by", "created_at",
+		}).AddRow("run-2", "prompt", "r-1", "rev-2", "succeeded", true, 10, 10, "user-2", now.Add(-1*time.Hour)).
+			AddRow("run-1", "prompt", "r-1", "rev-1", "failed", false, 10, 3, "", now.Add(-2*time.Hour)))
 	mock.ExpectCommit()
 
 	page, err := repo.ListRuns(context.Background(), "t1", port.CenterFilter{Limit: 1})
@@ -161,9 +161,9 @@ func TestPgCenterQueryRepository_ListCandidates_safeDiff(t *testing.T) {
 		WithArgs("", "", "", (*time.Time)(nil), (*string)(nil), 2).
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "resource_kind", "resource_id", "revision_id", "parent_revision_id", "source", "status",
-			"rank", "state_version", "parent", "parent_exists", "candidate", "created_at",
+			"rank", "state_version", "parent", "parent_exists", "candidate", "created_by", "created_at",
 		}).AddRow("cand-1", "prompt", "r-1", "rev-2", "rev-1", "optimization", "proposed",
-			&rank, int64(3), []byte(`{"name":"v1","price":1}`), true, []byte(`{"name":"v1","price":2}`), now))
+			&rank, int64(3), []byte(`{"name":"v1","price":1}`), true, []byte(`{"name":"v1","price":2}`), "user-1", now))
 	mock.ExpectCommit()
 
 	page, err := repo.ListCandidates(context.Background(), "t1", port.CenterFilter{Limit: 1})
@@ -188,10 +188,10 @@ func TestPgCenterQueryRepository_ListExperiments_withEvidence(t *testing.T) {
 		WithArgs("", "", "", (*time.Time)(nil), (*string)(nil), 2).
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "resource_kind", "resource_id", "stable_revision_id", "canary_revision_id", "status",
-			"stage_percent", "recommendation", "safety_stopped", "state_version", "policy", "snapshot", "created_at",
+			"stage_percent", "recommendation", "safety_stopped", "state_version", "policy", "snapshot", "created_by", "created_at",
 		}).AddRow("exp-1", "prompt", "r-1", "stable-1", "canary-1", "running",
 			20, "advance", false, int64(3), []byte(`{"stages":[5,20],"min_samples":100}`),
-			[]byte(`{"metrics":{"samples":120,"quality_improvement":0.3}}`), now))
+			[]byte(`{"metrics":{"samples":120,"quality_improvement":0.3}}`), "user-1", now))
 	mock.ExpectCommit()
 
 	page, err := repo.ListExperiments(context.Background(), "t1", port.CenterFilter{Limit: 1})
@@ -214,9 +214,9 @@ func TestPgCenterQueryRepository_ListExperiments_badPolicyJSON(t *testing.T) {
 		WithArgs("", "", "", (*time.Time)(nil), (*string)(nil), 2).
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "resource_kind", "resource_id", "stable_revision_id", "canary_revision_id", "status",
-			"stage_percent", "recommendation", "safety_stopped", "state_version", "policy", "snapshot", "created_at",
+			"stage_percent", "recommendation", "safety_stopped", "state_version", "policy", "snapshot", "created_by", "created_at",
 		}).AddRow("exp-1", "prompt", "r-1", "stable-1", "canary-1", "running",
-			20, "hold", false, int64(3), []byte(`{bad`), []byte(`{}`), now))
+			20, "hold", false, int64(3), []byte(`{bad`), []byte(`{}`), "user-1", now))
 	mock.ExpectRollback()
 
 	_, err := repo.ListExperiments(context.Background(), "t1", port.CenterFilter{Limit: 1})

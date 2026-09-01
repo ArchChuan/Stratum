@@ -5,9 +5,10 @@ import type { SuiteSummary } from '../model/evaluation';
 
 import { StatusTag } from './evaluationView';
 
-export const SuitesPanel = ({ suites, loading, canManage, onOpen, onCreate }: {
+export const SuitesPanel = ({ suites, loading, canManage, onOpen, onCreate, onDelete, canDelete }: {
   suites: SuiteSummary[]; loading: boolean; canManage: boolean;
   onOpen: (suite: SuiteSummary) => void; onCreate: () => void;
+  onDelete: (suite: SuiteSummary) => void; canDelete: (suite: SuiteSummary) => boolean;
 }) => (
   <Space direction="vertical" style={{ width: '100%' }}>
     {canManage && <Button type="primary" icon={<PlusOutlined />} onClick={onCreate}>新建套件</Button>}
@@ -19,11 +20,16 @@ export const SuitesPanel = ({ suites, loading, canManage, onOpen, onCreate }: {
         { title: '说明', dataIndex: 'description', ellipsis: true },
         { title: '状态', dataIndex: 'status', width: 120, render: (value: string) => <StatusTag value={value} /> },
         { title: '创建时间', dataIndex: 'created_at', width: 180 },
-        ...(canManage ? [{
-          title: '操作', width: 90, render: (_: unknown, row: SuiteSummary) => row.status === 'draft'
-            ? <Button type="link" size="small" onClick={() => onOpen(row)}>管理</Button>
-            : <Button type="link" size="small" disabled>已发布</Button>,
-        }] : []),
+        {
+          title: '操作', width: 150, render: (_: unknown, row: SuiteSummary) => (
+            <>
+              {canManage && (row.status === 'draft'
+                ? <Button type="link" size="small" onClick={() => onOpen(row)}>管理</Button>
+                : <Button type="link" size="small" disabled>已发布</Button>)}
+              {canDelete(row) && <Button type="link" size="small" danger onClick={() => onDelete(row)}>删除</Button>}
+            </>
+          ),
+        },
       ]} />
   </Space>
 );

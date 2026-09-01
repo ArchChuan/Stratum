@@ -175,4 +175,13 @@ export const evaluationApi = {
       evaluationCommandSchema.parse(command));
     return experimentCommandResponseSchema.parse(response.data);
   },
+  // 删除（RBAC：owner 恒可删 / 创建者可删 / 其余 403；204 空体）。后端在
+  // requireAdmin 之上再做资源级 owner-or-creator 门禁（fail-closed）。
+  deleteSuite: async (suiteId: string) => { await api.delete(`/evaluations/suites/${encodeURIComponent(suiteId)}`); },
+  deleteRun: async (runId: string) => { await api.delete(`/evaluations/runs/${encodeURIComponent(runId)}`); },
+  deleteJob: async (jobId: string) => { await api.delete(`/evaluations/jobs/${encodeURIComponent(jobId)}`); },
+  deleteExperiment: async (experimentId: string) => { await api.delete(`/evaluations/experiments/${encodeURIComponent(experimentId)}`); },
+  deleteCandidate: async (candidateId: string) => { await api.delete(`/evaluations/candidates/${encodeURIComponent(candidateId)}`); },
+  deleteReviewItem: async (reviewId: string) => { await api.delete(`/evaluations/review/${encodeURIComponent(reviewId)}`); },
+  deleteFeedback: async (feedbackId: string) => { await api.delete(`/evaluations/feedback/${encodeURIComponent(feedbackId)}`); },
 };

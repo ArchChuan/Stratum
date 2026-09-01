@@ -11,6 +11,7 @@ export interface ReviewItem {
   risk_level?: string;
   snapshot: unknown;
   status: string;
+  created_by?: string;
   human_verdict?: string;
   reviewer?: string;
   review_reason?: string;

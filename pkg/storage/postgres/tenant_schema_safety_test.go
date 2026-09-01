@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -132,5 +133,40 @@ func TestTenantSchemaWorkflowEditorsAndCreatedBy(t *testing.T) {
 	// resource_editors 注释声明 workflow kind（可申请编辑权的新资源类型）。
 	if !strings.Contains(text, "agent|skill|mcp|knowledge|workflow") {
 		t.Fatal("resource_editors kind comment must include workflow")
+	}
+}
+
+// TestTenantSchemaEvaluationDeleteCreatedByColumns 守护评测删除门禁的创建者列：每个删除目标表
+// 必须在 CREATE TABLE 段携带 created_by，且带幂等 ALTER 升级历史租户（” 表示存量行仅租户 owner 可删）。
+func TestTenantSchemaEvaluationDeleteCreatedByColumns(t *testing.T) {
+	ddl, err := os.ReadFile("tenant_schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(ddl)
+
+	tables := []string{
+		"eval_suites",
+		"eval_runs",
+		"eval_review_items",
+		"evaluation_feedback",
+		"evaluation_jobs",
+	}
+	for _, table := range tables {
+		createStart := strings.Index(text, "CREATE TABLE IF NOT EXISTS "+table+" (")
+		if createStart < 0 {
+			t.Fatalf("tenant schema missing CREATE TABLE for %s", table)
+		}
+		createEnd := strings.Index(text[createStart:], ");")
+		createBlock := text[createStart : createStart+createEnd]
+		// SQL 列对齐用多空格（如 created_by         TEXT），以正则容忍空白差异匹配列定义。
+		colRe := regexp.MustCompile(`created_by\s+TEXT\s+NOT NULL DEFAULT ''`)
+		if !colRe.MatchString(createBlock) {
+			t.Fatalf("%s CREATE TABLE must carry created_by TEXT NOT NULL DEFAULT ''", table)
+		}
+		alter := "ALTER TABLE " + table + " ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT '';"
+		if !strings.Contains(text, alter) {
+			t.Fatalf("%s must idempotently add created_by for historical tenants", table)
+		}
 	}
 }

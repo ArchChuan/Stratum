@@ -449,9 +449,12 @@ CREATE TABLE IF NOT EXISTS eval_suites (
     description        TEXT NOT NULL DEFAULT '',
     active_revision_id TEXT,
     draft_revision_id  TEXT,
+    created_by         TEXT NOT NULL DEFAULT '',
     created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+-- 升级存量租户：评测删除门禁的创建者列（'' 表示存量行仅租户 owner 可删）。
+ALTER TABLE eval_suites ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS eval_suite_revisions (
     id            TEXT PRIMARY KEY,
@@ -495,10 +498,13 @@ CREATE TABLE IF NOT EXISTS eval_runs (
     metrics           JSONB NOT NULL DEFAULT '{}',
     error_message     TEXT NOT NULL DEFAULT '',
     idempotency_key   TEXT NOT NULL DEFAULT '',
+    created_by        TEXT NOT NULL DEFAULT '',
     created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     started_at        TIMESTAMPTZ,
     completed_at      TIMESTAMPTZ
 );
+-- 升级存量租户：评测删除门禁的创建者列（'' 表示存量行仅租户 owner 可删）。
+ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS idx_eval_runs_resource
     ON eval_runs(resource_kind, resource_id, created_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_eval_runs_idempotency
@@ -572,9 +578,12 @@ CREATE TABLE IF NOT EXISTS eval_review_items (
         ('','pass','fail','judge_misjudgment','case_revision')),
     reviewer       TEXT NOT NULL DEFAULT '',
     review_reason  TEXT NOT NULL DEFAULT '',
+    created_by     TEXT NOT NULL DEFAULT '',
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     reviewed_at    TIMESTAMPTZ
 );
+-- 升级存量租户：评测删除门禁的创建者列（评审项系统入池恒 ''，仅租户 owner 可删）。
+ALTER TABLE eval_review_items ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT '';
 -- 升级存量租户：§6.5 process_output_conflict 加入 trigger_reason 枚举后，历史租户
 -- 的旧 check 约束仍拒绝该值（过程断言失败入池即 500）。CREATE TABLE IF NOT EXISTS
 -- 不会重建已有表，故以 DROP IF EXISTS + ADD CONSTRAINT 幂等替换——每次 provision
@@ -745,10 +754,13 @@ CREATE TABLE IF NOT EXISTS evaluation_feedback (
     score           DOUBLE PRECISION,
     outcome         JSONB NOT NULL DEFAULT '{}',
     idempotency_key TEXT NOT NULL,
+    created_by      TEXT NOT NULL DEFAULT '',
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (idempotency_key),
     UNIQUE (trace_id, resource_id)
 );
+-- 升级存量租户：评测删除门禁的创建者列（'' 表示存量行仅租户 owner 可删）。
+ALTER TABLE evaluation_feedback ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT '';
 ALTER TABLE evaluation_feedback ADD COLUMN IF NOT EXISTS experiment_id TEXT;
 ALTER TABLE evaluation_feedback ADD COLUMN IF NOT EXISTS variant TEXT;
 CREATE INDEX IF NOT EXISTS idx_evaluation_feedback_resource
@@ -780,10 +792,13 @@ CREATE TABLE IF NOT EXISTS evaluation_jobs (
     error_message   TEXT NOT NULL DEFAULT '',
     result_id       TEXT NOT NULL DEFAULT '',
     idempotency_key TEXT NOT NULL,
+    created_by      TEXT NOT NULL DEFAULT '',
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (idempotency_key)
 );
+-- 升级存量租户：评测删除门禁的创建者列（'' 表示存量行仅租户 owner 可删）。
+ALTER TABLE evaluation_jobs ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT '';
 ALTER TABLE evaluation_jobs ADD COLUMN IF NOT EXISTS result_id TEXT NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS idx_evaluation_jobs_claim
     ON evaluation_jobs(status, lease_until, created_at);

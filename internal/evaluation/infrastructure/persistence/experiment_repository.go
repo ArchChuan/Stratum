@@ -99,12 +99,12 @@ func (r *PgExperimentRepository) Create(
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO evaluation_experiments
 			 (id, resource_kind, resource_id, stable_revision_id, canary_revision_id,
-			  suite_revision_id, status, stage_percent, policy, state_version, recommendation, safety_stopped)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+			  suite_revision_id, status, stage_percent, policy, state_version, recommendation, safety_stopped, created_by)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
 			experiment.ID, string(experiment.ResourceKind), experiment.ResourceID,
 			experiment.StableRevisionID, experiment.CanaryRevisionID, experiment.SuiteRevisionID,
 			string(experiment.Status), experiment.Stage, string(policyJSON), experiment.StateVersion,
-			string(experiment.Recommendation), experiment.SafetyStopped,
+			string(experiment.Recommendation), experiment.SafetyStopped, experiment.CreatedBy,
 		); err != nil {
 			return fmt.Errorf("experiment repository: insert experiment: %w", err)
 		}
@@ -145,11 +145,11 @@ func (r *PgExperimentRepository) Get(
 		var policyJSON []byte
 		err := tx.QueryRow(ctx,
 			`SELECT id, resource_kind, resource_id, stable_revision_id, canary_revision_id,
-			        suite_revision_id, status, stage_percent, policy, state_version, recommendation, safety_stopped
+			        suite_revision_id, status, stage_percent, policy, state_version, recommendation, safety_stopped, created_by
 			 FROM evaluation_experiments WHERE id=$1`, experimentID,
 		).Scan(&experiment.ID, &kind, &experiment.ResourceID, &experiment.StableRevisionID,
 			&experiment.CanaryRevisionID, &experiment.SuiteRevisionID, &status, &experiment.Stage, &policyJSON,
-			&experiment.StateVersion, &experiment.Recommendation, &experiment.SafetyStopped)
+			&experiment.StateVersion, &experiment.Recommendation, &experiment.SafetyStopped, &experiment.CreatedBy)
 		if err == pgx.ErrNoRows {
 			return nil
 		}
@@ -531,7 +531,7 @@ func promoteCandidateTx(ctx context.Context, tx pgx.Tx, experiment domain.Experi
 
 func getExperimentTx(ctx context.Context, tx pgx.Tx, experimentID string, lock bool) (domain.Experiment, bool, error) {
 	query := `SELECT id, resource_kind, resource_id, stable_revision_id, canary_revision_id,
-		suite_revision_id, status, stage_percent, policy, state_version, recommendation, safety_stopped
+		suite_revision_id, status, stage_percent, policy, state_version, recommendation, safety_stopped, created_by
 		FROM evaluation_experiments WHERE id=$1`
 	if lock {
 		query += ` FOR UPDATE`
@@ -541,7 +541,8 @@ func getExperimentTx(ctx context.Context, tx pgx.Tx, experimentID string, lock b
 	var policyJSON []byte
 	err := tx.QueryRow(ctx, query, experimentID).Scan(&experiment.ID, &kind, &experiment.ResourceID,
 		&experiment.StableRevisionID, &experiment.CanaryRevisionID, &experiment.SuiteRevisionID, &status,
-		&experiment.Stage, &policyJSON, &experiment.StateVersion, &experiment.Recommendation, &experiment.SafetyStopped)
+		&experiment.Stage, &policyJSON, &experiment.StateVersion, &experiment.Recommendation, &experiment.SafetyStopped,
+		&experiment.CreatedBy)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Experiment{}, false, nil
 	}
@@ -604,7 +605,7 @@ func (r *PgExperimentRepository) ListPendingExperiments(
 	var experiments []domain.Experiment
 	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		query := `SELECT id, resource_kind, resource_id, stable_revision_id, canary_revision_id,
-			suite_revision_id, status, stage_percent, policy, state_version, recommendation, safety_stopped
+			suite_revision_id, status, stage_percent, policy, state_version, recommendation, safety_stopped, created_by
 			FROM evaluation_experiments WHERE status='pending'`
 		args := []any{}
 		if resourceKind != "" {
@@ -640,7 +641,7 @@ func (r *PgExperimentRepository) ListRunningExperiments(
 	var experiments []domain.Experiment
 	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT id, resource_kind, resource_id, stable_revision_id, canary_revision_id,
-			suite_revision_id, status, stage_percent, policy, state_version, recommendation, safety_stopped
+			suite_revision_id, status, stage_percent, policy, state_version, recommendation, safety_stopped, created_by
 			FROM evaluation_experiments WHERE status='running' ORDER BY created_at ASC`)
 		if err != nil {
 			return err
@@ -664,7 +665,7 @@ func scanExperiment(row pgx.Row) (domain.Experiment, error) {
 	var policyJSON []byte
 	err := row.Scan(&exp.ID, &kind, &exp.ResourceID, &exp.StableRevisionID, &exp.CanaryRevisionID,
 		&exp.SuiteRevisionID, &status, &exp.Stage, &policyJSON, &exp.StateVersion,
-		&exp.Recommendation, &exp.SafetyStopped)
+		&exp.Recommendation, &exp.SafetyStopped, &exp.CreatedBy)
 	if err != nil {
 		return domain.Experiment{}, err
 	}
@@ -683,4 +684,60 @@ func (r *PgExperimentRepository) execTenant(
 ) error {
 	ctx = postgres.WithTenant(ctx, &postgres.TenantContext{TenantID: tenantID})
 	return execTenantTx(ctx, r.pool, tenantID, fn)
+}
+
+// GetExperimentCreatedBy 返回实验创建者；未命中 found=false。
+func (r *PgExperimentRepository) GetExperimentCreatedBy(ctx context.Context, tenantID, experimentID string) (string, bool, error) {
+	var createdBy string
+	found := false
+	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		err := tx.QueryRow(ctx, `SELECT created_by FROM evaluation_experiments WHERE id=$1`, experimentID).Scan(&createdBy)
+		if err == pgx.ErrNoRows {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("experiment repository: load created by: %w", err)
+		}
+		found = true
+		return nil
+	})
+	return createdBy, found, err
+}
+
+// DeleteExperiment 删除实验：仅 completed 可删（运行/暂停/回滚等状态拒删，避免
+// 留下部署引用或与 stage worker 竞争）；仍被部署引用时拒删（该 FK 为 SET NULL，
+// 无约束兜底，必须预检）；删除同事务级联 decisions 并写审计。
+func (r *PgExperimentRepository) DeleteExperiment(
+	ctx context.Context, tenantID, experimentID string, audit *auditdomain.ResourceChangeAuditEvent,
+) error {
+	return r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		var status string
+		err := tx.QueryRow(ctx,
+			`SELECT status FROM evaluation_experiments WHERE id=$1 FOR UPDATE`, experimentID).Scan(&status)
+		if err == pgx.ErrNoRows {
+			return fmt.Errorf("experiment repository: delete experiment %s: not found", experimentID)
+		}
+		if err != nil {
+			return fmt.Errorf("experiment repository: load experiment status: %w", err)
+		}
+		if status != string(domain.ExperimentCompleted) {
+			return domain.ErrEntityReferenced
+		}
+		var deployed bool
+		if err := tx.QueryRow(ctx,
+			`SELECT EXISTS(SELECT 1 FROM evaluation_deployments WHERE experiment_id=$1)`, experimentID).Scan(&deployed); err != nil {
+			return fmt.Errorf("experiment repository: check experiment references: %w", err)
+		}
+		if deployed {
+			return domain.ErrEntityReferenced
+		}
+		tag, err := tx.Exec(ctx, `DELETE FROM evaluation_experiments WHERE id=$1`, experimentID)
+		if err != nil {
+			return translateEntityReferenced(fmt.Errorf("experiment repository: delete experiment: %w", err))
+		}
+		if tag.RowsAffected() == 0 {
+			return fmt.Errorf("experiment repository: delete experiment %s: not found", experimentID)
+		}
+		return insertChangeAudit(ctx, tx, audit)
+	})
 }

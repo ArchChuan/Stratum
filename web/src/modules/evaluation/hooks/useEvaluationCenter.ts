@@ -15,7 +15,7 @@ import type {
   ResourceRef,
 } from '../model/evaluation';
 
-import { useAuth } from '@/modules/iam';
+import { useAuth, useTenantRole } from '@/modules/iam';
 import { extractErrorMessage } from '@/shared/lib';
 import { createIdempotencyKey } from '@/shared/lib/idempotencyKey';
 
@@ -24,8 +24,16 @@ const MANAGEMENT_ERROR = '仅租户管理员可执行评测命令';
 
 export const useEvaluationCenter = (filters: EvaluationCenterFilters = {}) => {
   const { user } = useAuth();
-  const role = user?.role ?? user?.current_tenant?.role ?? 'member';
-  const canManageEvaluation = role === 'admin' || role === 'owner';
+  // 统一走 useTenantRole 读取有效租户角色：平台管理员归一化为 admin（与后端
+  // EffectiveTenantRole 一致），owner 保留。canManageEvaluation = isAdmin。
+  const { isAdmin, isOwner } = useTenantRole();
+  const userId = user?.id;
+  const canManageEvaluation = isAdmin;
+  // 删除可见性：租户 owner 恒可删；资源创建者（created_by 等于当前用户）可删；
+  // 其余（admin 非创建者 / member）不可删——与后端 DeleteService.authorize 一致。
+  const canDeleteEntity = useCallback((createdBy?: string) => (
+    isOwner || (!!createdBy && createdBy === userId)
+  ), [isOwner, userId]);
   const { cursor, limit, resource_id, resource_kind, status } = filters;
   const stableFilters = useMemo(() => {
     const value: EvaluationCenterFilters = {};
@@ -131,11 +139,19 @@ export const useEvaluationCenter = (filters: EvaluationCenterFilters = {}) => {
 
   return {
     overview, resources, suites, runs, candidates, experiments, loading, error, canManageEvaluation,
+    userId, isOwner, canDeleteEntity,
     reload: () => load(),
     createEvaluation, resetCreateEvaluation,
     rejectCandidate: (id: string, command: EvaluationCommand) => managedCommand(() => evaluationApi.rejectCandidate(id, command)),
     pauseExperiment: (id: string, command: EvaluationCommand) => managedCommand(() => evaluationApi.pauseExperiment(id, command)),
     promoteExperiment: (id: string, command: EvaluationCommand) => managedCommand(() => evaluationApi.promoteExperiment(id, command)),
     rollbackExperiment: (id: string, command: EvaluationCommand) => managedCommand(() => evaluationApi.rollbackExperiment(id, command)),
+    deleteSuite: (id: string) => managedCommand(() => evaluationApi.deleteSuite(id)),
+    deleteRun: (id: string) => managedCommand(() => evaluationApi.deleteRun(id)),
+    deleteJob: (id: string) => managedCommand(() => evaluationApi.deleteJob(id)),
+    deleteExperiment: (id: string) => managedCommand(() => evaluationApi.deleteExperiment(id)),
+    deleteCandidate: (id: string) => managedCommand(() => evaluationApi.deleteCandidate(id)),
+    deleteReviewItem: (id: string) => managedCommand(() => evaluationApi.deleteReviewItem(id)),
+    deleteFeedback: (id: string) => managedCommand(() => evaluationApi.deleteFeedback(id)),
   };
 };
