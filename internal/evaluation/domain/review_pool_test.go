@@ -223,6 +223,29 @@ func TestTriggersForCaseResult(t *testing.T) {
 	})
 }
 
+// TestReviewTriggerReasonRiskLevel 断言入池原因到评审优先级（high/medium/low）的映射
+// （spec §6.6 规模控制：评审池按风险排序，安全/写操作/高危资源优先）。
+func TestReviewTriggerReasonRiskLevel(t *testing.T) {
+	cases := []struct {
+		reason ReviewTriggerReason
+		want   ReviewRiskLevel
+	}{
+		{TriggerJudgeRuleConflict, ReviewRiskHigh},
+		{TriggerProcessOutputConflict, ReviewRiskHigh},
+		{TriggerLowConfidence, ReviewRiskMedium},
+		{TriggerDimensionSplit, ReviewRiskMedium},
+		{TriggerNeedsReview, ReviewRiskMedium},
+		{ReviewTriggerReason("unknown_future"), ReviewRiskLow},
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.reason), func(t *testing.T) {
+			if got := tc.reason.RiskLevel(); got != tc.want {
+				t.Fatalf("RiskLevel(%q) = %q, want %q", tc.reason, got, tc.want)
+			}
+		})
+	}
+}
+
 func containsReason(got []ReviewTriggerReason, want ReviewTriggerReason) bool {
 	for _, g := range got {
 		if g == want {

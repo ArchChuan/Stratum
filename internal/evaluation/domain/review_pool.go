@@ -52,6 +52,31 @@ func (r ReviewTriggerReason) Valid() bool {
 	}
 }
 
+// ReviewRiskLevel 评审优先级（spec §6.6 规模控制：评审池按风险排序，安全/写操作/高危资源优先）。
+type ReviewRiskLevel string
+
+const (
+	ReviewRiskHigh   ReviewRiskLevel = "high"
+	ReviewRiskMedium ReviewRiskLevel = "medium"
+	ReviewRiskLow    ReviewRiskLevel = "low"
+)
+
+// RiskLevel 把入池原因映射为评审优先级。硬编码规则，与 persistence 的 reviewRiskOrderSQL
+// 保持镜像（两端注释互指，修改必须同步）：
+//   - high：judge_rule_conflict（规则护栏命中 = 安全类）、process_output_conflict（副作用/写操作越界）；
+//   - medium：low_confidence、dimension_split、needs_review；
+//   - low：其余（未来新增触发默认低，人工可随时介入）。
+func (r ReviewTriggerReason) RiskLevel() ReviewRiskLevel {
+	switch r {
+	case TriggerJudgeRuleConflict, TriggerProcessOutputConflict:
+		return ReviewRiskHigh
+	case TriggerLowConfidence, TriggerDimensionSplit, TriggerNeedsReview:
+		return ReviewRiskMedium
+	default:
+		return ReviewRiskLow
+	}
+}
+
 // ReviewSourceType 评审条目来源。
 type ReviewSourceType string
 
@@ -86,13 +111,16 @@ type ReviewItem struct {
 	ResourceKind  ResourceKind        `json:"resource_kind"`
 	ResourceID    string              `json:"resource_id"`
 	TriggerReason ReviewTriggerReason `json:"trigger_reason"`
-	Snapshot      any                 `json:"snapshot"`
-	Status        ReviewItemStatus    `json:"status"`
-	HumanVerdict  HumanVerdict        `json:"human_verdict,omitempty"`
-	Reviewer      string              `json:"reviewer,omitempty"`
-	ReviewReason  string              `json:"review_reason,omitempty"`
-	CreatedAt     time.Time           `json:"created_at"`
-	ReviewedAt    *time.Time          `json:"reviewed_at,omitempty"`
+	// RiskLevel 评审优先级（派生自 trigger_reason；不落库，repository 读取后填充，
+	// JSON 透出供前端展示排序依据）。
+	RiskLevel    ReviewRiskLevel  `json:"risk_level"`
+	Snapshot     any              `json:"snapshot"`
+	Status       ReviewItemStatus `json:"status"`
+	HumanVerdict HumanVerdict     `json:"human_verdict,omitempty"`
+	Reviewer     string           `json:"reviewer,omitempty"`
+	ReviewReason string           `json:"review_reason,omitempty"`
+	CreatedAt    time.Time        `json:"created_at"`
+	ReviewedAt   *time.Time       `json:"reviewed_at,omitempty"`
 }
 
 // CalibrationSample judge 误判校准样本（对应 eval_calibration_samples）。
