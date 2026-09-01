@@ -43,13 +43,14 @@ func TestPgRunRepository_SaveRun_success(t *testing.T) {
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectExec("INSERT INTO eval_case_results").
 		WithArgs(pgxmock.AnyArg(), "run-1", "case-1", true, `{"token":"[REDACTED]"}`, "ok", "", "",
-			0, 0.0, 0, "[]", "", "null").
+			0, 0.0, 0, "[]", "", "null", false, "", "[]").
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectExec("INSERT INTO eval_case_results").
 		WithArgs(pgxmock.AnyArg(), "run-1", "case-2", true, `"plain"`, "", "", "", 10, 0.5, 3,
 			`[{"name":"correctness","score":1,"passed":true,"reason":"ok"}]`, "assert failed",
 			`{"cost_usd":0.2,"latency_ms":150,"success":true,`+
-				`"security_violation":false,"tool_call_count":3,"tool_error_count":1}`).
+				`"security_violation":false,"tool_call_count":3,"tool_error_count":1}`,
+			false, "", "[]").
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
@@ -113,7 +114,8 @@ func TestPgRunRepository_SaveRun_insertResultFails(t *testing.T) {
 		WithArgs("run-1", "prompt", "r-1", "rev-1", "s-1", false, 0, 0, pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectExec("INSERT INTO eval_case_results").
-		WithArgs(pgxmock.AnyArg(), "run-1", "case-1", false, `"x"`, "", "", "", 0, 0.0, 0, "[]", "", "null").
+		WithArgs(pgxmock.AnyArg(), "run-1", "case-1", false, `"x"`, "", "", "", 0, 0.0, 0, "[]", "", "null",
+			false, "", "[]").
 		WillReturnError(errors.New("foreign key violation"))
 	mock.ExpectRollback()
 
@@ -139,8 +141,10 @@ func TestPgRunRepository_GetRun_found(t *testing.T) {
 		WillReturnRows(pgxmock.NewRows([]string{
 			"case_id", "passed", "actual_output", "message", "error_message", "trace_id",
 			"tokens", "cost_usd", "duration_ms", "dimensions", "failure_reason", "trace_evidence",
+			"process_pass", "process_failure", "tool_sequence",
 		}).AddRow("case-1", true, []byte(`{"ok":true}`), "m", "e", "tr-1", 5, 0.1, 2,
-			[]byte(`[{"name":"faithfulness","score":0.9,"passed":true}]`), "assert failed", []byte("null")))
+			[]byte(`[{"name":"faithfulness","score":0.9,"passed":true}]`), "assert failed", []byte("null"),
+			false, "", []byte("[]")))
 	mock.ExpectCommit()
 
 	run, found, err := repo.GetRun(context.Background(), "t1", "run-1")

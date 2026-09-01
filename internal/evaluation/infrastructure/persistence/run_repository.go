@@ -47,39 +47,58 @@ func (r *PgRunRepository) SaveRun(ctx context.Context, tenantID string, run doma
 			return fmt.Errorf("evaluation run repository: insert run: %w", err)
 		}
 		for _, result := range run.Results {
-			id := result.ID
-			if id == "" {
-				id = uuid.Must(uuid.NewV7()).String()
-			}
-			actualJSON, err := json.Marshal(sanitizeValue(result.Actual))
-			if err != nil {
-				return fmt.Errorf("evaluation run repository: marshal actual output: %w", err)
-			}
-			dimensionsJSON, err := json.Marshal(result.Dimensions)
-			if err != nil {
-				return fmt.Errorf("evaluation run repository: marshal dimensions: %w", err)
-			}
-			if string(dimensionsJSON) == "null" {
-				dimensionsJSON = []byte("[]")
-			}
-			traceJSON, err := json.Marshal(result.TraceEvidence)
-			if err != nil {
-				return fmt.Errorf("evaluation run repository: marshal trace evidence: %w", err)
-			}
-			if _, err := tx.Exec(ctx,
-				`INSERT INTO eval_case_results
-				 (id, run_id, case_id, passed, actual_output, message, error_message, trace_id,
-				  tokens, cost_usd, duration_ms, dimensions, failure_reason, trace_evidence)
-				 VALUES ($1,$2,NULLIF($3,''),$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
-				id, run.ID, result.CaseID, result.Passed, string(actualJSON),
-				result.Message, result.Error, result.TraceID, result.Tokens, result.CostUSD, result.DurationMs,
-				string(dimensionsJSON), result.FailureReason, string(traceJSON),
-			); err != nil {
-				return fmt.Errorf("evaluation run repository: insert case result: %w", err)
+			if err := insertCaseResult(ctx, tx, run.ID, result); err != nil {
+				return err
 			}
 		}
 		return nil
 	})
+}
+
+// insertCaseResult 在事务内写入一条 eval_case_results（spec §6.2/§6.5）：
+// actual/dimensions/trace_evidence/tool_sequence 均 JSON 序列化，工具序列落库前
+// 经 sanitizeTools 脱敏；JSON-null 分别回退到 {} / [] 保持 round-trip 语义。
+func insertCaseResult(ctx context.Context, tx pgx.Tx, runID string, result domain.EvalCaseResult) error {
+	id := result.ID
+	if id == "" {
+		id = uuid.Must(uuid.NewV7()).String()
+	}
+	actualJSON, err := json.Marshal(sanitizeValue(result.Actual))
+	if err != nil {
+		return fmt.Errorf("evaluation run repository: marshal actual output: %w", err)
+	}
+	dimensionsJSON, err := json.Marshal(result.Dimensions)
+	if err != nil {
+		return fmt.Errorf("evaluation run repository: marshal dimensions: %w", err)
+	}
+	if string(dimensionsJSON) == "null" {
+		dimensionsJSON = []byte("[]")
+	}
+	traceJSON, err := json.Marshal(result.TraceEvidence)
+	if err != nil {
+		return fmt.Errorf("evaluation run repository: marshal trace evidence: %w", err)
+	}
+	toolSequenceJSON, err := json.Marshal(sanitizeTools(result.Tools))
+	if err != nil {
+		return fmt.Errorf("evaluation run repository: marshal tool sequence: %w", err)
+	}
+	if string(toolSequenceJSON) == "null" {
+		toolSequenceJSON = []byte("[]")
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO eval_case_results
+		 (id, run_id, case_id, passed, actual_output, message, error_message, trace_id,
+		  tokens, cost_usd, duration_ms, dimensions, failure_reason, trace_evidence,
+		  process_pass, process_failure, tool_sequence)
+		 VALUES ($1,$2,NULLIF($3,''),$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+		id, runID, result.CaseID, result.Passed, string(actualJSON),
+		result.Message, result.Error, result.TraceID, result.Tokens, result.CostUSD, result.DurationMs,
+		string(dimensionsJSON), result.FailureReason, string(traceJSON),
+		result.ProcessPass, result.ProcessFailure, string(toolSequenceJSON),
+	); err != nil {
+		return fmt.Errorf("evaluation run repository: insert case result: %w", err)
+	}
+	return nil
 }
 
 func (r *PgRunRepository) GetRun(
@@ -111,34 +130,50 @@ func (r *PgRunRepository) GetRun(
 		run.Resource.Kind = domain.ResourceKind(kind)
 		rows, err := tx.Query(ctx,
 			`SELECT case_id, passed, actual_output, message, error_message, trace_id, tokens, cost_usd,
-			        duration_ms, dimensions, failure_reason, trace_evidence
+			        duration_ms, dimensions, failure_reason, trace_evidence,
+			        process_pass, process_failure, tool_sequence
 			 FROM eval_case_results WHERE run_id=$1 ORDER BY created_at, id`, runID)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
 		for rows.Next() {
-			var result domain.EvalCaseResult
-			var actualJSON []byte
-			var dimensionsJSON []byte
-			var traceJSON []byte
-			if err := rows.Scan(&result.CaseID, &result.Passed, &actualJSON, &result.Message, &result.Error,
-				&result.TraceID, &result.Tokens, &result.CostUSD, &result.DurationMs,
-				&dimensionsJSON, &result.FailureReason, &traceJSON); err != nil {
+			result, err := scanCaseResult(rows)
+			if err != nil {
 				return err
-			}
-			_ = json.Unmarshal(actualJSON, &result.Actual)
-			if len(dimensionsJSON) > 0 {
-				_ = json.Unmarshal(dimensionsJSON, &result.Dimensions)
-			}
-			if len(traceJSON) > 0 {
-				_ = json.Unmarshal(traceJSON, &result.TraceEvidence)
 			}
 			run.Results = append(run.Results, result)
 		}
 		return rows.Err()
 	})
 	return run, found, err
+}
+
+// scanCaseResult 从一行 eval_case_results 读出 case 结果，并把 JSON 列反序列化
+// 到对应结构体字段（spec §6.2/§6.5）。
+func scanCaseResult(row pgx.Row) (domain.EvalCaseResult, error) {
+	var result domain.EvalCaseResult
+	var actualJSON []byte
+	var dimensionsJSON []byte
+	var traceJSON []byte
+	var toolSequenceJSON []byte
+	if err := row.Scan(&result.CaseID, &result.Passed, &actualJSON, &result.Message, &result.Error,
+		&result.TraceID, &result.Tokens, &result.CostUSD, &result.DurationMs,
+		&dimensionsJSON, &result.FailureReason, &traceJSON,
+		&result.ProcessPass, &result.ProcessFailure, &toolSequenceJSON); err != nil {
+		return result, err
+	}
+	_ = json.Unmarshal(actualJSON, &result.Actual)
+	if len(dimensionsJSON) > 0 {
+		_ = json.Unmarshal(dimensionsJSON, &result.Dimensions)
+	}
+	if len(traceJSON) > 0 {
+		_ = json.Unmarshal(traceJSON, &result.TraceEvidence)
+	}
+	if len(toolSequenceJSON) > 0 {
+		_ = json.Unmarshal(toolSequenceJSON, &result.Tools)
+	}
+	return result, nil
 }
 
 func sanitizeValue(value any) any {
@@ -174,4 +209,24 @@ func isSensitiveKey(key string) bool {
 	default:
 		return false
 	}
+}
+
+// sanitizeTools 落库前脱敏工具序列（spec §6.5）：Arguments 复用 sanitizeValue
+// 递归脱敏（敏感 key 与内嵌键值），RawText 用 sensitiveText 正则替换敏感键值对；
+// 其余字段原样透传。返回新切片，不修改入参。
+func sanitizeTools(tools []domain.ToolObservation) []domain.ToolObservation {
+	if len(tools) == 0 {
+		return tools
+	}
+	out := make([]domain.ToolObservation, len(tools))
+	for i, tool := range tools {
+		out[i] = tool
+		if tool.Arguments != nil {
+			if args, ok := sanitizeValue(tool.Arguments).(map[string]any); ok {
+				out[i].Arguments = args
+			}
+		}
+		out[i].RawText = sensitiveText.ReplaceAllString(tool.RawText, "$1="+redacted)
+	}
+	return out
 }

@@ -519,6 +519,9 @@ CREATE TABLE IF NOT EXISTS eval_case_results (
     dimensions      JSONB NOT NULL DEFAULT '[]'::jsonb,
     failure_reason  TEXT NOT NULL DEFAULT '',
     trace_evidence   JSONB NOT NULL DEFAULT 'null',
+    process_pass     BOOL NOT NULL DEFAULT true,
+    process_failure  TEXT NOT NULL DEFAULT '',
+    tool_sequence    JSONB NOT NULL DEFAULT '[]'::jsonb,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_eval_case_results_run ON eval_case_results(run_id);
@@ -527,6 +530,10 @@ ALTER TABLE eval_case_results ADD COLUMN IF NOT EXISTS dimensions JSONB NOT NULL
 ALTER TABLE eval_case_results ADD COLUMN IF NOT EXISTS failure_reason TEXT NOT NULL DEFAULT '';
 -- P3c 评测输出升级（spec §6.3）：trace 组件级证据，照 actual_output 的 JSON-null round-trip 保留 nil 语义。
 ALTER TABLE eval_case_results ADD COLUMN IF NOT EXISTS trace_evidence JSONB NOT NULL DEFAULT 'null';
+-- P3c 评测输出升级（spec §6.5）：多步推理过程断言与工具序列，升级历史租户。
+ALTER TABLE eval_case_results ADD COLUMN IF NOT EXISTS process_pass BOOL NOT NULL DEFAULT true;
+ALTER TABLE eval_case_results ADD COLUMN IF NOT EXISTS process_failure TEXT NOT NULL DEFAULT '';
+ALTER TABLE eval_case_results ADD COLUMN IF NOT EXISTS tool_sequence JSONB NOT NULL DEFAULT '[]'::jsonb;
 
 -- 运行态观测明细（规格 §4.3 EvalObservation）。param_version/signals/cost_perf
 -- 为 JSONB 结构化字段，由 Go json.Marshal 后写入。
