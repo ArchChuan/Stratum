@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
@@ -310,6 +311,118 @@ func TestTryEscalateCaseResultRuleCaseNoConflictNoInsert(t *testing.T) {
 	}
 	if len(repo.inserted) != 0 {
 		t.Fatalf("inserted = %d, want 0", len(repo.inserted))
+	}
+}
+
+// TestTryEscalateCaseResultJudgeConflict 覆盖 judge case 的评审池触发
+// （§6.5 §6.6）：输出 pass + 过程 fail → 实际产生 process_output_conflict 条目。
+// 现有覆盖只有规则分支与 TriggersForProcessConflict 纯函数，缺 judge 分支到
+// UpsertItem 的落条断言（judge 分支还叠加 needs_review / low_confidence 判定）。
+func TestTryEscalateCaseResultJudgeConflict(t *testing.T) {
+	repo := &fakeReviewRepo{}
+	svc := newTestReviewService(repo)
+	result := domain.EvalCaseResult{
+		ID: "cr-1", CaseID: "c1", TraceID: "t-1", Passed: false,
+		ProcessPass: false, ProcessFailure: "process:must_not_call:delete",
+	}
+	c := domain.EvalCase{ID: "c1", AssertionMode: domain.AssertionJudge}
+	assertion := domain.AssertionResult{Passed: true, Confidence: 0.9}
+	if err := svc.TryEscalateCaseResult(
+		context.Background(), "t1", "run-1",
+		domain.ResourceRef{Kind: domain.ResourceKindAgent, ResourceID: "agent-1"}, result, c, assertion, true, false,
+	); err != nil {
+		t.Fatalf("escalate: %v", err)
+	}
+	if len(repo.inserted) != 1 {
+		t.Fatalf("inserted = %d, want 1", len(repo.inserted))
+	}
+	if repo.inserted[0].TriggerReason != domain.TriggerProcessOutputConflict {
+		t.Fatalf("trigger = %q, want process_output_conflict", repo.inserted[0].TriggerReason)
+	}
+	if repo.inserted[0].SourceType != domain.ReviewSourceCaseResult {
+		t.Fatalf("source_type = %q, want case_result", repo.inserted[0].SourceType)
+	}
+}
+
+// TestTryEscalateCaseResultSnapshotSanitized 覆盖评审池快照脱敏（安全红线，spec §6.5）：
+// case_result 评审条目的 actual 与 tool_sequence 入快照前必须经 domain 脱敏，与
+// eval_case_results 路径行为一致。敏感 Arguments 键（api_key/token/password）整体
+// 替换为 [REDACTED]，RawText 中 `Authorization=Bearer <token>` 键值对被正则脱敏，
+// actual 敏感键同样替换；普通字段原样保留，不得凭据明文落库/经 API 外泄。
+func TestTryEscalateCaseResultSnapshotSanitized(t *testing.T) {
+	repo := &fakeReviewRepo{}
+	svc := newTestReviewService(repo)
+	result := domain.EvalCaseResult{
+		ID: "cr-1", CaseID: "c1", TraceID: "t-1", Passed: false, ProcessPass: false,
+		ProcessFailure: "process:must_not_call:delete",
+		Actual: map[string]any{
+			"token":  "secret-token",
+			"nested": map[string]any{"api_key": "secret-key"},
+			"result": "ok",
+		},
+		Tools: []domain.ToolObservation{{
+			ToolName:  "web_search",
+			StepIndex: 1,
+			Arguments: map[string]any{
+				"query":    "stratum",
+				"api_key":  "secret-key",
+				"token":    "tok123",
+				"password": "hunter2",
+			},
+			RawText: "web_search(query='stratum', api_key='secret-key', Authorization=Bearer tok123)",
+		}},
+	}
+	c := domain.EvalCase{ID: "c1", Name: "搜索", AssertionMode: domain.AssertionJudge}
+	assertion := domain.AssertionResult{Passed: true, Confidence: 0.9}
+	if err := svc.TryEscalateCaseResult(
+		context.Background(), "t1", "run-1",
+		domain.ResourceRef{Kind: domain.ResourceKindAgent, ResourceID: "agent-1"}, result, c, assertion, true, false,
+	); err != nil {
+		t.Fatalf("escalate: %v", err)
+	}
+	if len(repo.inserted) != 1 {
+		t.Fatalf("inserted = %d, want 1", len(repo.inserted))
+	}
+	snap, ok := repo.inserted[0].Snapshot.(map[string]any)
+	if !ok {
+		t.Fatalf("snapshot type = %T, want map[string]any", repo.inserted[0].Snapshot)
+	}
+
+	// actual：敏感键整体替换，普通键原样。
+	actual, ok := snap["actual"].(map[string]any)
+	if !ok {
+		t.Fatalf("snapshot actual type = %T", snap["actual"])
+	}
+	if actual["token"] != "[REDACTED]" {
+		t.Fatalf("actual token = %v, want [REDACTED]", actual["token"])
+	}
+	nested, ok := actual["nested"].(map[string]any)
+	if !ok || nested["api_key"] != "[REDACTED]" {
+		t.Fatalf("actual nested = %#v, want api_key=[REDACTED]", actual["nested"])
+	}
+	if actual["result"] != "ok" {
+		t.Fatalf("actual result = %v, want ok", actual["result"])
+	}
+
+	// tool_sequence：Arguments 敏感键替换，RawText 键值对正则脱敏。
+	tools, ok := snap["tool_sequence"].([]domain.ToolObservation)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("tool_sequence = %#v, want sanitized tool observations", snap["tool_sequence"])
+	}
+	tool := tools[0]
+	for _, key := range []string{"api_key", "token", "password"} {
+		if tool.Arguments[key] != "[REDACTED]" {
+			t.Fatalf("tool arguments[%s] = %v, want [REDACTED]", key, tool.Arguments[key])
+		}
+	}
+	if tool.Arguments["query"] != "stratum" {
+		t.Fatalf("tool arguments[query] = %v, want stratum", tool.Arguments["query"])
+	}
+	if strings.Contains(tool.RawText, "tok123") || strings.Contains(tool.RawText, "secret-key") {
+		t.Fatalf("tool raw_text leaked sensitive value: %q", tool.RawText)
+	}
+	if !strings.Contains(tool.RawText, "[REDACTED]") {
+		t.Fatalf("tool raw_text must contain [REDACTED], got %q", tool.RawText)
 	}
 }
 

@@ -301,8 +301,8 @@ type EvalCaseResult struct {
 	// evaluations; nil for other resource kinds. It replaces brittle parsing
 	// of the serialized Actual payload.
 	RAGEvidence *RAGEvidenceInfo `json:"rag_evidence,omitempty"`
-	// Dimensions 是 judge case 的语义维度分数（spec §6.2），由 judge 判定拷贝；
-	// 规则断言 case 为空。
+	// Dimensions 是 judge/step_judge 产出的语义维度分数（spec §6.2）；规则断言
+	// case 未配置 step_judge 时为空。
 	Dimensions []DimensionScore `json:"dimensions,omitempty"`
 	// FailureReason 是 case 失败的主要归因（spec §6.2）：judge 失败 →
 	// "dimension:<名>"；规则断言失败 → "assert:<mode>"；执行失败 → "execution"。

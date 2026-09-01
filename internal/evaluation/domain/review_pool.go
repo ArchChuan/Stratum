@@ -178,7 +178,7 @@ func TriggersForProcessConflict(outputPass, processPass bool) []ReviewTriggerRea
 
 // TriggersForCaseResult 计算评测集 judge 判定的入池原因（空 = 不进池）。
 // 规则（spec §6.6）：
-//  1. needs_review：EvalCase.NeedsReview == true（仅 judge case 生效）；
+//  1. needs_review：EvalCase.NeedsReview == true（assertion_mode 分支由调用方强制，本函数不检查）；
 //  2. low_confidence：assertion.Confidence < cfg.LowConfidenceThreshold；
 //  3. process_output_conflict：输出断言通过但过程断言失败（§6.5）。
 func TriggersForCaseResult(

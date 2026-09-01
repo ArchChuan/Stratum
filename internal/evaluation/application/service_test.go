@@ -789,6 +789,56 @@ func TestRunCaseStepJudgeDisabledFailsClosed(t *testing.T) {
 	}
 }
 
+// TestRunCaseStepJudgeJudgeErrorFailsClosed 覆盖 step_judge 的 Judge port 返回 error
+// 时 fail-closed（项目红线）：evaluateProcess 向上返回 error → runCase 置
+// FailureReason="execution"、result.Error 非空、绝不静默 pass。现有覆盖只有
+// judgeProcess 的 disabled 分支，缺 Judge port error 分支。
+func TestRunCaseStepJudgeJudgeErrorFailsClosed(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{name: "judge port error", err: errors.New("completer timeout")},
+		{name: "provider error", err: errors.New("LLM provider rate limited")},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			adapter := &fakeAdapter{
+				outputs: map[string]any{"case-1": "any"},
+				tools:   map[string][]domain.ToolObservation{"case-1": {{ToolName: "read", StepIndex: 0}}},
+			}
+			repo := &fakeRunRepo{}
+			judge := &fakeLLMJudge{enabled: true, err: tc.err}
+			svc := NewService(adapter, repo, nil, judge)
+
+			run, err := svc.Run(context.Background(), RunInput{
+				TenantID: "tenant-1",
+				Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "v1"},
+				Suite: domain.EvalSuiteRevision{ID: "sv-1", Cases: []domain.EvalCase{
+					{ID: "case-1", Input: "x", ExpectedOutput: "y", AssertionMode: domain.AssertionContains, Enabled: true,
+						StepJudge: &domain.StepJudge{Criteria: "步骤需合理"}},
+				}},
+			})
+			if err != nil {
+				t.Fatalf("Run returned error: %v", err)
+			}
+			got := run.Results[0]
+			if run.Passed || got.Passed {
+				t.Fatalf("judge port error must fail the case, got %+v", got)
+			}
+			if !strings.Contains(got.Error, tc.err.Error()) {
+				t.Fatalf("error = %q, want substring %q", got.Error, tc.err.Error())
+			}
+			if got.FailureReason != "execution" {
+				t.Fatalf("failure_reason = %q, want execution", got.FailureReason)
+			}
+			if got.ProcessPass {
+				t.Fatal("judge port error must not pass the process assertion")
+			}
+		})
+	}
+}
+
 func TestRunCaseNoProcessAssertionDefaultsProcessPassTrue(t *testing.T) {
 	adapter := &fakeAdapter{
 		outputs: map[string]any{"case-1": "ok"},
