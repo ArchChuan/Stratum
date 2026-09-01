@@ -23,6 +23,21 @@ message JudgeSpec {
   string rubric = 2;
 }
 
+// ToolSpec 是工具序列确定性过程断言（§6.5）：约束执行链路上工具调用的行为。
+// 空字段不参与校验；max_calls = 0 表示不限制调用次数。
+message ToolSpec {
+  repeated string must_call = 1;
+  repeated string must_not_call = 2;
+  repeated string order = 3;
+  int32 max_calls = 4; // 0 = 不限制
+}
+
+// StepJudge 是步骤级 LLM rubric（§6.5）：对工具序列逐步骤评分。criteria 为空时
+// 回退平台默认步骤 rubric。
+message StepJudge {
+  string criteria = 1;
+}
+
 message EvaluationCaseRequest {
   string name = 1;
   // @binding: required
@@ -34,6 +49,10 @@ message EvaluationCaseRequest {
   optional bool enabled = 5; // 手写 *bool,json 无 omitempty
   // 仅 assertion_mode=judge 时生效；规则断言 case 忽略该字段。
   optional JudgeSpec judge_spec = 6;
+  // 工具序列过程断言（§6.5）；nil 表示不做工具序列规则校验。
+  optional ToolSpec tool_spec = 7;
+  // 步骤级 LLM rubric（§6.5）；nil 表示不做步骤级 judge。
+  optional StepJudge step_judge = 8;
 }
 
 message CreateEvaluationSuiteRequest {

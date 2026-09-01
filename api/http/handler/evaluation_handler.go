@@ -257,29 +257,11 @@ func (h *EvaluationHandler) CreateSuite(c *gin.Context) {
 	}
 	cases := make([]domain.EvalCase, 0, len(req.Cases))
 	for _, item := range req.Cases {
-		enabled := true
-		if item.Enabled != nil {
-			enabled = *item.Enabled
-		}
-		testCase := domain.EvalCase{
-			Name: item.Name, Input: item.Input, ExpectedOutput: item.ExpectedOutput,
-			AssertionMode: domain.AssertionMode(item.AssertionMode), Enabled: enabled,
-		}
-		if item.JudgeSpec != nil {
-			testCase.JudgeSpec = &domain.JudgeSpec{Model: item.JudgeSpec.Model, Rubric: item.JudgeSpec.Rubric}
-		}
-		cases = append(cases, testCase)
+		cases = append(cases, toDomainCase(item))
 	}
 	caseArgs := make([]any, 0, len(cases))
 	for _, cs := range cases {
-		caseArg := map[string]any{
-			"name": cs.Name, "input": cs.Input, "expected_output": cs.ExpectedOutput,
-			"assertion_mode": string(cs.AssertionMode), "enabled": cs.Enabled,
-		}
-		if cs.JudgeSpec != nil {
-			caseArg["judge_spec"] = map[string]any{"model": cs.JudgeSpec.Model, "rubric": cs.JudgeSpec.Rubric}
-		}
-		caseArgs = append(caseArgs, caseArg)
+		caseArgs = append(caseArgs, caseAuditArg(cs))
 	}
 	args := map[string]any{"operation": "create_suite", "name": req.Name, "description": req.Description,
 		"resource_kind": string(req.ResourceKind), "cases": caseArgs}
@@ -292,6 +274,55 @@ func (h *EvaluationHandler) CreateSuite(c *gin.Context) {
 		}
 		return gin.H{"suite": suite, "revision": revision}, nil
 	})
+}
+
+// toDomainCase converts one create-suite request case into a domain.EvalCase,
+// copying the assertion config (judge_spec / tool_spec / step_judge) verbatim
+// so the payloads bind to the domain shapes.
+func toDomainCase(item gen.EvaluationCaseRequest) domain.EvalCase {
+	enabled := true
+	if item.Enabled != nil {
+		enabled = *item.Enabled
+	}
+	testCase := domain.EvalCase{
+		Name: item.Name, Input: item.Input, ExpectedOutput: item.ExpectedOutput,
+		AssertionMode: domain.AssertionMode(item.AssertionMode), Enabled: enabled,
+	}
+	if item.JudgeSpec != nil {
+		testCase.JudgeSpec = &domain.JudgeSpec{Model: item.JudgeSpec.Model, Rubric: item.JudgeSpec.Rubric}
+	}
+	if item.ToolSpec != nil {
+		testCase.ToolSpec = &domain.ToolSpec{
+			MustCall: item.ToolSpec.MustCall, MustNotCall: item.ToolSpec.MustNotCall,
+			Order: item.ToolSpec.Order, MaxCalls: int(item.ToolSpec.MaxCalls),
+		}
+	}
+	if item.StepJudge != nil {
+		testCase.StepJudge = &domain.StepJudge{Criteria: item.StepJudge.Criteria}
+	}
+	return testCase
+}
+
+// caseAuditArg builds the audit payload for one case, including the process
+// assertion config (tool_spec / step_judge) for approver review (§6.5).
+func caseAuditArg(cs domain.EvalCase) map[string]any {
+	caseArg := map[string]any{
+		"name": cs.Name, "input": cs.Input, "expected_output": cs.ExpectedOutput,
+		"assertion_mode": string(cs.AssertionMode), "enabled": cs.Enabled,
+	}
+	if cs.JudgeSpec != nil {
+		caseArg["judge_spec"] = map[string]any{"model": cs.JudgeSpec.Model, "rubric": cs.JudgeSpec.Rubric}
+	}
+	if cs.ToolSpec != nil {
+		caseArg["tool_spec"] = map[string]any{
+			"must_call": cs.ToolSpec.MustCall, "must_not_call": cs.ToolSpec.MustNotCall,
+			"order": cs.ToolSpec.Order, "max_calls": cs.ToolSpec.MaxCalls,
+		}
+	}
+	if cs.StepJudge != nil {
+		caseArg["step_judge"] = map[string]any{"criteria": cs.StepJudge.Criteria}
+	}
+	return caseArg
 }
 
 func (h *EvaluationHandler) PublishSuite(c *gin.Context) {
