@@ -565,7 +565,7 @@ CREATE TABLE IF NOT EXISTS eval_review_items (
     resource_kind  TEXT NOT NULL,
     resource_id    TEXT NOT NULL,
     trigger_reason TEXT NOT NULL CHECK (trigger_reason IN
-        ('low_confidence','dimension_split','judge_rule_conflict','needs_review')),
+        ('low_confidence','dimension_split','judge_rule_conflict','needs_review','process_output_conflict')),
     snapshot       JSONB NOT NULL DEFAULT '{}'::jsonb,
     status         TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','reviewed')),
     human_verdict  TEXT NOT NULL DEFAULT '' CHECK (human_verdict IN
@@ -575,6 +575,13 @@ CREATE TABLE IF NOT EXISTS eval_review_items (
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     reviewed_at    TIMESTAMPTZ
 );
+-- 升级存量租户：§6.5 process_output_conflict 加入 trigger_reason 枚举后，历史租户
+-- 的旧 check 约束仍拒绝该值（过程断言失败入池即 500）。CREATE TABLE IF NOT EXISTS
+-- 不会重建已有表，故以 DROP IF EXISTS + ADD CONSTRAINT 幂等替换——每次 provision
+-- 先删后加，新旧租户最终都含 process_output_conflict。
+ALTER TABLE eval_review_items DROP CONSTRAINT IF EXISTS eval_review_items_trigger_reason_check;
+ALTER TABLE eval_review_items ADD CONSTRAINT eval_review_items_trigger_reason_check
+    CHECK (trigger_reason IN ('low_confidence','dimension_split','judge_rule_conflict','needs_review','process_output_conflict'));
 CREATE INDEX IF NOT EXISTS idx_eval_review_items_status
     ON eval_review_items(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_eval_review_items_source
