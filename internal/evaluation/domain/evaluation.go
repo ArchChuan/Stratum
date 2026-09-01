@@ -22,12 +22,26 @@ const (
 	AssertionJudge AssertionMode = "judge"
 )
 
+// DimensionScore 是 judge 对一个语义维度（faithfulness/relevance/completeness）
+// 的评分。Score 归一化到 [0,1]；Confidence 缺失/越界由解析层回退 1.0（与
+// AssertionResult.Confidence 同语义，spec §6.2）。规则断言不产生该结构。
+type DimensionScore struct {
+	Name       string  `json:"name"`
+	Score      float64 `json:"score"`
+	Passed     bool    `json:"passed"`
+	Reason     string  `json:"reason,omitempty"`
+	Confidence float64 `json:"confidence,omitempty"`
+}
+
 type AssertionResult struct {
 	Passed  bool   `json:"passed"`
 	Message string `json:"message,omitempty"`
 	// Confidence 是 judge 判定置信度（0-1）。规则断言不产生该值；judge 解析
 	// 缺失/无效时由 parseJudgeResponse 回退 1.0（spec §6.2，本 domain 不静默改值）。
 	Confidence float64 `json:"confidence,omitempty"`
+	// Dimensions 是 judge 返回的语义维度分数（spec §6.2）。旧 judge 不返回
+	// 维度时为空；聚合层对空维度自动跳过，不阻断判定。
+	Dimensions []DimensionScore `json:"dimensions,omitempty"`
 }
 
 type EvalCase struct {
@@ -156,6 +170,13 @@ type EvalCaseResult struct {
 	// evaluations; nil for other resource kinds. It replaces brittle parsing
 	// of the serialized Actual payload.
 	RAGEvidence *RAGEvidenceInfo `json:"rag_evidence,omitempty"`
+	// Dimensions 是 judge case 的语义维度分数（spec §6.2），由 judge 判定拷贝；
+	// 规则断言 case 为空。
+	Dimensions []DimensionScore `json:"dimensions,omitempty"`
+	// FailureReason 是 case 失败的主要归因（spec §6.2）：judge 失败 →
+	// "dimension:<名>"；规则断言失败 → "assert:<mode>"；执行失败 → "execution"。
+	// 通过 case 为空。
+	FailureReason string `json:"failure_reason,omitempty"`
 }
 
 // RAGEvidenceInfo is the per-case retrieval signal for knowledge runs. The

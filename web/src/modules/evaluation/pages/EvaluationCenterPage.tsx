@@ -107,7 +107,7 @@ export const EvaluationCenterPage = () => {
         <Alert type="info" message="结合运行、候选与实验记录审阅此资源，不展示原始提示词或载荷。" />
         <Button style={{ marginTop: 16 }} onClick={() => void timeline.openTimeline(resource)}>查看时间线</Button></>}
     </Drawer>
-    <RunDrawer run={run} open={!!run} onClose={() => setRunId('')} isMobile={isMobile} />
+    <RunDrawer run={run} open={!!run} onClose={() => setRunId('')} isMobile={isMobile} runs={center.runs.items} />
     <CandidateDrawer candidate={candidate} open={!!candidate} onClose={() => setCandidateId('')}
       canManage={center.canManageEvaluation} isMobile={isMobile} onReject={(value) => void decide(
         () => center.rejectCandidate(value.id, command(value.state_version, '管理员拒绝候选版本')), '候选版本已拒绝')}
