@@ -70,11 +70,14 @@ const VersionHistory = ({
   labelMap,
   refreshTick,
   onEffectiveChange,
+  disabled = false,
 }: {
   groupKey: string;
   labelMap?: Record<string, string>;
   refreshTick?: number;
   onEffectiveChange?: (values: PlatformValues) => void;
+  // 只读成员置灰发布/回滚；默认 false（既有调用方不受影响）。
+  disabled?: boolean;
 }) => {
   const [versions, setVersions] = useState<PlatformConfigVersion[]>([]);
   const [loading, setLoading] = useState(false);
@@ -187,6 +190,7 @@ const VersionHistory = ({
               <Button
                 type="link"
                 size="small"
+                disabled={disabled}
                 onClick={() => {
                   Modal.confirm({
                     title: `发布版本 v${v.version_seq}？`,
@@ -211,6 +215,7 @@ const VersionHistory = ({
                 type="link"
                 size="small"
                 danger
+                disabled={disabled}
                 onClick={() => {
                   Modal.confirm({
                     title: `回滚到版本 v${v.version_seq}？`,
@@ -238,7 +243,7 @@ const VersionHistory = ({
         },
       },
     ];
-  }, [groupKey, isCurrent, act]);
+  }, [groupKey, isCurrent, act, disabled]);
 
   return (
     <div style={{ marginTop: 24 }}>

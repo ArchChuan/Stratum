@@ -5,8 +5,7 @@ import { AuditEventsPage } from './AuditEventsPage';
 import { PLATFORM_RESOURCE_KIND_OPTIONS } from '@/constants';
 
 // 平台审计页：复用租户审计页的列表/筛选/抽屉能力，数据源切换到平台级
-// /admin/audit/platform/events。路由守卫由 iam/routes.tsx 的 PrivateRoute
-// requiredRole="system_admin" 承担，菜单对普通用户常显但点击被 403 拦截。
+// /admin/audit/platform/events。无写控件，所有登录租户成员只读可见（路由不再用 requiredRole 守卫）。
 export const PlatformAuditPage = () => {
   return (
     <AuditEventsPage

@@ -6,6 +6,7 @@ import { tenantApi } from '../../api/tenant.api';
 
 import { AdminAddModal, type AdminCandidate } from './AdminAddModal';
 
+import { usePlatformAdminCanEdit } from '@/modules/iam';
 import { extractErrorMessage, isForbidden } from '@/shared/lib';
 import { DangerPopconfirm, ResponsiveDataView } from '@/shared/ui';
 
@@ -22,6 +23,8 @@ export const AdminsPage = () => {
   const [loading, setLoading] = useState(true);
   const [removeLoadingId, setRemoveLoadingId] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
+  // 只读模式下写控件置灰（由路由级 PlatformAdminGate 提供）；后端中间件仍是强制点。
+  const canEdit = usePlatformAdminCanEdit();
 
   const fetchAdmins = async () => {
     setLoading(true);
@@ -104,12 +107,12 @@ export const AdminsPage = () => {
             title={`确认移除「${displayName}」的平台管理员权限？`}
             okText="确认移除"
             onConfirm={() => handleRemove(record.user_id)}
-            disabled={isSuperAdmin}
+            disabled={isSuperAdmin || !canEdit}
           >
             <Button
               size="small"
               danger
-              disabled={isSuperAdmin}
+              disabled={isSuperAdmin || !canEdit}
               loading={removeLoadingId === record.user_id}
             >
               移除
@@ -135,6 +138,7 @@ export const AdminsPage = () => {
           type="primary"
           icon={<PlusOutlined />}
           aria-label="添加平台管理员"
+          disabled={!canEdit}
           onClick={() => setAddOpen(true)}
         >
           添加管理员
@@ -172,12 +176,12 @@ export const AdminsPage = () => {
                     title={`确认移除「${displayName}」的平台管理员权限？`}
                     okText="确认移除"
                     onConfirm={() => handleRemove(record.user_id)}
-                    disabled={isSuperAdmin}
+                    disabled={isSuperAdmin || !canEdit}
                   >
                     <Button
                       size="small"
                       danger
-                      disabled={isSuperAdmin}
+                      disabled={isSuperAdmin || !canEdit}
                       loading={removeLoadingId === record.user_id}
                     >
                       移除

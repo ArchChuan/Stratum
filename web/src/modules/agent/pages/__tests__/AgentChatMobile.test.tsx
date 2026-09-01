@@ -48,6 +48,8 @@ vi.mock('@/modules/iam', () => ({
   // SourceCardList 经 knowledge barrel 间接引入 llmRoutes → PrivateRoute，
   // mock 边界需提供该导出（与 evaluation/routes.test.tsx 同款）
   PrivateRoute: ({ children }: { children: React.ReactNode }) => children,
+  // Task3: llmRoutes → PlatformAdminGate（minRole 置灰只读），mock 边界同步提供。
+  PlatformAdminGate: ({ children }: { children: React.ReactNode }) => children,
 }));
 
 vi.mock('../../hooks/useChatPage', () => ({

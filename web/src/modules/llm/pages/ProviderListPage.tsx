@@ -27,6 +27,7 @@ import type { ProviderFormValues } from '../components/ProviderForm';
 import { useProviders } from '../hooks/useProviders';
 import type { CreateProviderInput, Model, Provider, ProviderKind } from '../model/llm';
 
+import { usePlatformAdminCanEdit } from '@/modules/iam';
 import { extractErrorMessage } from '@/shared/lib';
 
 const { Text } = Typography;
@@ -50,6 +51,7 @@ interface Props {
 
 export function ProviderListPage({ onModelCreated }: Props) {
   const { providers, loading, createLoading, updateLoading, refresh, createProvider, updateProvider, deleteProvider } = useProviders();
+  const canEdit = usePlatformAdminCanEdit();
   const [createOpen, setCreateOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editingProvider, setEditingProvider] = useState<Provider | null>(null);
@@ -222,6 +224,7 @@ export function ProviderListPage({ onModelCreated }: Props) {
         <span style={{ display: 'flex', gap: 8 }}>
           <Button
             size="small"
+            disabled={!canEdit}
             onClick={() => {
               setAddModelProvider(record);
               setAddModelOpen(true);
@@ -231,17 +234,20 @@ export function ProviderListPage({ onModelCreated }: Props) {
           </Button>
           <Button
             size="small"
+            disabled={!canEdit}
             onClick={() => handleDiscover(record)}
             loading={discoveringIds.has(record.id)}
           >
             发现模型
           </Button>
-          <Button size="small" onClick={() => handleHealthCheck(record)}>
+          <Button size="small" disabled={!canEdit} onClick={() => handleHealthCheck(record)}>
             健康检查
           </Button>
           <Tooltip title="编辑">
             <Button
               size="small"
+              aria-label="编辑"
+              disabled={!canEdit}
               icon={<EditOutlined />}
               onClick={() => handleEdit(record)}
             />
@@ -249,6 +255,8 @@ export function ProviderListPage({ onModelCreated }: Props) {
           <Tooltip title="删除">
             <Button
               size="small"
+              aria-label="删除"
+              disabled={!canEdit}
               danger
               icon={<DeleteOutlined />}
               onClick={() => handleDelete(record)}
@@ -264,10 +272,10 @@ export function ProviderListPage({ onModelCreated }: Props) {
       title="厂商管理"
       extra={
         <span style={{ display: 'flex', gap: 8 }}>
-          <Button icon={<ReloadOutlined />} onClick={refresh} loading={loading}>
+          <Button icon={<ReloadOutlined />} aria-label="刷新" onClick={refresh} loading={loading}>
             刷新
           </Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+          <Button type="primary" icon={<PlusOutlined />} aria-label="添加厂商" disabled={!canEdit} onClick={() => setCreateOpen(true)}>
             添加厂商
           </Button>
         </span>
@@ -282,6 +290,7 @@ export function ProviderListPage({ onModelCreated }: Props) {
           <Button
             type="primary"
             icon={<PlusOutlined />}
+            disabled={!canEdit}
             onClick={() => setCreateOpen(true)}
           >
             添加第一个厂商
