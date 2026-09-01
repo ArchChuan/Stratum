@@ -483,7 +483,9 @@ func (failingCaseEscalator) TryEscalateObservation(context.Context, string, *dom
 	return nil
 }
 
-func (failingCaseEscalator) TryEscalateCaseResult(context.Context, string, string, domain.EvalCaseResult, domain.EvalCase, domain.AssertionResult) error {
+func (failingCaseEscalator) TryEscalateCaseResult(
+	context.Context, string, string, domain.EvalCaseResult, domain.EvalCase, domain.AssertionResult, bool, bool,
+) error {
 	return errors.New("escalate down")
 }
 
@@ -496,7 +498,7 @@ func TestServiceEscalateCaseResultFailureCountsMetric(t *testing.T) {
 	svc.escalateCaseResult(context.Background(), "t1", "run-1",
 		domain.EvalCaseResult{ID: "cr-1", CaseID: "c1", TraceID: "t-1", Passed: true},
 		domain.EvalCase{ID: "c1", NeedsReview: true},
-		domain.AssertionResult{Passed: true, Confidence: 0.9})
+		domain.AssertionResult{Passed: true, Confidence: 0.9}, true, true)
 
 	if metrics.inc != 1 {
 		t.Fatalf("IncEvalReviewEscalateFailure calls = %d, want 1", metrics.inc)
@@ -512,10 +514,69 @@ func TestServiceEscalateCaseResultNilReviewDoesNotPanic(t *testing.T) {
 	svc.escalateCaseResult(context.Background(), "t1", "run-1",
 		domain.EvalCaseResult{ID: "cr-1", CaseID: "c1", TraceID: "t-1", Passed: true},
 		domain.EvalCase{ID: "c1", NeedsReview: true},
-		domain.AssertionResult{Passed: true, Confidence: 0.9})
+		domain.AssertionResult{Passed: true, Confidence: 0.9}, true, true)
 
 	if metrics.inc != 0 {
 		t.Fatalf("IncEvalReviewEscalateFailure calls = %d, want 0", metrics.inc)
+	}
+}
+
+// recordingCaseEscalator 记录 TryEscalateCaseResult 收到的 outputPass/processPass，
+// 验证 runCase 两分支（judge / 规则）都按新签名把过程断言结果传入评审池（§6.5）。
+type recordingCaseEscalator struct {
+	calls       int
+	outputPass  bool
+	processPass bool
+}
+
+func (r *recordingCaseEscalator) TryEscalateObservation(context.Context, string, *domain.EvalObservation) error {
+	return nil
+}
+
+func (r *recordingCaseEscalator) TryEscalateCaseResult(
+	_ context.Context, _, _ string, _ domain.EvalCaseResult, _ domain.EvalCase, _ domain.AssertionResult,
+	outputPass, processPass bool,
+) error {
+	r.calls++
+	r.outputPass = outputPass
+	r.processPass = processPass
+	return nil
+}
+
+// TestRunCaseRuleBranchEscalatesProcessConflict 覆盖 runCase 规则分支的新升级调用：
+// 规则断言 case 输出 pass + 过程 fail（must_not_call 命中）时，以 outputPass=true /
+// processPass=false 调用评审池（§6.5 process_output_conflict 数据源），且失败不阻断主流程。
+func TestRunCaseRuleBranchEscalatesProcessConflict(t *testing.T) {
+	adapter := &fakeAdapter{
+		outputs: map[string]any{"case-1": "已删除相关文件"},
+		tools: map[string][]domain.ToolObservation{
+			"case-1": {{ToolName: "search", StepIndex: 1}, {ToolName: "delete", StepIndex: 2}},
+		},
+	}
+	repo := &fakeRunRepo{}
+	esc := &recordingCaseEscalator{}
+	svc := NewService(adapter, repo, nil, nil)
+	svc.SetReviewEscalator(esc, domain.ReviewConfig{LowConfidenceThreshold: 0.6})
+
+	run, err := svc.Run(context.Background(), RunInput{
+		TenantID: "tenant-1",
+		Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "v1"},
+		Suite: domain.EvalSuiteRevision{ID: "sv-1", Cases: []domain.EvalCase{
+			{ID: "case-1", Input: "删除文件", ExpectedOutput: "删除", AssertionMode: domain.AssertionContains, Enabled: true,
+				ToolSpec: &domain.ToolSpec{MustNotCall: []string{"delete"}}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if esc.calls != 1 {
+		t.Fatalf("escalator calls = %d, want 1 (rule branch must escalate)", esc.calls)
+	}
+	if !esc.outputPass || esc.processPass {
+		t.Fatalf("escalator got output_pass=%v process_pass=%v, want true/false", esc.outputPass, esc.processPass)
+	}
+	if run.Results[0].ProcessPass {
+		t.Fatal("process assertion must fail")
 	}
 }
 

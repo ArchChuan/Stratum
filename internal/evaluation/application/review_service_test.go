@@ -250,10 +250,12 @@ func TestTryEscalateObservationNoTriggerNoInsert(t *testing.T) {
 func TestTryEscalateCaseResultFiresOnNeedsReview(t *testing.T) {
 	repo := &fakeReviewRepo{}
 	svc := newTestReviewService(repo)
-	result := domain.EvalCaseResult{ID: "cr-1", CaseID: "c1", TraceID: "t-1", Passed: true}
-	c := domain.EvalCase{ID: "c1", NeedsReview: true}
+	result := domain.EvalCaseResult{ID: "cr-1", CaseID: "c1", TraceID: "t-1", Passed: true, ProcessPass: true}
+	c := domain.EvalCase{ID: "c1", NeedsReview: true, AssertionMode: domain.AssertionJudge}
 	assertion := domain.AssertionResult{Passed: true, Confidence: 0.9}
-	if err := svc.TryEscalateCaseResult(context.Background(), "t1", "run-1", result, c, assertion); err != nil {
+	if err := svc.TryEscalateCaseResult(
+		context.Background(), "t1", "run-1", result, c, assertion, true, true,
+	); err != nil {
 		t.Fatalf("escalate: %v", err)
 	}
 	if len(repo.inserted) != 1 || repo.inserted[0].TriggerReason != domain.TriggerNeedsReview {
@@ -261,6 +263,78 @@ func TestTryEscalateCaseResultFiresOnNeedsReview(t *testing.T) {
 	}
 	if repo.inserted[0].RunID != "run-1" || repo.inserted[0].SourceID != "cr-1" {
 		t.Fatalf("run/source mismatch: %+v", repo.inserted[0])
+	}
+}
+
+// TestTryEscalateCaseResultRuleCaseOnlyConflict 覆盖规则断言 case 的评审池触发
+// （§6.5 §6.6）：输出 pass + 过程 fail → 仅 process_output_conflict。规则 case 无
+// judge 信号，低置信（assertion.Confidence 0.3 < 0.6）与 needs_review 都不得在
+// 规则分支误触发（需求红线：规则 case 不产生 judge 信号）。
+func TestTryEscalateCaseResultRuleCaseOnlyConflict(t *testing.T) {
+	repo := &fakeReviewRepo{}
+	svc := newTestReviewService(repo)
+	result := domain.EvalCaseResult{
+		ID: "cr-1", CaseID: "c1", TraceID: "t-1", Passed: true,
+		ProcessPass: false, ProcessFailure: "process:must_not_call:delete",
+	}
+	c := domain.EvalCase{ID: "c1", AssertionMode: domain.AssertionContains, NeedsReview: true}
+	assertion := domain.AssertionResult{Passed: true, Confidence: 0.3}
+	if err := svc.TryEscalateCaseResult(
+		context.Background(), "t1", "run-1", result, c, assertion, true, false,
+	); err != nil {
+		t.Fatalf("escalate: %v", err)
+	}
+	if len(repo.inserted) != 1 {
+		t.Fatalf("inserted = %d, want 1", len(repo.inserted))
+	}
+	if repo.inserted[0].TriggerReason != domain.TriggerProcessOutputConflict {
+		t.Fatalf("trigger = %q, want process_output_conflict", repo.inserted[0].TriggerReason)
+	}
+}
+
+// TestTryEscalateCaseResultRuleCaseNoConflictNoInsert 覆盖规则 case 无过程冲突
+// （输出 pass + 过程 pass）时 rule 分支不进池（TriggersForProcessConflict 空）。
+func TestTryEscalateCaseResultRuleCaseNoConflictNoInsert(t *testing.T) {
+	repo := &fakeReviewRepo{}
+	svc := newTestReviewService(repo)
+	result := domain.EvalCaseResult{ID: "cr-1", CaseID: "c1", TraceID: "t-1", Passed: true, ProcessPass: true}
+	c := domain.EvalCase{ID: "c1", AssertionMode: domain.AssertionContains}
+	assertion := domain.AssertionResult{Passed: true, Confidence: 0.9}
+	if err := svc.TryEscalateCaseResult(
+		context.Background(), "t1", "run-1", result, c, assertion, true, true,
+	); err != nil {
+		t.Fatalf("escalate: %v", err)
+	}
+	if len(repo.inserted) != 0 {
+		t.Fatalf("inserted = %d, want 0", len(repo.inserted))
+	}
+}
+
+// TestCaseSnapshotIncludesProcessFields 覆盖评审池快照新字段（§6.5）：过程断言结果
+// process_pass/process_failure 与工具序列 tool_sequence（ToolObservation 切片，与
+// eval_case_results.tool_sequence 列同构）进入 case_result 评审条目快照，供人工
+// 评审详情展示。
+func TestCaseSnapshotIncludesProcessFields(t *testing.T) {
+	result := domain.EvalCaseResult{
+		ID: "cr-1", CaseID: "c1", Passed: false, Actual: "已删除",
+		ProcessPass: false, ProcessFailure: "process:must_not_call:delete",
+		Tools: []domain.ToolObservation{{ToolName: "search", StepIndex: 1}, {ToolName: "delete", StepIndex: 2}},
+	}
+	c := domain.EvalCase{
+		ID: "c1", Name: "删除文件", Input: "删除", ExpectedOutput: "删除",
+		AssertionMode: domain.AssertionContains,
+	}
+	assertion := domain.AssertionResult{Passed: true, Confidence: 0.9}
+	snap := caseSnapshot(result, c, assertion)
+	if snap["process_pass"] != false {
+		t.Fatalf("process_pass = %v, want false", snap["process_pass"])
+	}
+	if snap["process_failure"] != "process:must_not_call:delete" {
+		t.Fatalf("process_failure = %v, want process:must_not_call:delete", snap["process_failure"])
+	}
+	tools, ok := snap["tool_sequence"].([]domain.ToolObservation)
+	if !ok || len(tools) != 2 || tools[1].ToolName != "delete" {
+		t.Fatalf("tool_sequence = %#v, want tool observations slice", snap["tool_sequence"])
 	}
 }
 
@@ -621,10 +695,12 @@ func TestEscalateCaseResultRefreshesBacklog(t *testing.T) {
 	repo := &fakeReviewRepo{}
 	metrics := &stubReviewMetrics{}
 	svc := newTestReviewServiceWithMetrics(repo, metrics)
-	result := domain.EvalCaseResult{ID: "cr-1", CaseID: "c1", TraceID: "t-1", Passed: true}
-	c := domain.EvalCase{ID: "c1", NeedsReview: true}
+	result := domain.EvalCaseResult{ID: "cr-1", CaseID: "c1", TraceID: "t-1", Passed: true, ProcessPass: true}
+	c := domain.EvalCase{ID: "c1", NeedsReview: true, AssertionMode: domain.AssertionJudge}
 	assertion := domain.AssertionResult{Passed: true, Confidence: 0.9}
-	if err := svc.TryEscalateCaseResult(context.Background(), "t1", "run-1", result, c, assertion); err != nil {
+	if err := svc.TryEscalateCaseResult(
+		context.Background(), "t1", "run-1", result, c, assertion, true, true,
+	); err != nil {
 		t.Fatalf("escalate: %v", err)
 	}
 	if len(metrics.backlog) != 1 || metrics.backlog[0] != 1 {

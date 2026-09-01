@@ -82,13 +82,22 @@ func (s *ReviewService) TryEscalateObservation(
 	return nil
 }
 
-// TryEscalateCaseResult 判定评测集 judge 结果入池原因并幂等落条目。断言来源
-// result.Error==""（judge 实际产出）由调用方 runCase 保证。
+// TryEscalateCaseResult 判定评测集结果入池原因并幂等落条目。断言来源
+// result.Error==""（judge 实际产出）由调用方 runCase 保证。按 AssertionMode 分支：
+// judge case 走完整 TriggersForCaseResult（含 needs_review / low_confidence）；
+// 规则 case 仅走 TriggersForProcessConflict——规则 case 无 judge 信号，low_confidence
+// 不得误触发，needs_review 也仅对 judge 生效（spec §6.6）。
 func (s *ReviewService) TryEscalateCaseResult(
 	ctx context.Context, tenantID, runID string,
 	result domain.EvalCaseResult, c domain.EvalCase, assertion domain.AssertionResult,
+	outputPass, processPass bool,
 ) error {
-	triggers := domain.TriggersForCaseResult(c.NeedsReview, assertion, s.deps.Cfg)
+	var triggers []domain.ReviewTriggerReason
+	if c.AssertionMode == domain.AssertionJudge {
+		triggers = domain.TriggersForCaseResult(c.NeedsReview, outputPass, processPass, assertion, s.deps.Cfg)
+	} else {
+		triggers = domain.TriggersForProcessConflict(outputPass, processPass)
+	}
 	if len(triggers) == 0 {
 		return nil
 	}
@@ -349,6 +358,9 @@ func caseSnapshot(result domain.EvalCaseResult, c domain.EvalCase, assertion dom
 		"passed":           result.Passed,
 		"message":          result.Message,
 		"judge_confidence": assertion.Confidence,
+		"process_pass":     result.ProcessPass,
+		"process_failure":  result.ProcessFailure,
+		"tool_sequence":    result.Tools,
 	}
 }
 
