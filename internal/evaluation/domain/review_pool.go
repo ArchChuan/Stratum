@@ -155,7 +155,9 @@ type AttributionEntry struct {
 
 // TriggersForObservation 计算观测应入池的触发原因（空 = 不进池）。纯函数，硬编码规则。
 // 规则（spec §6.6）：
-//  1. low_confidence：任一 judge 维度 Confidence < cfg.LowConfidenceThreshold；
+//  1. low_confidence：任一 judge 维度 Confidence < cfg.LowConfidenceThreshold，
+//     或 Confidence 落在边界区间 [ConfidenceBoundaryLow, ConfidenceBoundaryHigh]，
+//     或打分理由含糊（hasVagueReason：为空/过短 <VagueReasonMinRunes/含不确定性措辞）；
 //  2. dimension_split：存在 Score >= JudgePassThreshold 且存在 Score < JudgePassThreshold；
 //  3. judge_rule_conflict：规则命中（Signals.Rule 非空）+ Verdict == block + 全部维度 pass。
 func TriggersForObservation(obs *EvalObservation, cfg ReviewConfig) []ReviewTriggerReason {
@@ -243,7 +245,9 @@ func TriggersForProcessConflict(outputPass, processPass bool) []ReviewTriggerRea
 // TriggersForCaseResult 计算评测集 judge 判定的入池原因（空 = 不进池）。
 // 规则（spec §6.6）：
 //  1. needs_review：EvalCase.NeedsReview == true（assertion_mode 分支由调用方强制，本函数不检查）；
-//  2. low_confidence：assertion.Confidence < cfg.LowConfidenceThreshold；
+//  2. low_confidence：assertion.Confidence < cfg.LowConfidenceThreshold，
+//     或 Confidence 落在边界区间 [ConfidenceBoundaryLow, ConfidenceBoundaryHigh]，
+//     或打分理由含糊（hasVagueReason：为空/过短 <VagueReasonMinRunes/含不确定性措辞）；
 //  3. process_output_conflict：输出断言通过但过程断言失败（§6.5）。
 func TriggersForCaseResult(
 	needsReview bool, outputPass, processPass bool, assertion AssertionResult, cfg ReviewConfig,
