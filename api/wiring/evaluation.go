@@ -51,6 +51,7 @@ type Evaluation struct {
 	TestCaseGenerator    *evalapp.TestCaseGenerator
 	ObservationService   *evalapp.ObservationService
 	ReviewService        *evalapp.ReviewService
+	DeleteService        *evalapp.DeleteService
 }
 
 type evaluationResourceRouter struct {
@@ -1205,21 +1206,15 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 		c, db, evaluationResourceRouter{adapters: resourceAdapters}, runRepo, traceReader, judge, suiteRepo,
 	)
 	jobService := evalapp.NewJobService(jobRepo, service)
-	var rewriter evalapp.PromptRewriter
-	if c.Agent != nil && c.Agent.TenantResolver != nil {
-		rewriter = gatewayPromptRewriter{resolver: c.Agent.TenantResolver, params: c.Parameters.Service}
-	}
 	optimizationService := evalapp.NewOptimizationService(
-		evaluationCandidateRouter{creators: candidateCreators}, rewriter, optimizationRepo,
+		evaluationCandidateRouter{creators: candidateCreators}, buildEvaluationPromptRewriter(c), optimizationRepo,
 	)
 	experimentService := evalapp.NewExperimentService(experimentRepo)
 	observationSvc := buildObservationService(c, db, traceReader, judge, reviewSvc)
-	feedbackService := evalapp.NewFeedbackService(
-		feedbackRepo, experimentService, evaluationTraceEvidenceAdapter{provider: c.Agent.EvidenceProvider},
-		observationSvc,
-	)
+	feedbackService := buildEvaluationFeedbackService(c, feedbackRepo, experimentService, observationSvc)
 	worker := c.newEvaluationWorker(ctx, db, jobService, experimentService, experimentRepo, feedbackRepo)
 	baselineService, agentRevisionApplier := buildEvaluationRuntime(manager, agentProvider, mcpProvider, knowledgeProvider, runtimeAgentAdapter)
+	deleteService := buildEvaluationDeleteService(c, db, suiteRepo, runRepo, jobRepo, experimentRepo, optimizationRepo, feedbackRepo)
 	c.Evaluation = &Evaluation{
 		Service:              service,
 		SuiteService:         suiteService,
@@ -1238,6 +1233,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 		TestCaseGenerator:    buildTestCaseGenerator(c, suiteRepo, db),
 		ObservationService:   observationSvc,
 		ReviewService:        reviewSvc,
+		DeleteService:        deleteService,
 	}
 	if err := c.wireObservationPipeline(ctx, observationSvc); err != nil {
 		return err
@@ -1246,6 +1242,35 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	c.applySkillEvaluationReader(experimentRepo)
 	c.buildApprovalActionExecutor()
 	return nil
+}
+
+// buildEvaluationDeleteService 装配删除服务：owner-or-creator 门禁（fail-closed）。
+// roles 复用 c.Agent.RoleResolver（agentport.TenantRoleResolver 与评测本地 port 结构
+// 兼容）；reviewRepo 同池重建实例（仓储无状态，复用 buildReviewService 内部实例需改签名）。
+func buildEvaluationDeleteService(c *Container, db *pgxpool.Pool, suites evalport.DeleteSuiteRepository,
+	runs evalport.DeleteRunRepository, jobs evalport.DeleteJobRepository, experiments evalport.DeleteExperimentRepository,
+	candidates evalport.DeleteCandidateRepository, feedback evalport.DeleteFeedbackRepository) *evalapp.DeleteService {
+	return evalapp.NewDeleteService(
+		c.Agent.RoleResolver,
+		suites, runs, jobs, experiments, candidates,
+		evalpersist.NewPgReviewRepository(db), feedback,
+	)
+}
+
+// buildEvaluationPromptRewriter 仅在 agent 租户解析器就绪时装配提示词重写器，否则 nil。
+func buildEvaluationPromptRewriter(c *Container) evalapp.PromptRewriter {
+	if c.Agent != nil && c.Agent.TenantResolver != nil {
+		return gatewayPromptRewriter{resolver: c.Agent.TenantResolver, params: c.Parameters.Service}
+	}
+	return nil
+}
+
+// buildEvaluationFeedbackService 装配反馈服务：证据适配器固定绑定 agent 的
+// EvidenceProvider（与 main 内联构造等价），writer 为观测信号接收器。
+func buildEvaluationFeedbackService(c *Container, repo evalport.FeedbackRepository, experiments *evalapp.ExperimentService,
+	writer evalport.BehaviorSignalWriter) *evalapp.FeedbackService {
+	return evalapp.NewFeedbackService(repo, experiments,
+		evaluationTraceEvidenceAdapter{provider: c.Agent.EvidenceProvider}, writer)
 }
 
 // buildApprovalActionExecutor 评测组件就绪后装配审批动作执行器

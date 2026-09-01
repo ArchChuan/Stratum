@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, vi } from 'vitest';
 
 import ReviewPoolPanel from './ReviewPoolPanel';
@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   listReviewItems: vi.fn(),
   getReviewItem: vi.fn(),
   decideReviewItem: vi.fn(),
+  deleteReviewItem: vi.fn(),
   success: vi.fn(),
   error: vi.fn(),
 }));
@@ -14,6 +15,7 @@ vi.mock('../services/review', () => ({
   listReviewItems: mocks.listReviewItems,
   getReviewItem: mocks.getReviewItem,
   decideReviewItem: mocks.decideReviewItem,
+  deleteReviewItem: mocks.deleteReviewItem,
 }));
 vi.mock('antd', async () => ({ ...(await vi.importActual<typeof import('antd')>('antd')),
   message: { success: mocks.success, error: mocks.error },
@@ -41,7 +43,7 @@ describe('ReviewPoolPanel', () => {
 
   it('renders pending review items with readable labels', async () => {
     mocks.listReviewItems.mockResolvedValue({ items: [pendingItem], total: 1 });
-    render(<ReviewPoolPanel />);
+    render(<ReviewPoolPanel canDelete={() => false} />);
 
     expect(await screen.findByText('观测')).toBeInTheDocument();
     expect(screen.getByText('低置信度')).toBeInTheDocument();
@@ -71,7 +73,7 @@ describe('ReviewPoolPanel', () => {
       }],
       total: 1,
     });
-    render(<ReviewPoolPanel />);
+    render(<ReviewPoolPanel canDelete={() => false} />);
 
     expect(await screen.findByText('评测集')).toBeInTheDocument();
     expect(screen.getByText('需人工复核')).toBeInTheDocument();
@@ -84,14 +86,14 @@ describe('ReviewPoolPanel', () => {
     mocks.listReviewItems.mockResolvedValue({
       items: [{ ...pendingItem, id: 'review-3', trigger_reason: 'process_output_conflict' }], total: 1,
     });
-    render(<ReviewPoolPanel />);
+    render(<ReviewPoolPanel canDelete={() => false} />);
 
     expect(await screen.findByText('输出通过但过程未通过')).toBeInTheDocument();
   });
 
   it('opens the detail drawer showing the snapshot', async () => {
     mocks.listReviewItems.mockResolvedValue({ items: [pendingItem], total: 1 });
-    render(<ReviewPoolPanel />);
+    render(<ReviewPoolPanel canDelete={() => false} />);
 
     fireEvent.click(await screen.findByRole('button', { name: '详 情' }));
 
@@ -102,7 +104,7 @@ describe('ReviewPoolPanel', () => {
   it('submits a verdict and reason through the controlled decision modal', async () => {
     mocks.listReviewItems.mockResolvedValue({ items: [pendingItem], total: 1 });
     mocks.decideReviewItem.mockResolvedValue({ ...pendingItem, status: 'reviewed', human_verdict: 'pass' });
-    render(<ReviewPoolPanel />);
+    render(<ReviewPoolPanel canDelete={() => false} />);
 
     fireEvent.click(await screen.findByRole('button', { name: '评 审' }));
 
@@ -119,12 +121,36 @@ describe('ReviewPoolPanel', () => {
 
   it('keeps the modal open when required fields are missing', async () => {
     mocks.listReviewItems.mockResolvedValue({ items: [pendingItem], total: 1 });
-    render(<ReviewPoolPanel />);
+    render(<ReviewPoolPanel canDelete={() => false} />);
 
     fireEvent.click(await screen.findByRole('button', { name: '评 审' }));
     fireEvent.click(screen.getByRole('button', { name: '提交评审' }));
 
     await waitFor(() => expect(screen.getByText('请选择评审结论')).toBeInTheDocument());
     expect(mocks.decideReviewItem).not.toHaveBeenCalled();
+  });
+
+  it('shows delete only when the caller authorizes it and deletes via the service', async () => {
+    mocks.listReviewItems.mockResolvedValue({ items: [pendingItem], total: 1 });
+    mocks.deleteReviewItem.mockResolvedValue(undefined);
+    render(<ReviewPoolPanel canDelete={(item) => item.id === 'review-1'} />);
+
+    // 行内删除按钮（无 type 按钮双字插空格，渲染为「删 除」）
+    const rowDelete = await screen.findByRole('button', { name: '删 除' });
+    expect(rowDelete).toBeInTheDocument();
+    fireEvent.click(rowDelete);
+    // Modal.confirm 确认框内点击确定（okText '删除' →「删 除」）触发删除
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: '删 除' }));
+    await waitFor(() => expect(mocks.deleteReviewItem).toHaveBeenCalledWith('review-1'));
+    expect(mocks.success).toHaveBeenCalledWith({ content: '评审项已删除', duration: 2 });
+  });
+
+  it('hides delete for items the caller does not authorize', async () => {
+    mocks.listReviewItems.mockResolvedValue({ items: [pendingItem], total: 1 });
+    render(<ReviewPoolPanel canDelete={() => false} />);
+
+    expect(await screen.findByRole('button', { name: '评 审' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '删 除' })).not.toBeInTheDocument();
   });
 });

@@ -3,8 +3,10 @@ package persistence
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/google/uuid"
@@ -44,17 +46,17 @@ func (r *PgFeedbackRepository) Record(
 		row := tx.QueryRow(ctx,
 			`INSERT INTO evaluation_feedback
 			 (id, trace_id, resource_kind, resource_id, revision_id, experiment_id, variant,
-			  score, outcome, idempotency_key)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+			  score, outcome, idempotency_key, created_by)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
 			 ON CONFLICT DO NOTHING
 			 RETURNING id, trace_id, resource_kind, resource_id, revision_id, experiment_id, variant,
-			           score, outcome, idempotency_key, created_at`,
+			           score, outcome, idempotency_key, created_by, created_at`,
 			feedback.ID, input.TraceID, string(input.ResourceKind), input.ResourceID, input.RevisionID,
-			input.ExperimentID, input.Variant, input.Score, string(outcomeJSON), input.IdempotencyKey,
+			input.ExperimentID, input.Variant, input.Score, string(outcomeJSON), input.IdempotencyKey, input.ActorID,
 		)
 		err = row.Scan(&feedback.ID, &feedback.TraceID, &kind, &feedback.ResourceID, &feedback.RevisionID,
 			&feedback.ExperimentID, &feedback.Variant,
-			&feedback.Score, &storedOutcome, &feedback.IdempotencyKey, &feedback.CreatedAt)
+			&feedback.Score, &storedOutcome, &feedback.IdempotencyKey, &feedback.CreatedBy, &feedback.CreatedAt)
 		if err == pgx.ErrNoRows {
 			var matches, exactMatches int
 			err = tx.QueryRow(ctx, `SELECT COUNT(*), COUNT(*) FILTER (WHERE
@@ -73,11 +75,11 @@ func (r *PgFeedbackRepository) Record(
 				return domain.ErrFeedbackIdempotencyConflict
 			}
 			err = tx.QueryRow(ctx, `SELECT id, trace_id, resource_kind, resource_id, revision_id,
-				COALESCE(experiment_id,''), COALESCE(variant,''), score, outcome, idempotency_key, created_at
+				COALESCE(experiment_id,''), COALESCE(variant,''), score, outcome, idempotency_key, created_by, created_at
 				FROM evaluation_feedback WHERE idempotency_key=$1`, input.IdempotencyKey,
 			).Scan(&feedback.ID, &feedback.TraceID, &kind, &feedback.ResourceID, &feedback.RevisionID,
 				&feedback.ExperimentID, &feedback.Variant, &feedback.Score, &storedOutcome,
-				&feedback.IdempotencyKey, &feedback.CreatedAt)
+				&feedback.IdempotencyKey, &feedback.CreatedBy, &feedback.CreatedAt)
 		}
 		if err != nil {
 			return err
@@ -145,7 +147,7 @@ func loadStageFeedback(
 ) ([]domain.EvaluationFeedback, error) {
 	rows, err := tx.Query(ctx,
 		`SELECT id, trace_id, resource_kind, resource_id, revision_id, experiment_id, variant,
-		        score, outcome, idempotency_key, created_at
+		        score, outcome, idempotency_key, created_by, created_at
 		 FROM evaluation_feedback
 		 WHERE resource_kind=$1 AND resource_id=$2 AND experiment_id=$3 AND created_at >= $4
 		   AND ((revision_id=$5 AND variant='stable') OR (revision_id=$6 AND variant='canary'))
@@ -181,4 +183,38 @@ func (r *PgFeedbackRepository) execTenant(
 ) error {
 	ctx = postgres.WithTenant(ctx, &postgres.TenantContext{TenantID: tenantID})
 	return execTenantTx(ctx, r.pool, tenantID, fn)
+}
+
+// GetFeedbackCreatedBy 返回反馈创建者；未命中 found=false。
+func (r *PgFeedbackRepository) GetFeedbackCreatedBy(ctx context.Context, tenantID, feedbackID string) (string, bool, error) {
+	var createdBy string
+	found := false
+	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		err := tx.QueryRow(ctx, `SELECT created_by FROM evaluation_feedback WHERE id=$1`, feedbackID).Scan(&createdBy)
+		if err == pgx.ErrNoRows {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("evaluation feedback repository: load created by: %w", err)
+		}
+		found = true
+		return nil
+	})
+	return createdBy, found, err
+}
+
+// DeleteFeedback 删除反馈：无入站引用，直接删除并写审计。
+func (r *PgFeedbackRepository) DeleteFeedback(
+	ctx context.Context, tenantID, feedbackID string, audit *auditdomain.ResourceChangeAuditEvent,
+) error {
+	return r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `DELETE FROM evaluation_feedback WHERE id=$1`, feedbackID)
+		if err != nil {
+			return translateEntityReferenced(fmt.Errorf("evaluation feedback repository: delete feedback: %w", err))
+		}
+		if tag.RowsAffected() == 0 {
+			return fmt.Errorf("evaluation feedback repository: delete feedback %s: not found", feedbackID)
+		}
+		return insertChangeAudit(ctx, tx, audit)
+	})
 }

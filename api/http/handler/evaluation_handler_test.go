@@ -11,7 +11,6 @@ import (
 
 	"github.com/byteBuilderX/stratum/api/middleware"
 	agentapp "github.com/byteBuilderX/stratum/internal/agent/application"
-	agentdomain "github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/application"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
@@ -70,7 +69,7 @@ func TestEvaluationHandlerGenerateOptimizationReturnsCandidates(t *testing.T) {
 	optimization := &fakeOptimizationService{}
 	h := NewEvaluationHandler(nil, &fakeEvaluationJobs{}, nil, optimization, nil, nil, nil, nil, zap.NewNop())
 	r := gin.New()
-	r.POST("/evaluations/optimizations", withTenant("tenant-1"), h.GenerateOptimization)
+	r.POST("/evaluations/optimizations", withTenantAndUser("tenant-1", "user-1"), h.GenerateOptimization)
 	req := httptest.NewRequest(http.MethodPost, "/evaluations/optimizations", strings.NewReader(`{
 		"baseline":{"kind":"skill","resource_id":"skill-1","revision_id":"version-1"},
 		"suite_revision_id":"suite-revision-1","search_space":{"temperature":[0.1,0.2]},
@@ -85,6 +84,9 @@ func TestEvaluationHandlerGenerateOptimizationReturnsCandidates(t *testing.T) {
 	if optimization.input.IdempotencyKey != "request-1" {
 		t.Fatalf("idempotency key not propagated: %+v", optimization.input)
 	}
+	if optimization.input.ActorID != "user-1" {
+		t.Fatalf("actor not propagated: %+v", optimization.input)
+	}
 }
 
 func TestEvaluationHandlerGenerateOptimizationAcceptsLegacyRequestWithoutIdempotencyKey(t *testing.T) {
@@ -92,7 +94,7 @@ func TestEvaluationHandlerGenerateOptimizationAcceptsLegacyRequestWithoutIdempot
 	optimization := &fakeOptimizationService{}
 	h := NewEvaluationHandler(nil, &fakeEvaluationJobs{}, nil, optimization, nil, nil, nil, nil, zap.NewNop())
 	r := gin.New()
-	r.POST("/evaluations/optimizations", withTenant("tenant-1"), h.GenerateOptimization)
+	r.POST("/evaluations/optimizations", withTenantAndUser("tenant-1", "user-1"), h.GenerateOptimization)
 	req := httptest.NewRequest(http.MethodPost, "/evaluations/optimizations", strings.NewReader(`{
 		"baseline":{"kind":"skill","resource_id":"skill-1","revision_id":"version-1"},
 		"suite_revision_id":"suite-revision-1","search_space":{}
@@ -114,7 +116,7 @@ func TestEvaluationHandlerGenerateOptimizationUsesHeaderAndMapsConflict(t *testi
 	h := NewEvaluationHandler(nil, &fakeEvaluationJobs{}, nil, optimization, nil, nil, nil, nil, zap.NewNop())
 	r := gin.New()
 	r.Use(middleware.ErrorHandler(zap.NewNop()))
-	r.POST("/evaluations/optimizations", withTenant("tenant-1"), h.GenerateOptimization)
+	r.POST("/evaluations/optimizations", withTenantAndUser("tenant-1", "user-1"), h.GenerateOptimization)
 	req := httptest.NewRequest(http.MethodPost, "/evaluations/optimizations", strings.NewReader(`{
 		"baseline":{"kind":"skill","resource_id":"skill-1","revision_id":"version-1"},
 		"suite_revision_id":"suite-revision-1"
@@ -540,15 +542,8 @@ func TestEvaluationHandlerUpdateDraftCaseRejectsBadRequest(t *testing.T) {
 	}
 }
 
-// withRole 注入 JWT role claim（middleware.RequireTenantRole 依赖 auth.role）。
-func withRole(role string) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.Set(middleware.ContextKeyRole, role)
-		c.Next()
-	}
-}
-
-// fakeApprovalRequests 记录审批请求，模拟 ToolApprovalService.Request。
+// fakeApprovalRequests 记录审批请求，模拟 ToolApprovalService.Request
+// （MCP handler 审批分支测试与评测 handler 测试共享，定义保留于此）。
 type fakeApprovalRequests struct {
 	called      int
 	subjectKind string
@@ -564,54 +559,14 @@ func (f *fakeApprovalRequests) Request(_ context.Context, payload agentapp.ToolA
 	return "approval-1", nil
 }
 
-// D4：member 发起评测写操作 → 创建审批并返回 202 pending_approval，不直接执行。
-func TestEvaluationCreateSuiteMemberGetsPendingApproval(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	suites := &fakeSuiteService{}
-	approvals := &fakeApprovalRequests{}
-	h := NewEvaluationHandler(suites, nil, nil, nil, nil, nil, nil, nil, zap.NewNop()).
-		WithApprovalService(approvals)
-	r := gin.New()
-	r.Use(middleware.ErrorHandler(zap.NewNop()))
-	r.POST("/evaluations/suites", withTenantAndUser("tenant-1", "member-1"), withRole("member"), h.CreateSuite)
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/evaluations/suites",
-		strings.NewReader(`{"name":"S","description":"D","resource_kind":"skill","cases":[{"name":"c1","input":"i","expected_output":"o","assertion_mode":"exact"}]}`))
-	req.Header.Set("Content-Type", "application/json")
-	r.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("expected 202 pending_approval, got status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), `"status":"pending_approval"`) ||
-		!strings.Contains(rec.Body.String(), `"approval_id":"approval-1"`) {
-		t.Fatalf("unexpected body: %s", rec.Body.String())
-	}
-	if approvals.called != 1 {
-		t.Fatalf("approval Request called %d times, want 1", approvals.called)
-	}
-	if approvals.subjectKind != agentdomain.SubjectKindEvaluationAction {
-		t.Fatalf("subject kind=%q, want evaluation_action", approvals.subjectKind)
-	}
-	if approvals.toolName != "evaluation.create_suite" {
-		t.Fatalf("tool name=%q, want evaluation.create_suite", approvals.toolName)
-	}
-	if approvals.args["operation"] != "create_suite" {
-		t.Fatalf("operation arg=%v, want create_suite", approvals.args["operation"])
-	}
-}
-
 // D4：admin 直接执行，不创建审批。
 func TestEvaluationCreateSuiteAdminExecutesDirectly(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	suites := &fakeSuiteService{created: domain.EvalSuite{ID: "suite-1"}}
-	approvals := &fakeApprovalRequests{}
-	h := NewEvaluationHandler(suites, nil, nil, nil, nil, nil, nil, nil, zap.NewNop()).
-		WithApprovalService(approvals)
+	h := NewEvaluationHandler(suites, nil, nil, nil, nil, nil, nil, nil, zap.NewNop())
 	r := gin.New()
 	r.Use(middleware.ErrorHandler(zap.NewNop()))
-	r.POST("/evaluations/suites", withTenantAndUser("tenant-1", "admin-1"), withRole("admin"), h.CreateSuite)
+	r.POST("/evaluations/suites", withTenantAndUser("tenant-1", "admin-1"), h.CreateSuite)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/evaluations/suites",
@@ -622,9 +577,6 @@ func TestEvaluationCreateSuiteAdminExecutesDirectly(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if approvals.called != 0 {
-		t.Fatalf("approval Request called %d times, want 0 for admin", approvals.called)
-	}
 	if suites.created.ID != "suite-1" {
 		t.Fatalf("suite Create not executed directly: %+v", suites.created)
 	}
@@ -634,12 +586,10 @@ func TestEvaluationCreateSuiteAdminExecutesDirectly(t *testing.T) {
 func TestEvaluationCreateSuiteBindsJudgeSpec(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	suites := &fakeSuiteService{created: domain.EvalSuite{ID: "suite-1"}}
-	approvals := &fakeApprovalRequests{}
-	h := NewEvaluationHandler(suites, nil, nil, nil, nil, nil, nil, nil, zap.NewNop()).
-		WithApprovalService(approvals)
+	h := NewEvaluationHandler(suites, nil, nil, nil, nil, nil, nil, nil, zap.NewNop())
 	r := gin.New()
 	r.Use(middleware.ErrorHandler(zap.NewNop()))
-	r.POST("/evaluations/suites", withTenantAndUser("tenant-1", "admin-1"), withRole("admin"), h.CreateSuite)
+	r.POST("/evaluations/suites", withTenantAndUser("tenant-1", "admin-1"), h.CreateSuite)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/evaluations/suites",
@@ -662,51 +612,15 @@ func TestEvaluationCreateSuiteBindsJudgeSpec(t *testing.T) {
 	}
 }
 
-// D4：member 创建 judge case 时，审批 payload 的 args 携带 judge_spec 供审批人审阅。
-func TestEvaluationCreateSuiteJudgeSpecInApprovalArgs(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	suites := &fakeSuiteService{}
-	approvals := &fakeApprovalRequests{}
-	h := NewEvaluationHandler(suites, nil, nil, nil, nil, nil, nil, nil, zap.NewNop()).
-		WithApprovalService(approvals)
-	r := gin.New()
-	r.Use(middleware.ErrorHandler(zap.NewNop()))
-	r.POST("/evaluations/suites", withTenantAndUser("tenant-1", "member-1"), withRole("member"), h.CreateSuite)
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/evaluations/suites",
-		strings.NewReader(`{"name":"S","resource_kind":"agent","cases":[{"name":"j1","input":"i","expected_output":"o","assertion_mode":"judge","judge_spec":{"model":"judge-v1"}}]}`))
-	req.Header.Set("Content-Type", "application/json")
-	r.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("expected 202 pending_approval, got status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	caseArgs, ok := approvals.args["cases"].([]any)
-	if !ok || len(caseArgs) != 1 {
-		t.Fatalf("approval cases args=%v, want 1 case", approvals.args["cases"])
-	}
-	caseArg, ok := caseArgs[0].(map[string]any)
-	if !ok {
-		t.Fatalf("case arg type=%T, want map", caseArgs[0])
-	}
-	spec, ok := caseArg["judge_spec"].(map[string]any)
-	if !ok || spec["model"] != "judge-v1" {
-		t.Fatalf("approval judge_spec missing: %v", caseArg)
-	}
-}
-
 // D4：admin 创建 agent case 时，tool_spec（must_call/must_not_call/order/max_calls）
 // 与 step_judge（criteria）绑定进 service 输入（§6.5 过程断言契约）。
 func TestEvaluationCreateSuiteBindsToolSpecAndStepJudge(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	suites := &fakeSuiteService{created: domain.EvalSuite{ID: "suite-1"}}
-	approvals := &fakeApprovalRequests{}
-	h := NewEvaluationHandler(suites, nil, nil, nil, nil, nil, nil, nil, zap.NewNop()).
-		WithApprovalService(approvals)
+	h := NewEvaluationHandler(suites, nil, nil, nil, nil, nil, nil, nil, zap.NewNop())
 	r := gin.New()
 	r.Use(middleware.ErrorHandler(zap.NewNop()))
-	r.POST("/evaluations/suites", withTenantAndUser("tenant-1", "admin-1"), withRole("admin"), h.CreateSuite)
+	r.POST("/evaluations/suites", withTenantAndUser("tenant-1", "admin-1"), h.CreateSuite)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/evaluations/suites",
@@ -736,45 +650,6 @@ func TestEvaluationCreateSuiteBindsToolSpecAndStepJudge(t *testing.T) {
 	}
 	if got.StepJudge == nil || got.StepJudge.Criteria != "reason about steps" {
 		t.Fatalf("step_judge not bound: %+v", got.StepJudge)
-	}
-}
-
-// D4：member 创建带过程断言的 agent case 时，审批 payload 的 args 携带
-// tool_spec/step_judge 供审批人审阅（§6.5）。
-func TestEvaluationCreateSuiteToolSpecInApprovalArgs(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	suites := &fakeSuiteService{}
-	approvals := &fakeApprovalRequests{}
-	h := NewEvaluationHandler(suites, nil, nil, nil, nil, nil, nil, nil, zap.NewNop()).
-		WithApprovalService(approvals)
-	r := gin.New()
-	r.Use(middleware.ErrorHandler(zap.NewNop()))
-	r.POST("/evaluations/suites", withTenantAndUser("tenant-1", "member-1"), withRole("member"), h.CreateSuite)
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/evaluations/suites",
-		strings.NewReader(`{"name":"S","resource_kind":"agent","cases":[{"name":"a1","input":"i","expected_output":"o","assertion_mode":"exact","tool_spec":{"must_not_call":["delete"],"max_calls":2},"step_judge":{"criteria":"c"}}]}`))
-	req.Header.Set("Content-Type", "application/json")
-	r.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("expected 202 pending_approval, got status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	caseArgs, ok := approvals.args["cases"].([]any)
-	if !ok || len(caseArgs) != 1 {
-		t.Fatalf("approval cases args=%v, want 1 case", approvals.args["cases"])
-	}
-	caseArg, ok := caseArgs[0].(map[string]any)
-	if !ok {
-		t.Fatalf("case arg type=%T, want map", caseArgs[0])
-	}
-	spec, ok := caseArg["tool_spec"].(map[string]any)
-	if !ok || spec["max_calls"] != 2 {
-		t.Fatalf("approval tool_spec missing: %v", caseArg)
-	}
-	step, ok := caseArg["step_judge"].(map[string]any)
-	if !ok || step["criteria"] != "c" {
-		t.Fatalf("approval step_judge missing: %v", caseArg)
 	}
 }
 

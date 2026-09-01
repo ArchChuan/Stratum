@@ -125,14 +125,14 @@ func (r *PgCenterQueryRepository) ListSuites(ctx context.Context, tenantID strin
 		return page, e
 	}
 	e = r.tenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		rows, e := tx.Query(ctx, `SELECT s.id,s.name,s.description,COALESCE(sr.status,''),s.created_at FROM eval_suites s LEFT JOIN eval_suite_revisions sr ON sr.id=COALESCE(s.active_revision_id,s.draft_revision_id) WHERE ($1='' OR sr.resource_kind=$1) AND ($2='' OR EXISTS (SELECT 1 FROM eval_runs r WHERE r.suite_revision_id=sr.id AND r.resource_id=$2)) AND ($3='' OR sr.status=$3) AND ($4::timestamptz IS NULL OR (s.created_at,s.id)<($4,$5)) ORDER BY s.created_at DESC,s.id DESC LIMIT $6`, filter.ResourceKind, filter.ResourceID, filter.Status, ct, cid, filter.Limit+1)
+		rows, e := tx.Query(ctx, `SELECT s.id,s.name,s.description,COALESCE(sr.status,''),s.created_by,s.created_at FROM eval_suites s LEFT JOIN eval_suite_revisions sr ON sr.id=COALESCE(s.active_revision_id,s.draft_revision_id) WHERE ($1='' OR sr.resource_kind=$1) AND ($2='' OR EXISTS (SELECT 1 FROM eval_runs r WHERE r.suite_revision_id=sr.id AND r.resource_id=$2)) AND ($3='' OR sr.status=$3) AND ($4::timestamptz IS NULL OR (s.created_at,s.id)<($4,$5)) ORDER BY s.created_at DESC,s.id DESC LIMIT $6`, filter.ResourceKind, filter.ResourceID, filter.Status, ct, cid, filter.Limit+1)
 		if e != nil {
 			return e
 		}
 		defer rows.Close()
 		for rows.Next() {
 			var x domain.SuiteSummary
-			if e = rows.Scan(&x.ID, &x.Name, &x.Description, &x.Status, &x.CreatedAt); e != nil {
+			if e = rows.Scan(&x.ID, &x.Name, &x.Description, &x.Status, &x.CreatedBy, &x.CreatedAt); e != nil {
 				return e
 			}
 			page.Items = append(page.Items, x)
@@ -154,7 +154,7 @@ func (r *PgCenterQueryRepository) ListRuns(ctx context.Context, tenantID string,
 		return page, e
 	}
 	e = r.tenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		rows, e := tx.Query(ctx, `SELECT id,resource_kind,resource_id,revision_id,status,passed,total_cases,passed_cases,created_at FROM eval_runs WHERE ($1='' OR resource_kind=$1) AND ($2='' OR resource_id=$2) AND ($3='' OR status=$3) AND ($4::timestamptz IS NULL OR (created_at,id)<($4,$5)) ORDER BY created_at DESC,id DESC LIMIT $6`, filter.ResourceKind, filter.ResourceID, filter.Status, ct, cid, filter.Limit+1)
+		rows, e := tx.Query(ctx, `SELECT id,resource_kind,resource_id,revision_id,status,passed,total_cases,passed_cases,created_by,created_at FROM eval_runs WHERE ($1='' OR resource_kind=$1) AND ($2='' OR resource_id=$2) AND ($3='' OR status=$3) AND ($4::timestamptz IS NULL OR (created_at,id)<($4,$5)) ORDER BY created_at DESC,id DESC LIMIT $6`, filter.ResourceKind, filter.ResourceID, filter.Status, ct, cid, filter.Limit+1)
 		if e != nil {
 			return e
 		}
@@ -162,7 +162,7 @@ func (r *PgCenterQueryRepository) ListRuns(ctx context.Context, tenantID string,
 		for rows.Next() {
 			var x domain.RunSummary
 			var kind string
-			if e = rows.Scan(&x.ID, &kind, &x.ResourceID, &x.RevisionID, &x.Status, &x.Passed, &x.TotalCases, &x.PassedCases, &x.CreatedAt); e != nil {
+			if e = rows.Scan(&x.ID, &kind, &x.ResourceID, &x.RevisionID, &x.Status, &x.Passed, &x.TotalCases, &x.PassedCases, &x.CreatedBy, &x.CreatedAt); e != nil {
 				return e
 			}
 			x.ResourceKind = domain.ResourceKind(kind)
@@ -185,7 +185,7 @@ func (r *PgCenterQueryRepository) ListCandidates(ctx context.Context, tenantID s
 		return page, e
 	}
 	e = r.tenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		rows, e := tx.Query(ctx, `SELECT c.id,j.resource_kind,j.resource_id,c.revision_id,c.parent_revision_id,c.source,c.status,c.rank,c.state_version,COALESCE(parent.safe_summary,'{}'::jsonb),parent.id IS NOT NULL,COALESCE(candidate.safe_summary,'{}'::jsonb),c.created_at FROM optimization_candidates c JOIN optimization_jobs j ON j.id=c.optimization_job_id LEFT JOIN resource_revisions parent ON parent.resource_kind=j.resource_kind AND parent.resource_id=j.resource_id AND parent.id=c.parent_revision_id LEFT JOIN resource_revisions candidate ON candidate.resource_kind=j.resource_kind AND candidate.resource_id=j.resource_id AND candidate.id=c.revision_id WHERE ($1='' OR j.resource_kind=$1) AND ($2='' OR j.resource_id=$2) AND ($3='' OR c.status=$3 OR j.status=$3) AND ($4::timestamptz IS NULL OR (c.created_at,c.id)<($4,$5)) ORDER BY c.created_at DESC,c.id DESC LIMIT $6`, filter.ResourceKind, filter.ResourceID, filter.Status, ct, cid, filter.Limit+1)
+		rows, e := tx.Query(ctx, `SELECT c.id,j.resource_kind,j.resource_id,c.revision_id,c.parent_revision_id,c.source,c.status,c.rank,c.state_version,COALESCE(parent.safe_summary,'{}'::jsonb),parent.id IS NOT NULL,COALESCE(candidate.safe_summary,'{}'::jsonb),j.created_by,c.created_at FROM optimization_candidates c JOIN optimization_jobs j ON j.id=c.optimization_job_id LEFT JOIN resource_revisions parent ON parent.resource_kind=j.resource_kind AND parent.resource_id=j.resource_id AND parent.id=c.parent_revision_id LEFT JOIN resource_revisions candidate ON candidate.resource_kind=j.resource_kind AND candidate.resource_id=j.resource_id AND candidate.id=c.revision_id WHERE ($1='' OR j.resource_kind=$1) AND ($2='' OR j.resource_id=$2) AND ($3='' OR c.status=$3 OR j.status=$3) AND ($4::timestamptz IS NULL OR (c.created_at,c.id)<($4,$5)) ORDER BY c.created_at DESC,c.id DESC LIMIT $6`, filter.ResourceKind, filter.ResourceID, filter.Status, ct, cid, filter.Limit+1)
 		if e != nil {
 			return e
 		}
@@ -196,7 +196,7 @@ func (r *PgCenterQueryRepository) ListCandidates(ctx context.Context, tenantID s
 			var parent, candidate []byte
 			var parentExists bool
 			if e = rows.Scan(&x.ID, &kind, &x.ResourceID, &x.RevisionID, &x.ParentRevisionID, &x.Source, &x.Status,
-				&x.Rank, &x.StateVersion, &parent, &parentExists, &candidate, &x.CreatedAt); e != nil {
+				&x.Rank, &x.StateVersion, &parent, &parentExists, &candidate, &x.CreatedBy, &x.CreatedAt); e != nil {
 				return e
 			}
 			x.ResourceKind = domain.ResourceKind(kind)
@@ -221,7 +221,7 @@ func (r *PgCenterQueryRepository) ListExperiments(ctx context.Context, tenantID 
 		return page, e
 	}
 	e = r.tenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		rows, e := tx.Query(ctx, `SELECT id,resource_kind,resource_id,stable_revision_id,canary_revision_id,status,stage_percent,recommendation,safety_stopped,state_version,policy,decision_snapshot,created_at FROM evaluation_experiments WHERE ($1='' OR resource_kind=$1) AND ($2='' OR resource_id=$2) AND ($3='' OR status=$3) AND ($4::timestamptz IS NULL OR (created_at,id)<($4,$5)) ORDER BY created_at DESC,id DESC LIMIT $6`, filter.ResourceKind, filter.ResourceID, filter.Status, ct, cid, filter.Limit+1)
+		rows, e := tx.Query(ctx, `SELECT id,resource_kind,resource_id,stable_revision_id,canary_revision_id,status,stage_percent,recommendation,safety_stopped,state_version,policy,decision_snapshot,created_by,created_at FROM evaluation_experiments WHERE ($1='' OR resource_kind=$1) AND ($2='' OR resource_id=$2) AND ($3='' OR status=$3) AND ($4::timestamptz IS NULL OR (created_at,id)<($4,$5)) ORDER BY created_at DESC,id DESC LIMIT $6`, filter.ResourceKind, filter.ResourceID, filter.Status, ct, cid, filter.Limit+1)
 		if e != nil {
 			return e
 		}
@@ -232,7 +232,7 @@ func (r *PgCenterQueryRepository) ListExperiments(ctx context.Context, tenantID 
 			var policyJSON, snapshotJSON []byte
 			if e = rows.Scan(&x.ID, &kind, &x.ResourceID, &x.StableRevisionID, &x.CanaryRevisionID, &x.Status,
 				&x.StagePercent, &x.Recommendation, &x.SafetyStopped, &x.StateVersion, &policyJSON, &snapshotJSON,
-				&x.CreatedAt); e != nil {
+				&x.CreatedBy, &x.CreatedAt); e != nil {
 				return e
 			}
 			x.ResourceKind = domain.ResourceKind(kind)

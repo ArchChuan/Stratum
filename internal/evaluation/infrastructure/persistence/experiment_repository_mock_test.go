@@ -18,7 +18,7 @@ func experimentRow(status string, recommendation domain.Decision, stateVersion i
 	return []any{
 		"exp-1", "prompt", "r-1", "stable-1", "canary-1", "suite-1",
 		status, 20, []byte(experimentPolicyJSON),
-		stateVersion, recommendation, false,
+		stateVersion, recommendation, false, "",
 	}
 }
 
@@ -175,7 +175,7 @@ func TestPgExperimentRepository_Create_success(t *testing.T) {
 	expectTenantTx(mock)
 	mock.ExpectExec("INSERT INTO evaluation_experiments").
 		WithArgs("exp-1", "prompt", "r-1", "stable-1", "canary-1", "suite-1",
-			"running", 5, string(policyJSON), int64(4), "", false).
+			"running", 5, string(policyJSON), int64(4), "", false, "").
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectExec("INSERT INTO evaluation_deployments").
 		WithArgs("prompt", "r-1", "stable-1", "canary-1", 5, "exp-1", 1).
@@ -197,7 +197,7 @@ func TestPgExperimentRepository_Create_deploymentConflict(t *testing.T) {
 	expectTenantTx(mock)
 	mock.ExpectExec("INSERT INTO evaluation_experiments").
 		WithArgs("exp-1", "prompt", "r-1", "stable-1", "canary-1", "suite-1",
-			"running", 20, string(policyJSON), int64(4), "", false).
+			"running", 20, string(policyJSON), int64(4), "", false, "").
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectExec("INSERT INTO evaluation_deployments").
 		WithArgs("prompt", "r-1", "", "", 0, "exp-1", 0).
@@ -219,7 +219,7 @@ func TestPgExperimentRepository_Create_insertFails(t *testing.T) {
 	expectTenantTx(mock)
 	mock.ExpectExec("INSERT INTO evaluation_experiments").
 		WithArgs("exp-1", "prompt", "r-1", "stable-1", "canary-1", "suite-1",
-			"running", 20, string(policyJSON), int64(4), "", false).
+			"running", 20, string(policyJSON), int64(4), "", false, "").
 		WillReturnError(assertionErr())
 	mock.ExpectRollback()
 
@@ -236,7 +236,7 @@ func TestPgExperimentRepository_Get_found(t *testing.T) {
 		WithArgs("exp-1").
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "resource_kind", "resource_id", "stable_revision_id", "canary_revision_id", "suite_revision_id",
-			"status", "stage_percent", "policy", "state_version", "recommendation", "safety_stopped",
+			"status", "stage_percent", "policy", "state_version", "recommendation", "safety_stopped", "created_by",
 		}).AddRow(experimentRow("running", domain.Decision("hold"), int64(1))...))
 	mock.ExpectCommit()
 
@@ -275,9 +275,9 @@ func TestPgExperimentRepository_Get_badPolicy(t *testing.T) {
 		WithArgs("exp-1").
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "resource_kind", "resource_id", "stable_revision_id", "canary_revision_id", "suite_revision_id",
-			"status", "stage_percent", "policy", "state_version", "recommendation", "safety_stopped",
+			"status", "stage_percent", "policy", "state_version", "recommendation", "safety_stopped", "created_by",
 		}).AddRow("exp-1", "prompt", "r-1", "stable-1", "canary-1", "suite-1",
-			"running", 20, []byte(`{bad`), int64(1), domain.Decision("hold"), false))
+			"running", 20, []byte(`{bad`), int64(1), domain.Decision("hold"), false, ""))
 	mock.ExpectRollback()
 
 	_, found, err := repo.Get(context.Background(), "t1", "exp-1")
@@ -298,7 +298,7 @@ func TestPgExperimentRepository_SaveDecision_success(t *testing.T) {
 		WithArgs("exp-1").
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "resource_kind", "resource_id", "stable_revision_id", "canary_revision_id", "suite_revision_id",
-			"status", "stage_percent", "policy", "state_version", "recommendation", "safety_stopped",
+			"status", "stage_percent", "policy", "state_version", "recommendation", "safety_stopped", "created_by",
 		}).AddRow(experimentRow("running", domain.Decision("hold"), int64(3))...))
 	mock.ExpectQuery("SELECT metrics FROM experiment_decisions").
 		WithArgs("exp-1", "key-1").
@@ -337,7 +337,7 @@ func TestPgExperimentRepository_SaveDecision_idempotentHit(t *testing.T) {
 		WithArgs("exp-1").
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "resource_kind", "resource_id", "stable_revision_id", "canary_revision_id", "suite_revision_id",
-			"status", "stage_percent", "policy", "state_version", "recommendation", "safety_stopped",
+			"status", "stage_percent", "policy", "state_version", "recommendation", "safety_stopped", "created_by",
 		}).AddRow(experimentRow("running", domain.Decision("hold"), int64(3))...))
 	mock.ExpectQuery("SELECT metrics FROM experiment_decisions").
 		WithArgs("exp-1", "key-1").
@@ -366,7 +366,7 @@ func TestPgExperimentRepository_SaveDecision_commandConflict(t *testing.T) {
 		WithArgs("exp-1").
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "resource_kind", "resource_id", "stable_revision_id", "canary_revision_id", "suite_revision_id",
-			"status", "stage_percent", "policy", "state_version", "recommendation", "safety_stopped",
+			"status", "stage_percent", "policy", "state_version", "recommendation", "safety_stopped", "created_by",
 		}).AddRow(experimentRow("running", domain.Decision("hold"), int64(3))...))
 	mock.ExpectQuery("SELECT metrics FROM experiment_decisions").
 		WithArgs("exp-1", "key-1").
@@ -388,7 +388,7 @@ func TestPgExperimentRepository_SaveDecision_badPriorSnapshot(t *testing.T) {
 		WithArgs("exp-1").
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "resource_kind", "resource_id", "stable_revision_id", "canary_revision_id", "suite_revision_id",
-			"status", "stage_percent", "policy", "state_version", "recommendation", "safety_stopped",
+			"status", "stage_percent", "policy", "state_version", "recommendation", "safety_stopped", "created_by",
 		}).AddRow(experimentRow("running", domain.Decision("hold"), int64(3))...))
 	mock.ExpectQuery("SELECT metrics FROM experiment_decisions").
 		WithArgs("exp-1", "key-1").
@@ -410,7 +410,7 @@ func TestPgExperimentRepository_SaveDecision_notAllowed(t *testing.T) {
 		WithArgs("exp-1").
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "resource_kind", "resource_id", "stable_revision_id", "canary_revision_id", "suite_revision_id",
-			"status", "stage_percent", "policy", "state_version", "recommendation", "safety_stopped",
+			"status", "stage_percent", "policy", "state_version", "recommendation", "safety_stopped", "created_by",
 		}).AddRow(experimentRow("paused", domain.Decision("hold"), int64(3))...))
 	mock.ExpectQuery("SELECT metrics FROM experiment_decisions").
 		WithArgs("exp-1", "key-1").
@@ -432,7 +432,7 @@ func TestPgExperimentRepository_SaveDecision_stateConflict(t *testing.T) {
 		WithArgs("exp-1").
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "resource_kind", "resource_id", "stable_revision_id", "canary_revision_id", "suite_revision_id",
-			"status", "stage_percent", "policy", "state_version", "recommendation", "safety_stopped",
+			"status", "stage_percent", "policy", "state_version", "recommendation", "safety_stopped", "created_by",
 		}).AddRow(experimentRow("running", domain.Decision("hold"), int64(3))...))
 	mock.ExpectQuery("SELECT metrics FROM experiment_decisions").
 		WithArgs("exp-1", "key-1").
@@ -464,7 +464,7 @@ func TestPgExperimentRepository_ApplyCommand_promote_success(t *testing.T) {
 		WithArgs("exp-1").
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "resource_kind", "resource_id", "stable_revision_id", "canary_revision_id", "suite_revision_id",
-			"status", "stage_percent", "policy", "state_version", "recommendation", "safety_stopped",
+			"status", "stage_percent", "policy", "state_version", "recommendation", "safety_stopped", "created_by",
 		}).AddRow(experimentRow("running", domain.Decision("promote"), int64(3))...))
 	mock.ExpectQuery("SELECT metrics FROM experiment_decisions").
 		WithArgs("exp-1", "cmd-1").
@@ -510,7 +510,7 @@ func TestPgExperimentRepository_ApplyCommand_pause_success(t *testing.T) {
 		WithArgs("exp-1").
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "resource_kind", "resource_id", "stable_revision_id", "canary_revision_id", "suite_revision_id",
-			"status", "stage_percent", "policy", "state_version", "recommendation", "safety_stopped",
+			"status", "stage_percent", "policy", "state_version", "recommendation", "safety_stopped", "created_by",
 		}).AddRow(experimentRow("running", domain.Decision("hold"), int64(3))...))
 	mock.ExpectQuery("SELECT metrics FROM experiment_decisions").
 		WithArgs("exp-1", "cmd-1").
@@ -548,7 +548,7 @@ func TestPgExperimentRepository_ApplyCommand_rollback_success(t *testing.T) {
 		WithArgs("exp-1").
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "resource_kind", "resource_id", "stable_revision_id", "canary_revision_id", "suite_revision_id",
-			"status", "stage_percent", "policy", "state_version", "recommendation", "safety_stopped",
+			"status", "stage_percent", "policy", "state_version", "recommendation", "safety_stopped", "created_by",
 		}).AddRow(experimentRow("paused", domain.Decision("hold"), int64(3))...))
 	mock.ExpectQuery("SELECT metrics FROM experiment_decisions").
 		WithArgs("exp-1", "cmd-1").
@@ -586,9 +586,9 @@ func TestPgExperimentRepository_ApplyCommand_promoteSkill(t *testing.T) {
 		WithArgs("exp-1").
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "resource_kind", "resource_id", "stable_revision_id", "canary_revision_id", "suite_revision_id",
-			"status", "stage_percent", "policy", "state_version", "recommendation", "safety_stopped",
+			"status", "stage_percent", "policy", "state_version", "recommendation", "safety_stopped", "created_by",
 		}).AddRow("exp-1", "skill", "skill-1", "stable-1", "canary-1", "suite-1",
-			"running", 20, []byte(experimentPolicyJSON), int64(3), domain.Decision("promote"), false))
+			"running", 20, []byte(experimentPolicyJSON), int64(3), domain.Decision("promote"), false, ""))
 	mock.ExpectQuery("SELECT metrics FROM experiment_decisions").
 		WithArgs("exp-1", "cmd-1").
 		WillReturnError(pgx.ErrNoRows)
@@ -638,7 +638,7 @@ func TestPgExperimentRepository_ApplyCommand_stateConflict(t *testing.T) {
 		WithArgs("exp-1").
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "resource_kind", "resource_id", "stable_revision_id", "canary_revision_id", "suite_revision_id",
-			"status", "stage_percent", "policy", "state_version", "recommendation", "safety_stopped",
+			"status", "stage_percent", "policy", "state_version", "recommendation", "safety_stopped", "created_by",
 		}).AddRow(experimentRow("running", domain.Decision("promote"), int64(3))...))
 	mock.ExpectQuery("SELECT metrics FROM experiment_decisions").
 		WithArgs("exp-1", "cmd-1").
@@ -659,7 +659,7 @@ func TestPgExperimentRepository_ApplyCommand_notAllowed(t *testing.T) {
 		WithArgs("exp-1").
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "resource_kind", "resource_id", "stable_revision_id", "canary_revision_id", "suite_revision_id",
-			"status", "stage_percent", "policy", "state_version", "recommendation", "safety_stopped",
+			"status", "stage_percent", "policy", "state_version", "recommendation", "safety_stopped", "created_by",
 		}).AddRow(experimentRow("paused", domain.Decision("hold"), int64(3))...))
 	mock.ExpectQuery("SELECT metrics FROM experiment_decisions").
 		WithArgs("exp-1", "cmd-1").
@@ -680,7 +680,7 @@ func TestPgExperimentRepository_ApplyCommand_promoteNotRecommended(t *testing.T)
 		WithArgs("exp-1").
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "resource_kind", "resource_id", "stable_revision_id", "canary_revision_id", "suite_revision_id",
-			"status", "stage_percent", "policy", "state_version", "recommendation", "safety_stopped",
+			"status", "stage_percent", "policy", "state_version", "recommendation", "safety_stopped", "created_by",
 		}).AddRow(experimentRow("running", domain.Decision("hold"), int64(3))...))
 	mock.ExpectQuery("SELECT metrics FROM experiment_decisions").
 		WithArgs("exp-1", "cmd-1").
@@ -721,7 +721,7 @@ func TestPgExperimentRepository_ApplyCommand_idempotentHit(t *testing.T) {
 		WithArgs("exp-1").
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "resource_kind", "resource_id", "stable_revision_id", "canary_revision_id", "suite_revision_id",
-			"status", "stage_percent", "policy", "state_version", "recommendation", "safety_stopped",
+			"status", "stage_percent", "policy", "state_version", "recommendation", "safety_stopped", "created_by",
 		}).AddRow(experimentRow("running", domain.Decision("hold"), int64(3))...))
 	mock.ExpectQuery("SELECT metrics FROM experiment_decisions").
 		WithArgs("exp-1", "cmd-1").

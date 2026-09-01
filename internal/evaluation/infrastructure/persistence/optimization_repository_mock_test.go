@@ -50,9 +50,9 @@ func TestPgOptimizationRepository_GetByIdempotencyKey_found(t *testing.T) {
 		WithArgs("key-1").
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "resource_kind", "resource_id", "baseline_revision_id", "suite_revision_id",
-			"status", "search_space", "rewrite_config", "request_fingerprint", "created_at",
+			"status", "search_space", "rewrite_config", "request_fingerprint", "created_by", "created_at",
 		}).AddRow("job-1", "prompt", "r-1", "rev-1", "suite-1", domain.JobStatus("queued"),
-			`{"param":["a","b"]}`, `{"failure_summaries":["f1"]}`, "fp-1", now))
+			`{"param":["a","b"]}`, `{"failure_summaries":["f1"]}`, "fp-1", "creator-1", now))
 	mock.ExpectQuery("SELECT id, revision_id, parent_revision_id, source, rationale").
 		WithArgs("job-1").
 		WillReturnRows(pgxmock.NewRows([]string{
@@ -100,9 +100,9 @@ func TestPgOptimizationRepository_GetByIdempotencyKey_badSearchSpace(t *testing.
 		WithArgs("key-1").
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "resource_kind", "resource_id", "baseline_revision_id", "suite_revision_id",
-			"status", "search_space", "rewrite_config", "request_fingerprint", "created_at",
+			"status", "search_space", "rewrite_config", "request_fingerprint", "created_by", "created_at",
 		}).AddRow("job-1", "prompt", "r-1", "rev-1", "suite-1", domain.JobStatus("queued"),
-			`{bad`, `{}`, "fp-1", now))
+			`{bad`, `{}`, "fp-1", "creator-1", now))
 	mock.ExpectRollback()
 
 	_, _, _, _, err := repo.GetByIdempotencyKey(context.Background(), "t1", "key-1")
@@ -134,7 +134,7 @@ func TestPgOptimizationRepository_SaveJobWithCandidates_created(t *testing.T) {
 	expectTenantTx(mock)
 	mock.ExpectExec("INSERT INTO optimization_jobs").
 		WithArgs("job-1", "prompt", "r-1", "rev-1", "suite-1", "queued",
-			`{"param":["a","b"]}`, `{"failure_summaries":["f1"]}`, now, "key-1", "fp-1").
+			`{"param":["a","b"]}`, `{"failure_summaries":["f1"]}`, "", now, "key-1", "fp-1").
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectExec("INSERT INTO optimization_candidates").
 		WithArgs("cand-1", "job-1", "rev-2", "rev-1", "optimization", "why",
@@ -156,7 +156,7 @@ func TestPgOptimizationRepository_SaveJobWithCandidates_idempotentHit(t *testing
 
 	expectTenantTx(mock)
 	mock.ExpectExec("INSERT INTO optimization_jobs").
-		WithArgs("job-1", "", "", "rev-1", "", "", `null`, `{"failure_summaries":null}`, now, "key-1", "fp-1").
+		WithArgs("job-1", "", "", "rev-1", "", "", `null`, `{"failure_summaries":null}`, "", now, "key-1", "fp-1").
 		WillReturnResult(pgxmock.NewResult("INSERT", 0))
 	mock.ExpectQuery("SELECT request_fingerprint FROM optimization_jobs").
 		WithArgs("key-1").
@@ -177,7 +177,7 @@ func TestPgOptimizationRepository_SaveJobWithCandidates_fingerprintMismatch(t *t
 
 	expectTenantTx(mock)
 	mock.ExpectExec("INSERT INTO optimization_jobs").
-		WithArgs("job-1", "", "", "rev-1", "", "", `null`, `{"failure_summaries":null}`, now, "key-1", "fp-1").
+		WithArgs("job-1", "", "", "rev-1", "", "", `null`, `{"failure_summaries":null}`, "", now, "key-1", "fp-1").
 		WillReturnResult(pgxmock.NewResult("INSERT", 0))
 	mock.ExpectQuery("SELECT request_fingerprint FROM optimization_jobs").
 		WithArgs("key-1").
@@ -209,7 +209,7 @@ func TestPgOptimizationRepository_SaveJobWithCandidates_candidateMarshalFails(t 
 
 	expectTenantTx(mock)
 	mock.ExpectExec("INSERT INTO optimization_jobs").
-		WithArgs("job-1", "", "", "rev-1", "", "", `null`, `{"failure_summaries":null}`, now, "key-1", "fp-1").
+		WithArgs("job-1", "", "", "rev-1", "", "", `null`, `{"failure_summaries":null}`, "", now, "key-1", "fp-1").
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectRollback()
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/jackc/pgx/v5"
@@ -39,10 +40,10 @@ func (r *PgOptimizationRepository) GetByIdempotencyKey(
 	found := false
 	err := execTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		err := tx.QueryRow(ctx, `SELECT id, resource_kind, resource_id, baseline_revision_id,
-			suite_revision_id, status, search_space, rewrite_config, request_fingerprint, created_at
+			suite_revision_id, status, search_space, rewrite_config, request_fingerprint, created_by, created_at
 			FROM optimization_jobs WHERE idempotency_key=$1`, idempotencyKey).Scan(
 			&job.ID, &resourceKind, &resourceID, &job.Baseline.RevisionID, &job.SuiteRevisionID,
-			&job.Status, &searchJSON, &rewriteJSON, &fingerprint, &job.CreatedAt,
+			&job.Status, &searchJSON, &rewriteJSON, &fingerprint, &job.CreatedBy, &job.CreatedAt,
 		)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
@@ -111,12 +112,12 @@ func (r *PgOptimizationRepository) SaveJobWithCandidates(
 		tag, err := tx.Exec(ctx,
 			`INSERT INTO optimization_jobs
 				 (id, resource_kind, resource_id, baseline_revision_id, suite_revision_id, status,
-				  search_space, rewrite_config, created_at, completed_at, idempotency_key, request_fingerprint)
-				 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW(),$10,$11)
+				  search_space, rewrite_config, created_by, created_at, completed_at, idempotency_key, request_fingerprint)
+				 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW(),$11,$12)
 				 ON CONFLICT (idempotency_key) WHERE idempotency_key <> '' DO NOTHING`,
 			job.ID, string(job.Baseline.Kind), job.Baseline.ResourceID, job.Baseline.RevisionID,
-			job.SuiteRevisionID, string(job.Status), string(searchJSON), string(rewriteJSON), job.CreatedAt,
-			idempotencyKey, requestFingerprint,
+			job.SuiteRevisionID, string(job.Status), string(searchJSON), string(rewriteJSON), job.CreatedBy,
+			job.CreatedAt, idempotencyKey, requestFingerprint,
 		)
 		if err != nil {
 			return fmt.Errorf("optimization repository: insert job: %w", err)
@@ -154,4 +155,45 @@ func (r *PgOptimizationRepository) SaveJobWithCandidates(
 		return nil
 	})
 	return created, err
+}
+
+// GetCandidateCreatedBy 返回候选的创建者（= 所属优化任务发起 actor）。
+// optimization_candidates 无 created_by 列，JOIN optimization_jobs 读取；
+// 未命中 found=false。
+func (r *PgOptimizationRepository) GetCandidateCreatedBy(ctx context.Context, tenantID, candidateID string) (string, bool, error) {
+	ctx = postgres.WithTenant(ctx, &postgres.TenantContext{TenantID: tenantID})
+	var createdBy string
+	found := false
+	err := execTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		err := tx.QueryRow(ctx, `
+			SELECT j.created_by FROM optimization_candidates c
+			JOIN optimization_jobs j ON j.id = c.optimization_job_id
+			WHERE c.id = $1`, candidateID).Scan(&createdBy)
+		if err == pgx.ErrNoRows {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("optimization repository: load candidate created by: %w", err)
+		}
+		found = true
+		return nil
+	})
+	return createdBy, found, err
+}
+
+// DeleteCandidate 删除候选：无入站引用，直接删除并写审计。
+func (r *PgOptimizationRepository) DeleteCandidate(
+	ctx context.Context, tenantID, candidateID string, audit *auditdomain.ResourceChangeAuditEvent,
+) error {
+	ctx = postgres.WithTenant(ctx, &postgres.TenantContext{TenantID: tenantID})
+	return execTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `DELETE FROM optimization_candidates WHERE id=$1`, candidateID)
+		if err != nil {
+			return translateEntityReferenced(fmt.Errorf("optimization repository: delete candidate: %w", err))
+		}
+		if tag.RowsAffected() == 0 {
+			return fmt.Errorf("optimization repository: delete candidate %s: not found", candidateID)
+		}
+		return insertChangeAudit(ctx, tx, audit)
+	})
 }

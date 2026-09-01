@@ -3,6 +3,7 @@ package persistence
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
@@ -10,6 +11,7 @@ import (
 	"github.com/byteBuilderX/stratum/pkg/resourceaccess"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // insertChangeAudit 在业务事务内写一条变更审计；nil 事件跳过。与
@@ -35,6 +37,17 @@ func insertChangeAudit(ctx context.Context, tx pgx.Tx, ev *auditdomain.ResourceC
 		Before:       ev.Before,
 		After:        ev.After,
 	})
+}
+
+// translateEntityReferenced 把外键约束违例（SQLSTATE 23503）翻译为
+// domain.ErrEntityReferenced。引用预检已覆盖已知引用路径，此处兜底防御
+// 未预料到的引用，避免把 DB 约束错误泄漏为 500。
+func translateEntityReferenced(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+		return domain.ErrEntityReferenced
+	}
+	return err
 }
 
 // commandChangeAuditTx 在 applyCommand 事务内写命令类变更审计（activate/reject/

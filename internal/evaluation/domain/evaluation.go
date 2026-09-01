@@ -265,6 +265,7 @@ type EvalSuiteRevision struct {
 	VersionNo    int                 `json:"version_no,omitempty"`
 	Status       SuiteRevisionStatus `json:"status"`
 	ResourceKind ResourceKind        `json:"resource_kind"`
+	CreatedBy    string              `json:"created_by,omitempty"`
 	Cases        []EvalCase          `json:"cases"`
 }
 
@@ -281,6 +282,7 @@ type EvalSuite struct {
 	Description      string `json:"description"`
 	ActiveRevisionID string `json:"active_revision_id,omitempty"`
 	DraftRevisionID  string `json:"draft_revision_id,omitempty"`
+	CreatedBy        string `json:"created_by,omitempty"`
 }
 
 type EvalCaseResult struct {
@@ -358,6 +360,7 @@ type EvalRun struct {
 	// eval_runs.metrics JSONB.
 	Metrics   map[string]any   `json:"metrics,omitempty"`
 	Results   []EvalCaseResult `json:"results"`
+	CreatedBy string           `json:"created_by,omitempty"`
 	CreatedAt time.Time        `json:"created_at"`
 }
 
@@ -388,6 +391,7 @@ type EvaluationJob struct {
 	IdempotencyKey string            `json:"idempotency_key"`
 	ErrorMessage   string            `json:"error_message,omitempty"`
 	ResultID       string            `json:"result_id,omitempty"`
+	CreatedBy      string            `json:"created_by,omitempty"`
 	CreatedAt      time.Time         `json:"created_at"`
 }
 
@@ -407,6 +411,7 @@ type OptimizationJob struct {
 	Status           JobStatus        `json:"status"`
 	SearchSpace      map[string][]any `json:"search_space"`
 	FailureSummaries []string         `json:"failure_summaries,omitempty"`
+	CreatedBy        string           `json:"created_by,omitempty"`
 	CreatedAt        time.Time        `json:"created_at"`
 }
 
@@ -420,6 +425,7 @@ type OptimizationCandidate struct {
 	GenerationMetadata map[string]any `json:"generation_metadata,omitempty"`
 	EvalRunID          string         `json:"eval_run_id,omitempty"`
 	Rank               int            `json:"rank,omitempty"`
+	CreatedBy          string         `json:"created_by,omitempty"`
 	CreatedAt          time.Time      `json:"created_at"`
 }
 
@@ -448,6 +454,7 @@ type EvaluationFeedback struct {
 	Score          float64        `json:"score"`
 	Outcome        map[string]any `json:"outcome,omitempty"`
 	IdempotencyKey string         `json:"idempotency_key"`
+	CreatedBy      string         `json:"created_by,omitempty"`
 	CreatedAt      time.Time      `json:"created_at"`
 }
 

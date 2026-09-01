@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/jackc/pgx/v5"
@@ -39,8 +40,8 @@ func (r *PgJobRepository) Enqueue(
 			// 并清空执行残留（error/lease/result），使重触发可被 worker 重拾。
 			// 修复前 ON CONFLICT 仅写回幂等键，而 Claim 只选 queued/running，
 			// 终态 job 永不重拾——矩阵重评测对失败 run 是静默 no-op。
-			`INSERT INTO evaluation_jobs (id, job_type, payload, status, idempotency_key, created_at)
-			 VALUES ($1,$2,$3,$4,$5,$6)
+			`INSERT INTO evaluation_jobs (id, job_type, payload, status, idempotency_key, created_by, created_at)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7)
 			 ON CONFLICT (idempotency_key) DO UPDATE SET
 			   status = CASE WHEN evaluation_jobs.status IN ('failed','cancelled') THEN 'queued' ELSE evaluation_jobs.status END,
 			   error_message = CASE WHEN evaluation_jobs.status IN ('failed','cancelled') THEN '' ELSE evaluation_jobs.error_message END,
@@ -48,10 +49,10 @@ func (r *PgJobRepository) Enqueue(
 			   lease_until = CASE WHEN evaluation_jobs.status IN ('failed','cancelled') THEN NULL ELSE evaluation_jobs.lease_until END,
 			   result_id = CASE WHEN evaluation_jobs.status IN ('failed','cancelled') THEN '' ELSE evaluation_jobs.result_id END,
 			   updated_at = CASE WHEN evaluation_jobs.status IN ('failed','cancelled') THEN NOW() ELSE evaluation_jobs.updated_at END
-			 RETURNING id, job_type, payload, status, attempts, idempotency_key, error_message, result_id, created_at`,
-			job.ID, job.Type, string(payload), string(job.Status), job.IdempotencyKey, job.CreatedAt,
+			 RETURNING id, job_type, payload, status, attempts, idempotency_key, error_message, result_id, created_by, created_at`,
+			job.ID, job.Type, string(payload), string(job.Status), job.IdempotencyKey, job.CreatedBy, job.CreatedAt,
 		).Scan(&saved.ID, &saved.Type, &payloadJSON, &status, &saved.Attempts,
-			&saved.IdempotencyKey, &saved.ErrorMessage, &saved.ResultID, &saved.CreatedAt); err != nil {
+			&saved.IdempotencyKey, &saved.ErrorMessage, &saved.ResultID, &saved.CreatedBy, &saved.CreatedAt); err != nil {
 			return err
 		}
 		if err := json.Unmarshal(payloadJSON, &saved.Payload); err != nil {
@@ -168,4 +169,51 @@ func (r *PgJobRepository) execTenant(
 ) error {
 	ctx = postgres.WithTenant(ctx, &postgres.TenantContext{TenantID: tenantID})
 	return execTenantTx(ctx, r.pool, tenantID, fn)
+}
+
+// GetJobCreatedBy 返回执行任务创建者；未命中 found=false。
+func (r *PgJobRepository) GetJobCreatedBy(ctx context.Context, tenantID, jobID string) (string, bool, error) {
+	var createdBy string
+	found := false
+	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		err := tx.QueryRow(ctx, `SELECT created_by FROM evaluation_jobs WHERE id=$1`, jobID).Scan(&createdBy)
+		if err == pgx.ErrNoRows {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("evaluation job repository: load created by: %w", err)
+		}
+		found = true
+		return nil
+	})
+	return createdBy, found, err
+}
+
+// DeleteJob 删除执行任务：running 任务拒删（FOR UPDATE 锁定避免与 worker lease
+// 竞争），queued 与终态可删；删除同事务写审计。
+func (r *PgJobRepository) DeleteJob(
+	ctx context.Context, tenantID, jobID string, audit *auditdomain.ResourceChangeAuditEvent,
+) error {
+	return r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		var status string
+		err := tx.QueryRow(ctx,
+			`SELECT status FROM evaluation_jobs WHERE id=$1 FOR UPDATE`, jobID).Scan(&status)
+		if err == pgx.ErrNoRows {
+			return fmt.Errorf("evaluation job repository: delete job %s: not found", jobID)
+		}
+		if err != nil {
+			return fmt.Errorf("evaluation job repository: load job status: %w", err)
+		}
+		if status == string(domain.JobRunning) {
+			return domain.ErrEntityReferenced
+		}
+		tag, err := tx.Exec(ctx, `DELETE FROM evaluation_jobs WHERE id=$1`, jobID)
+		if err != nil {
+			return translateEntityReferenced(fmt.Errorf("evaluation job repository: delete job: %w", err))
+		}
+		if tag.RowsAffected() == 0 {
+			return fmt.Errorf("evaluation job repository: delete job %s: not found", jobID)
+		}
+		return insertChangeAudit(ctx, tx, audit)
+	})
 }

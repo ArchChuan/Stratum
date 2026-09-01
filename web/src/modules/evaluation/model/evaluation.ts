@@ -295,7 +295,8 @@ export const resourcePageSchema = page(resourceSummarySchema);
 export type ResourcePage = z.infer<typeof resourcePageSchema>;
 
 export const suiteSummarySchema = z.object({
-  id: z.string(), name: z.string(), description: z.string(), status: z.string(), created_at: z.string(),
+  id: z.string(), name: z.string(), description: z.string(), status: z.string(),
+  created_by: z.string().optional(), created_at: z.string(),
 }).strict();
 export const suitePageSchema = page(suiteSummarySchema);
 export type SuiteSummary = z.infer<typeof suiteSummarySchema>;
@@ -304,7 +305,7 @@ export type SuitePage = z.infer<typeof suitePageSchema>;
 export const runSummarySchema = z.object({
   id: z.string(), resource_id: z.string(), revision_id: z.string(), status: z.string(),
   resource_kind: resourceKindSchema, passed: z.boolean(), total_cases: z.number(), passed_cases: z.number(),
-  created_at: z.string(),
+  created_by: z.string().optional(), created_at: z.string(),
 }).strict();
 export type RunSummary = z.infer<typeof runSummarySchema>;
 export const runPageSchema = page(runSummarySchema);
@@ -313,7 +314,8 @@ export type RunPage = z.infer<typeof runPageSchema>;
 export const candidateSummarySchema = z.object({
   id: z.string(), resource_id: z.string(), revision_id: z.string(), parent_revision_id: z.string(),
   source: z.string(), status: z.string(), resource_kind: resourceKindSchema, rank: z.number().optional(),
-  state_version: z.number().int().positive(), safe_diff: candidateSafeDiffSchema, created_at: z.string(),
+  state_version: z.number().int().positive(), safe_diff: candidateSafeDiffSchema,
+  created_by: z.string().optional(), created_at: z.string(),
 }).strict();
 export type CandidateSummary = z.infer<typeof candidateSummarySchema>;
 export const candidatePageSchema = page(candidateSummarySchema);
@@ -333,7 +335,8 @@ export const experimentSummarySchema = z.object({
   safety_stopped: z.boolean(), state_version: z.number().int().positive(), gates: z.object({
     quality: experimentGateSchema, cost: experimentGateSchema, latency: experimentGateSchema,
     error_rate: experimentGateSchema, security: experimentGateSchema,
-  }).strict().optional(), promotion_evidence: promotionEvidenceSchema, created_at: z.string(),
+  }).strict().optional(), promotion_evidence: promotionEvidenceSchema,
+  created_by: z.string().optional(), created_at: z.string(),
 }).strict();
 export type ExperimentSummary = z.infer<typeof experimentSummarySchema>;
 export const experimentPageSchema = page(experimentSummarySchema);

@@ -54,7 +54,7 @@ func (s *JobService) EnqueueRun(ctx context.Context, tenantID string, input Enqu
 		Payload: domain.EvalRunJobPayload{
 			Resource: input.Resource, SuiteRevisionID: input.SuiteRevisionID, RequestedBy: input.RequestedBy,
 		},
-		IdempotencyKey: input.IdempotencyKey, CreatedAt: time.Now().UTC(),
+		IdempotencyKey: input.IdempotencyKey, CreatedBy: input.RequestedBy, CreatedAt: time.Now().UTC(),
 	}
 	return s.repo.Enqueue(ctx, tenantID, job)
 }

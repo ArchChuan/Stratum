@@ -10,6 +10,7 @@ export interface ReviewItem {
   trigger_reason: string;
   snapshot: unknown;
   status: string;
+  created_by?: string;
   human_verdict?: string;
   reviewer?: string;
   review_reason?: string;

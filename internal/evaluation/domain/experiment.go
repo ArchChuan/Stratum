@@ -66,6 +66,7 @@ type Experiment struct {
 	StateVersion     int64            `json:"state_version"`
 	Recommendation   Decision         `json:"recommendation"`
 	SafetyStopped    bool             `json:"safety_stopped"`
+	CreatedBy        string           `json:"created_by,omitempty"`
 }
 
 type Deployment struct {

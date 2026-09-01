@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
@@ -284,4 +285,47 @@ func (r *PgReviewRepository) CountPending(ctx context.Context, tenantID string) 
 		return 0, fmt.Errorf("count pending eval review items: %w", err)
 	}
 	return n, nil
+}
+
+// GetReviewItemCreatedBy 返回审查项创建者；系统入池项恒 ”（仅 owner 可删）。
+func (r *PgReviewRepository) GetReviewItemCreatedBy(ctx context.Context, tenantID, reviewID string) (string, bool, error) {
+	var createdBy string
+	found := false
+	ctx = postgres.WithTenant(ctx, &postgres.TenantContext{TenantID: tenantID})
+	err := execTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		err := tx.QueryRow(ctx, `SELECT created_by FROM eval_review_items WHERE id=$1`, reviewID).Scan(&createdBy)
+		if err == pgx.ErrNoRows {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("get eval review item: load created by: %w", err)
+		}
+		found = true
+		return nil
+	})
+	if err != nil {
+		return "", false, fmt.Errorf("get eval review item %s: %w", reviewID, err)
+	}
+	return createdBy, found, nil
+}
+
+// DeleteReviewItem 删除审查项：calibration/attribution 级联删除，同事务写审计。
+func (r *PgReviewRepository) DeleteReviewItem(
+	ctx context.Context, tenantID, reviewID string, audit *auditdomain.ResourceChangeAuditEvent,
+) error {
+	ctx = postgres.WithTenant(ctx, &postgres.TenantContext{TenantID: tenantID})
+	err := execTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		tag, execErr := tx.Exec(ctx, `DELETE FROM eval_review_items WHERE id=$1`, reviewID)
+		if execErr != nil {
+			return translateEntityReferenced(fmt.Errorf("delete eval review item: %w", execErr))
+		}
+		if tag.RowsAffected() == 0 {
+			return fmt.Errorf("eval review item %s not found", reviewID)
+		}
+		return insertChangeAudit(ctx, tx, audit)
+	})
+	if err != nil {
+		return fmt.Errorf("delete eval review item: %w", err)
+	}
+	return nil
 }

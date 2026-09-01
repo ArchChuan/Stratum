@@ -2,7 +2,7 @@ import { Button, Drawer, Empty, Form, Input, Modal, Select, Space, Table, Tag, m
 import type { ColumnsType } from 'antd/es/table';
 import { useCallback, useEffect, useState } from 'react';
 
-import { decideReviewItem, listReviewItems } from '../services/review';
+import { decideReviewItem, deleteReviewItem, listReviewItems } from '../services/review';
 import type { ReviewItem, ReviewItemDecisionRequest } from '../types/review';
 
 const VERDICT_OPTIONS = [
@@ -27,7 +27,11 @@ const VERDICT_LABELS: Record<string, string> = {
   case_revision: '用例需修正',
 };
 
-export default function ReviewPoolPanel() {
+export default function ReviewPoolPanel({ canDelete }: {
+  // 删除可见性（RBAC）：owner 恒可删 / created_by 等于当前用户可删；由父级基于
+  // useEvaluationCenter.canDeleteEntity 传入，panel 内只做确认 + 删除 + 刷新。
+  canDelete: (item: ReviewItem) => boolean;
+}) {
   const [items, setItems] = useState<ReviewItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -56,6 +60,26 @@ export default function ReviewPoolPanel() {
   const closeDecision = () => {
     form.resetFields();
     setDecisionTarget(null);
+  };
+
+  const confirmDelete = (item: ReviewItem) => {
+    Modal.confirm({
+      title: '删除该评审项？',
+      content: '删除后无法恢复，关联的校准/归因记录将一并删除。',
+      okText: '删除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          await deleteReviewItem(item.id);
+          message.success({ content: '评审项已删除', duration: 2 });
+          load();
+        } catch (err: any) {
+          message.error({ content: err.response?.data?.error || '删除失败', duration: 3 });
+          throw err;
+        }
+      },
+    });
   };
 
   const submitDecision = async () => {
@@ -101,6 +125,7 @@ export default function ReviewPoolPanel() {
           {record.status === 'pending' && (
             <Button size="small" type="primary" onClick={() => setDecisionTarget(record)}>评审</Button>
           )}
+          {canDelete(record) && <Button size="small" danger onClick={() => confirmDelete(record)}>删除</Button>}
         </Space>
       ),
     },

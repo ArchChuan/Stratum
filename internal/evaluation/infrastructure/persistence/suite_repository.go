@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/google/uuid"
@@ -28,16 +29,16 @@ func (r *PgSuiteRepository) CreateSuite(
 ) error {
 	return r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx,
-			`INSERT INTO eval_suites (id, name, description, draft_revision_id) VALUES ($1,$2,$3,$4)`,
-			suite.ID, suite.Name, suite.Description, revision.ID,
+			`INSERT INTO eval_suites (id, name, description, draft_revision_id, created_by) VALUES ($1,$2,$3,$4,$5)`,
+			suite.ID, suite.Name, suite.Description, revision.ID, suite.CreatedBy,
 		); err != nil {
 			return fmt.Errorf("evaluation suite repository: insert suite: %w", err)
 		}
 		if _, err := tx.Exec(ctx,
-			`INSERT INTO eval_suite_revisions (id, suite_id, parent_id, version_no, status, resource_kind)
-			 VALUES ($1,$2,NULLIF($3,''),NULLIF($4,0),$5,$6)`,
+			`INSERT INTO eval_suite_revisions (id, suite_id, parent_id, version_no, status, resource_kind, created_by)
+			 VALUES ($1,$2,NULLIF($3,''),NULLIF($4,0),$5,$6,$7)`,
 			revision.ID, revision.SuiteID, revision.ParentID, revision.VersionNo,
-			string(revision.Status), string(revision.ResourceKind),
+			string(revision.Status), string(revision.ResourceKind), revision.CreatedBy,
 		); err != nil {
 			return fmt.Errorf("evaluation suite repository: insert revision: %w", err)
 		}
@@ -59,7 +60,7 @@ func (r *PgSuiteRepository) GetDraftRevision(
 	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		var err error
 		revision, found, err = loadSuiteRevision(ctx, tx,
-			`SELECT id, suite_id, COALESCE(parent_id, ''), COALESCE(version_no, 0), status, resource_kind
+			`SELECT id, suite_id, COALESCE(parent_id, ''), COALESCE(version_no, 0), status, resource_kind, created_by
 			 FROM eval_suite_revisions WHERE suite_id=$1 AND status='draft'`, suiteID)
 		return err
 	})
@@ -75,7 +76,7 @@ func (r *PgSuiteRepository) GetRevision(
 	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		var err error
 		revision, found, err = loadSuiteRevision(ctx, tx,
-			`SELECT id, suite_id, COALESCE(parent_id, ''), COALESCE(version_no, 0), status, resource_kind
+			`SELECT id, suite_id, COALESCE(parent_id, ''), COALESCE(version_no, 0), status, resource_kind, created_by
 			 FROM eval_suite_revisions WHERE id=$1`, revisionID)
 		return err
 	})
@@ -106,7 +107,7 @@ func (r *PgSuiteRepository) GetActiveRevision(
 		}
 		var err error
 		revision, found, err = loadSuiteRevision(ctx, tx,
-			`SELECT id, suite_id, COALESCE(parent_id, ''), COALESCE(version_no, 0), status, resource_kind
+			`SELECT id, suite_id, COALESCE(parent_id, ''), COALESCE(version_no, 0), status, resource_kind, created_by
 			 FROM eval_suite_revisions WHERE id=$1`, activeRevisionID)
 		return err
 	})
@@ -148,7 +149,7 @@ func (r *PgSuiteRepository) PublishRevision(
 		}
 		var found bool
 		revision, found, err = loadSuiteRevision(ctx, tx,
-			`SELECT id, suite_id, COALESCE(parent_id, ''), COALESCE(version_no, 0), status, resource_kind
+			`SELECT id, suite_id, COALESCE(parent_id, ''), COALESCE(version_no, 0), status, resource_kind, created_by
 			 FROM eval_suite_revisions WHERE id=$1`, revisionID)
 		if err != nil {
 			return err
@@ -171,13 +172,13 @@ func (r *PgSuiteRepository) CreateDraftRevision(
 ) (domain.EvalSuiteRevision, error) {
 	var revision domain.EvalSuiteRevision
 	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		var kind, parentID string
+		var kind, parentID, createdBy string
 		err := tx.QueryRow(ctx,
-			`SELECT sr.resource_kind, sr.id
+			`SELECT sr.resource_kind, sr.id, sr.created_by
 			 FROM eval_suite_revisions sr
 			 JOIN eval_suites s ON s.active_revision_id = sr.id
 			 WHERE s.id = $1`, suiteID,
-		).Scan(&kind, &parentID)
+		).Scan(&kind, &parentID, &createdBy)
 		if err == pgx.ErrNoRows {
 			return fmt.Errorf("evaluation suite repository: suite has no published revision")
 		}
@@ -187,7 +188,7 @@ func (r *PgSuiteRepository) CreateDraftRevision(
 		revision = domain.EvalSuiteRevision{
 			ID: uuid.Must(uuid.NewV7()).String(), SuiteID: suiteID,
 			ParentID: parentID, Status: domain.SuiteRevisionDraft,
-			ResourceKind: domain.ResourceKind(kind),
+			ResourceKind: domain.ResourceKind(kind), CreatedBy: createdBy,
 		}
 		tag, err := tx.Exec(ctx,
 			`UPDATE eval_suites SET draft_revision_id=$2, updated_at=NOW() WHERE id=$1`,
@@ -200,10 +201,10 @@ func (r *PgSuiteRepository) CreateDraftRevision(
 			return fmt.Errorf("evaluation suite repository: suite not found")
 		}
 		if _, err := tx.Exec(ctx,
-			`INSERT INTO eval_suite_revisions (id, suite_id, parent_id, version_no, status, resource_kind)
-			 VALUES ($1,$2,NULLIF($3,''),NULLIF($4,0),$5,$6)`,
+			`INSERT INTO eval_suite_revisions (id, suite_id, parent_id, version_no, status, resource_kind, created_by)
+			 VALUES ($1,$2,NULLIF($3,''),NULLIF($4,0),$5,$6,$7)`,
 			revision.ID, revision.SuiteID, revision.ParentID, revision.VersionNo,
-			string(revision.Status), string(revision.ResourceKind),
+			string(revision.Status), string(revision.ResourceKind), revision.CreatedBy,
 		); err != nil {
 			return fmt.Errorf("evaluation suite repository: insert draft revision: %w", err)
 		}
@@ -322,9 +323,9 @@ func loadSuiteRevision(
 	arg string,
 ) (domain.EvalSuiteRevision, bool, error) {
 	var revision domain.EvalSuiteRevision
-	var status, kind string
+	var status, kind, createdBy string
 	err := tx.QueryRow(ctx, query, arg).Scan(
-		&revision.ID, &revision.SuiteID, &revision.ParentID, &revision.VersionNo, &status, &kind,
+		&revision.ID, &revision.SuiteID, &revision.ParentID, &revision.VersionNo, &status, &kind, &createdBy,
 	)
 	if err == pgx.ErrNoRows {
 		return domain.EvalSuiteRevision{}, false, nil
@@ -334,6 +335,7 @@ func loadSuiteRevision(
 	}
 	revision.Status = domain.SuiteRevisionStatus(status)
 	revision.ResourceKind = domain.ResourceKind(kind)
+	revision.CreatedBy = createdBy
 	rows, err := tx.Query(ctx,
 		`SELECT id, name, input, expected_output, assertion_mode, enabled, evaluator_config
 		 FROM eval_cases WHERE suite_revision_id=$1 ORDER BY created_at, id`, revision.ID)
@@ -357,4 +359,54 @@ func loadSuiteRevision(
 		revision.Cases = append(revision.Cases, testCase)
 	}
 	return revision, true, rows.Err()
+}
+
+// GetSuiteCreatedBy 返回套件创建者；未命中 found=false。
+func (r *PgSuiteRepository) GetSuiteCreatedBy(ctx context.Context, tenantID, suiteID string) (string, bool, error) {
+	var createdBy string
+	found := false
+	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		err := tx.QueryRow(ctx, `SELECT created_by FROM eval_suites WHERE id=$1`, suiteID).Scan(&createdBy)
+		if err == pgx.ErrNoRows {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("evaluation suite repository: load created by: %w", err)
+		}
+		found = true
+		return nil
+	})
+	return createdBy, found, err
+}
+
+// DeleteSuite 删除套件：任一 revision 被 run/optimization job/experiment 引用时
+// 拒绝删除（ErrEntityReferenced，禁级联破坏）；否则事务内级联删除 revisions 与
+// cases 并写变更审计。外键违例兜底翻译为 ErrEntityReferenced。
+func (r *PgSuiteRepository) DeleteSuite(
+	ctx context.Context, tenantID, suiteID string, audit *auditdomain.ResourceChangeAuditEvent,
+) error {
+	return r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		var referenced bool
+		if err := tx.QueryRow(ctx, `
+			SELECT EXISTS(SELECT 1 FROM eval_runs
+					WHERE suite_revision_id IN (SELECT id FROM eval_suite_revisions WHERE suite_id=$1))
+			    OR EXISTS(SELECT 1 FROM optimization_jobs
+					WHERE suite_revision_id IN (SELECT id FROM eval_suite_revisions WHERE suite_id=$1))
+			    OR EXISTS(SELECT 1 FROM evaluation_experiments
+					WHERE suite_revision_id IN (SELECT id FROM eval_suite_revisions WHERE suite_id=$1))`,
+			suiteID).Scan(&referenced); err != nil {
+			return fmt.Errorf("evaluation suite repository: check suite references: %w", err)
+		}
+		if referenced {
+			return domain.ErrEntityReferenced
+		}
+		tag, err := tx.Exec(ctx, `DELETE FROM eval_suites WHERE id=$1`, suiteID)
+		if err != nil {
+			return translateEntityReferenced(fmt.Errorf("evaluation suite repository: delete suite: %w", err))
+		}
+		if tag.RowsAffected() == 0 {
+			return fmt.Errorf("evaluation suite repository: delete suite %s: not found", suiteID)
+		}
+		return insertChangeAudit(ctx, tx, audit)
+	})
 }

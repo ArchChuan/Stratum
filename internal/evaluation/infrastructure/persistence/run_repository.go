@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/google/uuid"
@@ -33,10 +34,11 @@ func (r *PgRunRepository) SaveRun(ctx context.Context, tenantID string, run doma
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO eval_runs
 			 (id, resource_kind, resource_id, revision_id, suite_revision_id, status, passed,
-			  total_cases, passed_cases, metrics, created_at, started_at, completed_at)
-			 VALUES ($1,$2,$3,$4,$5,'succeeded',$6,$7,$8,$9,$10,$10,NOW())`,
+			  total_cases, passed_cases, metrics, created_by, created_at, started_at, completed_at)
+			 VALUES ($1,$2,$3,$4,$5,'succeeded',$6,$7,$8,$9,$10,$11,$11,NOW())`,
 			run.ID, string(run.Resource.Kind), run.Resource.ResourceID, run.Resource.RevisionID,
-			run.SuiteRevisionID, run.Passed, run.TotalCases, run.PassedCases, string(metricsJSON), run.CreatedAt,
+			run.SuiteRevisionID, run.Passed, run.TotalCases, run.PassedCases, string(metricsJSON),
+			run.CreatedBy, run.CreatedAt,
 		); err != nil {
 			return fmt.Errorf("evaluation run repository: insert run: %w", err)
 		}
@@ -108,10 +110,10 @@ func (r *PgRunRepository) GetRun(
 		var metricsJSON []byte
 		err := tx.QueryRow(ctx,
 			`SELECT id, resource_kind, resource_id, revision_id, suite_revision_id,
-			        passed, total_cases, passed_cases, metrics, created_at
+			        passed, total_cases, passed_cases, metrics, created_by, created_at
 			 FROM eval_runs WHERE id=$1`, runID,
 		).Scan(&run.ID, &kind, &run.Resource.ResourceID, &run.Resource.RevisionID,
-			&run.SuiteRevisionID, &run.Passed, &run.TotalCases, &run.PassedCases, &metricsJSON, &run.CreatedAt)
+			&run.SuiteRevisionID, &run.Passed, &run.TotalCases, &run.PassedCases, &metricsJSON, &run.CreatedBy, &run.CreatedAt)
 		if err == nil && len(metricsJSON) > 0 {
 			_ = json.Unmarshal(metricsJSON, &run.Metrics)
 		}
@@ -169,4 +171,49 @@ func scanCaseResult(row pgx.Row) (domain.EvalCaseResult, error) {
 		_ = json.Unmarshal(toolSequenceJSON, &result.Tools)
 	}
 	return result, nil
+}
+
+// GetRunCreatedBy 返回运行创建者；未命中 found=false。
+func (r *PgRunRepository) GetRunCreatedBy(ctx context.Context, tenantID, runID string) (string, bool, error) {
+	ctx = postgres.WithTenant(ctx, &postgres.TenantContext{TenantID: tenantID})
+	var createdBy string
+	found := false
+	err := execTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		err := tx.QueryRow(ctx, `SELECT created_by FROM eval_runs WHERE id=$1`, runID).Scan(&createdBy)
+		if err == pgx.ErrNoRows {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("evaluation run repository: load created by: %w", err)
+		}
+		found = true
+		return nil
+	})
+	return createdBy, found, err
+}
+
+// DeleteRun 删除运行：被 optimization candidate 引用时拒绝（该 FK 为 SET NULL，
+// 直接删会静默解绑候选，破坏语义）；否则事务内级联删除 case results 并写审计。
+func (r *PgRunRepository) DeleteRun(
+	ctx context.Context, tenantID, runID string, audit *auditdomain.ResourceChangeAuditEvent,
+) error {
+	ctx = postgres.WithTenant(ctx, &postgres.TenantContext{TenantID: tenantID})
+	return execTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		var referenced bool
+		if err := tx.QueryRow(ctx,
+			`SELECT EXISTS(SELECT 1 FROM optimization_candidates WHERE eval_run_id=$1)`, runID).Scan(&referenced); err != nil {
+			return fmt.Errorf("evaluation run repository: check run references: %w", err)
+		}
+		if referenced {
+			return domain.ErrEntityReferenced
+		}
+		tag, err := tx.Exec(ctx, `DELETE FROM eval_runs WHERE id=$1`, runID)
+		if err != nil {
+			return translateEntityReferenced(fmt.Errorf("evaluation run repository: delete run: %w", err))
+		}
+		if tag.RowsAffected() == 0 {
+			return fmt.Errorf("evaluation run repository: delete run %s: not found", runID)
+		}
+		return insertChangeAudit(ctx, tx, audit)
+	})
 }

@@ -30,12 +30,12 @@ func TestPgFeedbackRepository_Record_success(t *testing.T) {
 	expectTenantTx(mock)
 	mock.ExpectQuery("INSERT INTO evaluation_feedback").
 		WithArgs(pgxmock.AnyArg(), "tr-1", "prompt", "r-1", "rev-1", "exp-1", "stable", 0.9,
-			`{"ok":true,"password":"[REDACTED]"}`, "key-1").
+			`{"ok":true,"password":"[REDACTED]"}`, "key-1", "").
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "trace_id", "resource_kind", "resource_id", "revision_id", "experiment_id", "variant",
-			"score", "outcome", "idempotency_key", "created_at",
+			"score", "outcome", "idempotency_key", "created_by", "created_at",
 		}).AddRow("fb-1", "tr-1", "prompt", "r-1", "rev-1", "exp-1", "stable", 0.9,
-			[]byte(`{"ok":true,"password":"[REDACTED]"}`), "key-1", now))
+			[]byte(`{"ok":true,"password":"[REDACTED]"}`), "key-1", "", now))
 	mock.ExpectCommit()
 
 	feedback, err := repo.Record(context.Background(), "t1", input)
@@ -61,12 +61,12 @@ func TestPgFeedbackRepository_Record_securityViolationAdded(t *testing.T) {
 	expectTenantTx(mock)
 	mock.ExpectQuery("INSERT INTO evaluation_feedback").
 		WithArgs(pgxmock.AnyArg(), "tr-1", "prompt", "r-1", "", "", "", 0.0,
-			`{"security_violation":true}`, "").
+			`{"security_violation":true}`, "", "").
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "trace_id", "resource_kind", "resource_id", "revision_id", "experiment_id", "variant",
-			"score", "outcome", "idempotency_key", "created_at",
+			"score", "outcome", "idempotency_key", "created_by", "created_at",
 		}).AddRow("fb-1", "tr-1", "prompt", "r-1", "", "", "", 0.0,
-			[]byte(`{"security_violation":true}`), "", now))
+			[]byte(`{"security_violation":true}`), "", "", now))
 	mock.ExpectCommit()
 
 	feedback, err := repo.Record(context.Background(), "t1", input)
@@ -87,7 +87,7 @@ func TestPgFeedbackRepository_Record_idempotentConflict(t *testing.T) {
 
 	expectTenantTx(mock)
 	mock.ExpectQuery("INSERT INTO evaluation_feedback").
-		WithArgs(pgxmock.AnyArg(), "tr-1", "prompt", "r-1", "", "", "", 0.0, `{}`, "key-1").
+		WithArgs(pgxmock.AnyArg(), "tr-1", "prompt", "r-1", "", "", "", 0.0, `{}`, "key-1", "").
 		WillReturnError(pgx.ErrNoRows)
 	mock.ExpectQuery("SELECT COUNT\\(\\*\\), COUNT\\(\\*\\) FILTER").
 		WithArgs("tr-1", "prompt", "r-1", "", "", "", 0.0, `{}`, "key-1").
@@ -111,7 +111,7 @@ func TestPgFeedbackRepository_Record_existingRowReturned(t *testing.T) {
 
 	expectTenantTx(mock)
 	mock.ExpectQuery("INSERT INTO evaluation_feedback").
-		WithArgs(pgxmock.AnyArg(), "tr-1", "prompt", "r-1", "", "", "", 0.0, `{}`, "key-1").
+		WithArgs(pgxmock.AnyArg(), "tr-1", "prompt", "r-1", "", "", "", 0.0, `{}`, "key-1", "").
 		WillReturnError(pgx.ErrNoRows)
 	mock.ExpectQuery("SELECT COUNT\\(\\*\\), COUNT\\(\\*\\) FILTER").
 		WithArgs("tr-1", "prompt", "r-1", "", "", "", 0.0, `{}`, "key-1").
@@ -120,9 +120,9 @@ func TestPgFeedbackRepository_Record_existingRowReturned(t *testing.T) {
 		WithArgs("key-1").
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "trace_id", "resource_kind", "resource_id", "revision_id", "experiment_id", "variant",
-			"score", "outcome", "idempotency_key", "created_at",
+			"score", "outcome", "idempotency_key", "created_by", "created_at",
 		}).AddRow("fb-1", "tr-1", "prompt", "r-1", "", "", "", 0.0,
-			[]byte(`{"ok":true}`), "key-1", now))
+			[]byte(`{"ok":true}`), "key-1", "", now))
 	mock.ExpectCommit()
 
 	feedback, err := repo.Record(context.Background(), "t1", input)
@@ -148,9 +148,9 @@ func TestPgFeedbackRepository_ActiveExperiment_found(t *testing.T) {
 		WithArgs("exp-1").
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "resource_kind", "resource_id", "stable_revision_id", "canary_revision_id",
-			"suite_revision_id", "status", "stage_percent", "policy", "state_version", "recommendation", "safety_stopped",
+			"suite_revision_id", "status", "stage_percent", "policy", "state_version", "recommendation", "safety_stopped", "created_by",
 		}).AddRow("exp-1", "prompt", "r-1", "stable-1", "canary-1", "suite-1", "running", 10,
-			[]byte(`{"auto_promote":false}`), int64(1), domain.Decision("hold"), false))
+			[]byte(`{"auto_promote":false}`), int64(1), domain.Decision("hold"), false, ""))
 	mock.ExpectCommit()
 
 	experiment, found, err := repo.ActiveExperiment(context.Background(), "t1", "prompt", "r-1")

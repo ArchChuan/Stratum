@@ -10,7 +10,16 @@ const api = vi.hoisted(() => ({
   pauseExperiment: vi.fn(), promoteExperiment: vi.fn(), rollbackExperiment: vi.fn(),
   createSuite: vi.fn(), publishSuite: vi.fn(), enqueueRun: vi.fn(),
 }));
-vi.mock('@/modules/iam', () => ({ useAuth: () => ({ user: { role: auth.role } }) }));
+vi.mock('@/modules/iam', () => ({
+  useAuth: () => ({ user: { role: auth.role } }),
+  useTenantRole: () => ({
+    role: auth.role,
+    isAdmin: auth.role === 'admin' || auth.role === 'owner',
+    isOwner: auth.role === 'owner',
+    isMember: auth.role === 'member',
+    hasTenantRole: () => auth.role === 'admin' || auth.role === 'owner',
+  }),
+}));
 vi.mock('../api/evaluation.api', () => ({ evaluationApi: api }));
 
 const emptyPage = { items: [] };

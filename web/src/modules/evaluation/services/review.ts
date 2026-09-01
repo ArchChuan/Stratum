@@ -24,3 +24,9 @@ export async function decideReviewItem(
   const { data } = await client.post(`/evaluations/review/${id}/decision`, body);
   return data;
 }
+
+// deleteReviewItem 删除评审项（204 空体）。RBAC：租户 owner 恒可删；系统入池项
+// created_by 恒 '' 仅 owner 可删；创建者可删。
+export async function deleteReviewItem(id: string): Promise<void> {
+  await client.delete(`/evaluations/review/${encodeURIComponent(id)}`);
+}

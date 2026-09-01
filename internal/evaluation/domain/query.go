@@ -56,6 +56,7 @@ type SuiteSummary struct {
 	Name        string    `json:"name"`
 	Description string    `json:"description"`
 	Status      string    `json:"status"`
+	CreatedBy   string    `json:"created_by,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
 }
 type RunSummary struct {
@@ -67,6 +68,7 @@ type RunSummary struct {
 	Passed       bool         `json:"passed"`
 	TotalCases   int          `json:"total_cases"`
 	PassedCases  int          `json:"passed_cases"`
+	CreatedBy    string       `json:"created_by,omitempty"`
 	CreatedAt    time.Time    `json:"created_at"`
 }
 type CandidateSummary struct {
@@ -80,6 +82,7 @@ type CandidateSummary struct {
 	Rank             *int              `json:"rank,omitempty"`
 	StateVersion     int64             `json:"state_version"`
 	SafeDiff         CandidateSafeDiff `json:"safe_diff"`
+	CreatedBy        string            `json:"created_by,omitempty"`
 	CreatedAt        time.Time         `json:"created_at"`
 }
 
@@ -105,6 +108,7 @@ type ExperimentSummary struct {
 	SafetyStopped     bool              `json:"safety_stopped"`
 	StateVersion      int64             `json:"state_version"`
 	PromotionEvidence PromotionEvidence `json:"promotion_evidence"`
+	CreatedBy         string            `json:"created_by,omitempty"`
 	CreatedAt         time.Time         `json:"created_at"`
 }
 

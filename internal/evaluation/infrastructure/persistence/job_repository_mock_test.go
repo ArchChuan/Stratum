@@ -27,10 +27,10 @@ func TestPgJobRepository_Enqueue_success(t *testing.T) {
 
 	expectTenantTx(mock)
 	mock.ExpectQuery("INSERT INTO evaluation_jobs").
-		WithArgs("job-1", domain.JobTypeEvalRun, `{"resource":{"kind":"","resource_id":"","revision_id":""},"suite_revision_id":"","requested_by":"user-1"}`, "queued", "key-1", now).
+		WithArgs("job-1", domain.JobTypeEvalRun, `{"resource":{"kind":"","resource_id":"","revision_id":""},"suite_revision_id":"","requested_by":"user-1"}`, "queued", "key-1", "", now).
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "job_type", "payload", "status", "attempts", "idempotency_key", "error_message", "result_id", "created_at",
-		}).AddRow("job-1", domain.JobTypeEvalRun, []byte(`{"requested_by":"user-1"}`), "queued", 0, "key-1", "", "", now))
+			"id", "job_type", "payload", "status", "attempts", "idempotency_key", "error_message", "result_id", "created_by", "created_at",
+		}).AddRow("job-1", domain.JobTypeEvalRun, []byte(`{"requested_by":"user-1"}`), "queued", 0, "key-1", "", "", "", now))
 	mock.ExpectCommit()
 
 	saved, err := repo.Enqueue(context.Background(), "t1", job)
@@ -48,10 +48,10 @@ func TestPgJobRepository_Enqueue_unmarshalPayloadFails(t *testing.T) {
 
 	expectTenantTx(mock)
 	mock.ExpectQuery("INSERT INTO evaluation_jobs").
-		WithArgs("job-1", "", pgxmock.AnyArg(), "", "", now).
+		WithArgs("job-1", "", pgxmock.AnyArg(), "", "", "", now).
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "job_type", "payload", "status", "attempts", "idempotency_key", "error_message", "result_id", "created_at",
-		}).AddRow("job-1", "eval_run", []byte(`{not-json`), "queued", 0, "", "", "", now))
+			"id", "job_type", "payload", "status", "attempts", "idempotency_key", "error_message", "result_id", "created_by", "created_at",
+		}).AddRow("job-1", "eval_run", []byte(`{not-json`), "queued", 0, "", "", "", "", now))
 	mock.ExpectRollback()
 
 	_, err := repo.Enqueue(context.Background(), "t1", domain.EvaluationJob{ID: "job-1", CreatedAt: now})

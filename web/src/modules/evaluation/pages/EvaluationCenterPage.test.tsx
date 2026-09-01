@@ -24,6 +24,8 @@ const center = vi.hoisted(() => ({
   }] },
   loading: false, error: '', canManageEvaluation: true, reload: vi.fn(), rejectCandidate: vi.fn(),
   pauseExperiment: vi.fn(), promoteExperiment: vi.fn(), rollbackExperiment: vi.fn(), createEvaluation: vi.fn(),
+  canDeleteEntity: vi.fn(() => true), deleteSuite: vi.fn(), deleteRun: vi.fn(), deleteJob: vi.fn(),
+  deleteCandidate: vi.fn(), deleteExperiment: vi.fn(), deleteReviewItem: vi.fn(), deleteFeedback: vi.fn(),
 }));
 const useCenter = vi.hoisted(() => vi.fn(() => center));
 vi.mock('../hooks/useEvaluationCenter', () => ({ useEvaluationCenter: useCenter }));
@@ -33,6 +35,7 @@ vi.mock('../services/review', () => ({
   listReviewItems: vi.fn().mockResolvedValue({ items: [], total: 0 }),
   getReviewItem: vi.fn(),
   decideReviewItem: vi.fn(),
+  deleteReviewItem: vi.fn(),
 }));
 // 组件创建/操作后调用 message.success/error,antd 的 rc-notification 定时器
 // (duration 2-3s)会在测试 teardown 后触发 setState → "window is not defined",

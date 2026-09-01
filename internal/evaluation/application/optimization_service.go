@@ -32,6 +32,7 @@ type GenerateCandidatesInput struct {
 	SuiteRevisionID  string
 	SearchSpace      map[string][]any
 	FailureSummaries []string
+	ActorID          string
 }
 
 var errOptimizationReplay = errors.New("optimization replay")
@@ -119,7 +120,8 @@ func (s *OptimizationService) Generate(
 	job := domain.OptimizationJob{
 		ID: uuid.Must(uuid.NewV7()).String(), Baseline: input.Baseline,
 		SuiteRevisionID: input.SuiteRevisionID, Status: domain.JobSucceeded,
-		SearchSpace: input.SearchSpace, FailureSummaries: input.FailureSummaries, CreatedAt: now,
+		SearchSpace: input.SearchSpace, FailureSummaries: input.FailureSummaries,
+		CreatedBy: input.ActorID, CreatedAt: now,
 	}
 	candidates := make([]domain.OptimizationCandidate, 0, len(patches))
 	err = s.repo.WithinTransaction(ctx, tenantID, func(txCtx context.Context) error {
