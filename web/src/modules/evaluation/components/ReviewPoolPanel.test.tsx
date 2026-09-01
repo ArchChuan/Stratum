@@ -57,7 +57,7 @@ describe('ReviewPoolPanel', () => {
 
   it('renders risk priority label from backend', async () => {
     mocks.listReviewItems.mockResolvedValue({ items: [pendingItem], total: 1 });
-    render(<ReviewPoolPanel />);
+    render(<ReviewPoolPanel canDelete={() => false} />);
 
     expect(await screen.findByText('中')).toBeInTheDocument();
   });
