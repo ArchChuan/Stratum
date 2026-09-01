@@ -34,7 +34,7 @@ func (r *PgFeedbackRepository) Record(
 		if input.SecurityViolation {
 			outcome["security_violation"] = true
 		}
-		outcomeJSON, err := json.Marshal(sanitizeValue(outcome))
+		outcomeJSON, err := json.Marshal(domain.SanitizeValue(outcome))
 		if err != nil {
 			return err
 		}

@@ -351,19 +351,21 @@ func observationSnapshot(obs *domain.EvalObservation) map[string]any {
 }
 
 func caseSnapshot(result domain.EvalCaseResult, c domain.EvalCase, assertion domain.AssertionResult) map[string]any {
+	// actual 与 tool_sequence 入评审池快照前经 domain.SanitizeValue / SanitizeTools
+	// 脱敏，与 eval_case_results 读回一致（spec §6.5）：敏感 key 与键值对不落库不外泄。
 	return map[string]any{
 		"case_id":          c.ID,
 		"case_name":        c.Name,
 		"assertion_mode":   string(c.AssertionMode),
 		"input":            c.Input,
 		"expected":         c.ExpectedOutput,
-		"actual":           result.Actual,
+		"actual":           domain.SanitizeValue(result.Actual),
 		"passed":           result.Passed,
 		"message":          result.Message,
 		"judge_confidence": assertion.Confidence,
 		"process_pass":     result.ProcessPass,
 		"process_failure":  result.ProcessFailure,
-		"tool_sequence":    result.Tools,
+		"tool_sequence":    domain.SanitizeTools(result.Tools),
 	}
 }
 

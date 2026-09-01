@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"regexp"
-	"strings"
 
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
@@ -13,10 +11,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
-
-const redacted = "[REDACTED]"
-
-var sensitiveText = regexp.MustCompile(`(?i)\b(password|token|api_key|apikey|authorization|secret)=((bearer|basic)\s+)?\S+`)
 
 type PgRunRepository struct {
 	pool poolIface
@@ -56,14 +50,15 @@ func (r *PgRunRepository) SaveRun(ctx context.Context, tenantID string, run doma
 }
 
 // insertCaseResult 在事务内写入一条 eval_case_results（spec §6.2/§6.5）：
-// actual/dimensions/trace_evidence/tool_sequence 均 JSON 序列化，工具序列落库前
-// 经 sanitizeTools 脱敏；JSON-null 分别回退到 {} / [] 保持 round-trip 语义。
+// actual/dimensions/trace_evidence/tool_sequence 均 JSON 序列化，actual 与工具序列
+// 落库前经 domain.SanitizeValue / domain.SanitizeTools 脱敏；JSON-null 分别回退到
+// {} / [] 保持 round-trip 语义。
 func insertCaseResult(ctx context.Context, tx pgx.Tx, runID string, result domain.EvalCaseResult) error {
 	id := result.ID
 	if id == "" {
 		id = uuid.Must(uuid.NewV7()).String()
 	}
-	actualJSON, err := json.Marshal(sanitizeValue(result.Actual))
+	actualJSON, err := json.Marshal(domain.SanitizeValue(result.Actual))
 	if err != nil {
 		return fmt.Errorf("evaluation run repository: marshal actual output: %w", err)
 	}
@@ -78,7 +73,7 @@ func insertCaseResult(ctx context.Context, tx pgx.Tx, runID string, result domai
 	if err != nil {
 		return fmt.Errorf("evaluation run repository: marshal trace evidence: %w", err)
 	}
-	toolSequenceJSON, err := json.Marshal(sanitizeTools(result.Tools))
+	toolSequenceJSON, err := json.Marshal(domain.SanitizeTools(result.Tools))
 	if err != nil {
 		return fmt.Errorf("evaluation run repository: marshal tool sequence: %w", err)
 	}
@@ -174,59 +169,4 @@ func scanCaseResult(row pgx.Row) (domain.EvalCaseResult, error) {
 		_ = json.Unmarshal(toolSequenceJSON, &result.Tools)
 	}
 	return result, nil
-}
-
-func sanitizeValue(value any) any {
-	switch v := value.(type) {
-	case map[string]any:
-		out := make(map[string]any, len(v))
-		for key, item := range v {
-			if isSensitiveKey(key) {
-				out[key] = redacted
-				continue
-			}
-			out[key] = sanitizeValue(item)
-		}
-		return out
-	case []any:
-		out := make([]any, len(v))
-		for i, item := range v {
-			out[i] = sanitizeValue(item)
-		}
-		return out
-	case string:
-		return sensitiveText.ReplaceAllString(v, "$1="+redacted)
-	default:
-		return value
-	}
-}
-
-func isSensitiveKey(key string) bool {
-	normalized := strings.ToLower(strings.ReplaceAll(key, "-", "_"))
-	switch normalized {
-	case "password", "token", "api_key", "apikey", "authorization", "secret", "access_token", "refresh_token":
-		return true
-	default:
-		return false
-	}
-}
-
-// sanitizeTools 落库前脱敏工具序列（spec §6.5）：Arguments 复用 sanitizeValue
-// 递归脱敏（敏感 key 与内嵌键值），RawText 用 sensitiveText 正则替换敏感键值对；
-// 其余字段原样透传。返回新切片，不修改入参。
-func sanitizeTools(tools []domain.ToolObservation) []domain.ToolObservation {
-	if len(tools) == 0 {
-		return tools
-	}
-	out := make([]domain.ToolObservation, len(tools))
-	for i, tool := range tools {
-		out[i] = tool
-		if tool.Arguments != nil {
-			if args, ok := sanitizeValue(tool.Arguments).(map[string]any); ok {
-				out[i].Arguments = args
-			}
-		}
-		out[i].RawText = sensitiveText.ReplaceAllString(tool.RawText, "$1="+redacted)
-	}
-	return out
 }

@@ -20,7 +20,7 @@ func TestSanitizeValueRedactsSensitiveEvaluationOutput(t *testing.T) {
 		"text":   "authorization=Bearer secret-value",
 	}
 
-	encoded, err := json.Marshal(sanitizeValue(value))
+	encoded, err := json.Marshal(domain.SanitizeValue(value))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestSanitizeTools(t *testing.T) {
 		},
 	}
 
-	got := sanitizeTools(tools)
+	got := domain.SanitizeTools(tools)
 	require.Len(t, got, 2)
 
 	// Arguments 中敏感 key 替换为 [REDACTED]，普通 key 原样。
@@ -84,7 +84,7 @@ func TestSanitizeTools(t *testing.T) {
 
 	// 不修改入参切片。
 	require.Equal(t, "secret-key", tools[0].Arguments["api_key"])
-	require.Nil(t, sanitizeTools(nil))
+	require.Nil(t, domain.SanitizeTools(nil))
 }
 
 // TestPgRunRepository_dimensionsFailureReasonRoundTrip 验证 SaveRun 写入
@@ -171,7 +171,7 @@ func TestPgRunRepository_dimensionsFailureReasonRoundTrip(t *testing.T) {
 
 // TestPgRunRepository_processAndToolRoundTrip 验证 SaveRun 写入
 // process_pass/process_failure/tool_sequence 后 GetRun 能读回相等，且工具序列
-// 落库前经过 sanitizeTools 脱敏（spec §6.5 多步推理与工具调用评测）。
+// 落库前经过 domain.SanitizeTools 脱敏（spec §6.5 多步推理与工具调用评测）。
 func TestPgRunRepository_processAndToolRoundTrip(t *testing.T) {
 	writeMock := newMockRepo(t)
 	readMock := newMockRepo(t)
@@ -187,7 +187,7 @@ func TestPgRunRepository_processAndToolRoundTrip(t *testing.T) {
 			RawText:      "web_search(query='stratum', api_key='secret-key')",
 		},
 	}
-	sanitized := sanitizeTools(tools)
+	sanitized := domain.SanitizeTools(tools)
 	toolSeqJSON, err := json.Marshal(sanitized)
 	require.NoError(t, err)
 
