@@ -109,6 +109,7 @@ type fakeAdapter struct {
 	outputs  map[string]any
 	errCase  string
 	tenantID string
+	tools    map[string][]domain.ToolObservation
 }
 
 func (f *fakeAdapter) ResolveRevision(_ context.Context, _ string, ref domain.ResourceRef) (domain.ResourceRevision, error) {
@@ -126,7 +127,9 @@ func (f *fakeAdapter) ExecuteRevision(
 	if c.ID == f.errCase {
 		return ExecutionResult{}, errFakeExecution
 	}
-	return ExecutionResult{Output: f.outputs[c.ID], TraceID: "trace-" + c.ID, Tokens: 10, CostUSD: 0.01, DurationMs: 20}, nil
+	return ExecutionResult{
+		Output: f.outputs[c.ID], TraceID: "trace-" + c.ID, Tokens: 10, CostUSD: 0.01, DurationMs: 20, Tools: f.tools[c.ID],
+	}, nil
 }
 
 type fakeRunRepo struct {
@@ -242,16 +245,25 @@ func (f *fakeFailingTraceEvidenceReader) ResolveBatch(_ context.Context, _ strin
 type fakeLLMJudge struct {
 	enabled bool
 	result  domain.AssertionResult
-	err     error
-	got     port.JudgeRequest
-	calls   int
+	// stepResult 在 req.ToolSequence 非空时覆盖 result（step_judge 专用）；
+	// nil 时所有调用返回 result，保持既有 fake 行为。
+	stepResult *domain.AssertionResult
+	err        error
+	got        port.JudgeRequest
+	calls      int
 }
 
 func (f *fakeLLMJudge) Enabled(_ context.Context) bool { return f.enabled }
 func (f *fakeLLMJudge) Judge(_ context.Context, req port.JudgeRequest) (domain.AssertionResult, error) {
 	f.calls++
 	f.got = req
-	return f.result, f.err
+	if f.err != nil {
+		return domain.AssertionResult{}, f.err
+	}
+	if f.stepResult != nil && req.ToolSequence != "" {
+		return *f.stepResult, nil
+	}
+	return f.result, nil
 }
 
 func TestServiceJudgeAssertionDispatchesToJudge(t *testing.T) {
@@ -589,5 +601,238 @@ func TestRunExecutionErrorSetsExecutionFailureReason(t *testing.T) {
 	}
 	if got.FailureReason != "execution" {
 		t.Fatalf("failure_reason = %q, want execution", got.FailureReason)
+	}
+}
+
+// ——— Process assertion flow (§6.5) ———
+
+func TestRunCaseToolSpecMustNotCallFailsProcessKeepsOutputAttribution(t *testing.T) {
+	adapter := &fakeAdapter{
+		outputs: map[string]any{"case-1": "已删除相关文件"},
+		tools: map[string][]domain.ToolObservation{
+			"case-1": {{ToolName: "search", StepIndex: 1}, {ToolName: "delete", StepIndex: 2}},
+		},
+	}
+	repo := &fakeRunRepo{}
+	svc := NewService(adapter, repo, nil, nil)
+
+	run, err := svc.Run(context.Background(), RunInput{
+		TenantID: "tenant-1",
+		Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "v1"},
+		Suite: domain.EvalSuiteRevision{ID: "sv-1", Cases: []domain.EvalCase{
+			{ID: "case-1", Input: "删除文件", ExpectedOutput: "删除", AssertionMode: domain.AssertionContains, Enabled: true,
+				ToolSpec: &domain.ToolSpec{MustNotCall: []string{"delete"}}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	got := run.Results[0]
+	if run.Passed || got.Passed {
+		t.Fatal("must_not_call hit must fail the case")
+	}
+	if got.ProcessPass {
+		t.Fatal("process assertion must fail when a forbidden tool is called")
+	}
+	if got.ProcessFailure != "process:must_not_call:delete" {
+		t.Fatalf("process_failure = %q, want process:must_not_call:delete", got.ProcessFailure)
+	}
+	if got.FailureReason != "" {
+		t.Fatalf("output passed, failure_reason must stay empty (process attribution separate), got %q", got.FailureReason)
+	}
+	if len(got.Tools) != 2 || got.Tools[1].ToolName != "delete" {
+		t.Fatalf("tools = %+v", got.Tools)
+	}
+}
+
+func TestRunCaseStepJudgePassMergesDimensionsAndPasses(t *testing.T) {
+	adapter := &fakeAdapter{
+		outputs: map[string]any{"case-1": "已创建工单"},
+		tools:   map[string][]domain.ToolObservation{"case-1": {{ToolName: "create_ticket", StepIndex: 0}}},
+	}
+	repo := &fakeRunRepo{}
+	judge := &fakeLLMJudge{enabled: true, result: domain.AssertionResult{
+		Passed: true, Message: "步骤合理", Confidence: 0.9,
+		Dimensions: []domain.DimensionScore{{Name: "reasoning", Score: 0.8, Passed: true}},
+	}}
+	svc := NewService(adapter, repo, nil, judge)
+
+	run, err := svc.Run(context.Background(), RunInput{
+		TenantID: "tenant-1",
+		Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "v1"},
+		Suite: domain.EvalSuiteRevision{ID: "sv-1", Cases: []domain.EvalCase{
+			{ID: "case-1", Input: "帮我创建工单", ExpectedOutput: "创建", AssertionMode: domain.AssertionContains, Enabled: true,
+				StepJudge: &domain.StepJudge{Criteria: "步骤需合理"}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	got := run.Results[0]
+	if !run.Passed || !got.Passed || !got.ProcessPass {
+		t.Fatalf("expected pass, got %+v", got)
+	}
+	if got.ProcessFailure != "" {
+		t.Fatalf("process_failure = %q, want empty", got.ProcessFailure)
+	}
+	if len(got.Dimensions) != 1 || got.Dimensions[0].Name != "reasoning" {
+		t.Fatalf("dimensions = %+v", got.Dimensions)
+	}
+	if judge.calls != 1 {
+		t.Fatalf("expected 1 judge call (step_judge only), got %d", judge.calls)
+	}
+	if judge.got.Rubric != "步骤需合理" {
+		t.Fatalf("rubric = %q, want step criteria", judge.got.Rubric)
+	}
+	if judge.got.ToolSequence != "[0] create_ticket" {
+		t.Fatalf("tool_sequence = %q, want [0] create_ticket", judge.got.ToolSequence)
+	}
+	if judge.got.Model != "" {
+		t.Fatalf("step_judge must use platform default model, got %q", judge.got.Model)
+	}
+}
+
+func TestRunCaseStepJudgeDisabledFailsClosed(t *testing.T) {
+	adapter := &fakeAdapter{
+		outputs: map[string]any{"case-1": "any"},
+		tools:   map[string][]domain.ToolObservation{"case-1": {{ToolName: "read", StepIndex: 0}}},
+	}
+	repo := &fakeRunRepo{}
+	svc := NewService(adapter, repo, nil, nil) // no judge configured
+
+	run, err := svc.Run(context.Background(), RunInput{
+		TenantID: "tenant-1",
+		Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "v1"},
+		Suite: domain.EvalSuiteRevision{ID: "sv-1", Cases: []domain.EvalCase{
+			{ID: "case-1", Input: "x", ExpectedOutput: "y", AssertionMode: domain.AssertionContains, Enabled: true,
+				StepJudge: &domain.StepJudge{}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	got := run.Results[0]
+	if run.Passed || got.Passed {
+		t.Fatal("disabled step_judge must fail the case")
+	}
+	if got.Error != "LLM judge disabled" {
+		t.Fatalf("error = %q, want LLM judge disabled", got.Error)
+	}
+	if got.FailureReason != "execution" {
+		t.Fatalf("failure_reason = %q, want execution", got.FailureReason)
+	}
+	if got.ProcessPass {
+		t.Fatal("disabled step_judge must not pass the process assertion")
+	}
+}
+
+func TestRunCaseNoProcessAssertionDefaultsProcessPassTrue(t *testing.T) {
+	adapter := &fakeAdapter{
+		outputs: map[string]any{"case-1": "ok"},
+		tools:   map[string][]domain.ToolObservation{"case-1": {{ToolName: "search", StepIndex: 0}}},
+	}
+	repo := &fakeRunRepo{}
+	svc := NewService(adapter, repo, nil, nil)
+
+	run, err := svc.Run(context.Background(), RunInput{
+		TenantID: "tenant-1",
+		Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "v1"},
+		Suite: domain.EvalSuiteRevision{ID: "sv-1", Cases: []domain.EvalCase{
+			{ID: "case-1", Input: "q", ExpectedOutput: "ok", AssertionMode: domain.AssertionContains, Enabled: true},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	got := run.Results[0]
+	if !got.Passed || !got.ProcessPass {
+		t.Fatalf("expected pass with process_pass default true, got %+v", got)
+	}
+	if got.ProcessFailure != "" {
+		t.Fatalf("process_failure = %q, want empty", got.ProcessFailure)
+	}
+	if len(got.Tools) != 1 {
+		t.Fatalf("tools must be captured even without process assertions, got %+v", got.Tools)
+	}
+}
+
+func TestRunCaseJudgeBranchFoldsProcessPass(t *testing.T) {
+	adapter := &fakeAdapter{
+		outputs: map[string]any{"case-1": "已删除"},
+		tools:   map[string][]domain.ToolObservation{"case-1": {{ToolName: "delete", StepIndex: 0}}},
+	}
+	repo := &fakeRunRepo{}
+	judge := &fakeLLMJudge{enabled: true, result: domain.AssertionResult{Passed: true, Message: "输出符合要求"}}
+	svc := NewService(adapter, repo, nil, judge)
+
+	run, err := svc.Run(context.Background(), RunInput{
+		TenantID: "tenant-1",
+		Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "v1"},
+		Suite: domain.EvalSuiteRevision{ID: "sv-1", Cases: []domain.EvalCase{
+			{ID: "case-1", Input: "删除文件", AssertionMode: domain.AssertionJudge, Enabled: true,
+				ToolSpec: &domain.ToolSpec{MustNotCall: []string{"delete"}}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	got := run.Results[0]
+	if run.Passed || got.Passed {
+		t.Fatal("process failure must fail the judge case despite judge passing")
+	}
+	if got.ProcessPass {
+		t.Fatal("process assertion must fail")
+	}
+	if got.ProcessFailure != "process:must_not_call:delete" {
+		t.Fatalf("process_failure = %q", got.ProcessFailure)
+	}
+	if got.FailureReason != "" {
+		t.Fatalf("judge passed, so failure_reason must stay empty, got %q", got.FailureReason)
+	}
+	if judge.calls != 1 {
+		t.Fatalf("expected 1 judge call (no step_judge), got %d", judge.calls)
+	}
+}
+
+func TestRunCaseJudgeAndStepJudgeMergeDimensions(t *testing.T) {
+	adapter := &fakeAdapter{
+		outputs: map[string]any{"case-1": "已创建工单"},
+		tools:   map[string][]domain.ToolObservation{"case-1": {{ToolName: "create_ticket", StepIndex: 0}}},
+	}
+	repo := &fakeRunRepo{}
+	judge := &fakeLLMJudge{
+		enabled: true,
+		result: domain.AssertionResult{
+			Passed: true, Dimensions: []domain.DimensionScore{{Name: "faithfulness", Score: 0.9, Passed: true}},
+		},
+		stepResult: &domain.AssertionResult{
+			Passed: true, Dimensions: []domain.DimensionScore{{Name: "reasoning", Score: 0.8, Passed: true}},
+		},
+	}
+	svc := NewService(adapter, repo, nil, judge)
+
+	run, err := svc.Run(context.Background(), RunInput{
+		TenantID: "tenant-1",
+		Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "v1"},
+		Suite: domain.EvalSuiteRevision{ID: "sv-1", Cases: []domain.EvalCase{
+			{ID: "case-1", Input: "创建工单", AssertionMode: domain.AssertionJudge, Enabled: true,
+				StepJudge: &domain.StepJudge{Criteria: "步骤需合理"}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	got := run.Results[0]
+	if !run.Passed || !got.Passed || !got.ProcessPass {
+		t.Fatalf("expected pass, got %+v", got)
+	}
+	if len(got.Dimensions) != 2 {
+		t.Fatalf("expected 2 merged dimensions, got %+v", got.Dimensions)
+	}
+	if got.Dimensions[0].Name != "reasoning" || got.Dimensions[1].Name != "faithfulness" {
+		t.Fatalf("dimension order = %+v, want [reasoning faithfulness]", got.Dimensions)
+	}
+	if judge.calls != 2 {
+		t.Fatalf("expected 2 judge calls (step_judge + output judge), got %d", judge.calls)
 	}
 }

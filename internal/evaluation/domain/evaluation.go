@@ -308,6 +308,18 @@ type EvalCaseResult struct {
 	// "dimension:<名>"；规则断言失败 → "assert:<mode>"；执行失败 → "execution"。
 	// 通过 case 为空。
 	FailureReason string `json:"failure_reason,omitempty"`
+	// ProcessPass 是工具序列过程断言（§6.5）的判定结果：true 表示过程断言通过
+	// 或未配置过程断言。与 Passed 独立：Passed 是输出归因，ProcessPass 是过程
+	// 归因；最终 Passed = 输出断言 && ProcessPass。无 omitempty（仿 passed，
+	// 过程判定始终在结果 JSON 可见）。
+	ProcessPass bool `json:"process_pass"`
+	// ProcessFailure 是过程断言失败归因（§6.5）：如 "process:must_not_call:delete"
+	// 或步骤级 judge 的主要失败维度。与 FailureReason（输出归因）独立；过程通过
+	// 时为空。
+	ProcessFailure string `json:"process_failure,omitempty"`
+	// Tools 是执行链路工具调用序列（§6.5），过程断言与评审详情展示用；未采集
+	// 时为空。
+	Tools []ToolObservation `json:"tools,omitempty"`
 }
 
 // RAGEvidenceInfo is the per-case retrieval signal for knowledge runs. The
