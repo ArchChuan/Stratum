@@ -36,6 +36,8 @@ type ExecutionResult struct {
 	// RAGEvidence carries per-case retrieval metrics for knowledge
 	// evaluations; nil for other resource kinds.
 	RAGEvidence *domain.RAGEvidenceInfo
+	// Tools 是执行链路工具调用序列（§6.5 过程断言数据源；无工具调用/未采集时为空）。
+	Tools []ToolObservation
 }
 
 // LLMJudge evaluates free-form outputs with an LLM for assertion_mode=judge

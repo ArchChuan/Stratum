@@ -296,7 +296,7 @@ func (a agentEvaluationAdapter) ExecuteRevision(
 		return evalport.ExecutionResult{}, errors.New("evaluation Agent adapter: provider returned no result")
 	}
 	return evalport.ExecutionResult{Output: result.Output, TraceID: traceID, Tokens: result.TokensUsed,
-		CostUSD: result.CostUSD, DurationMs: duration}, nil
+		CostUSD: result.CostUSD, DurationMs: duration, Tools: mapToolObservations(result.ToolObservations)}, nil
 }
 
 func (a agentEvaluationAdapter) loadPublished(

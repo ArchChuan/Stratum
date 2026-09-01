@@ -1043,7 +1043,8 @@ func (a agentScenarioEvaluationAdapter) ExecuteRevision(
 	if err != nil {
 		return evalport.ExecutionResult{}, err
 	}
-	return evalport.ExecutionResult{Output: result.Output, TraceID: traceID, Tokens: result.TokensUsed, CostUSD: result.CostUSD, DurationMs: duration}, nil
+	return evalport.ExecutionResult{Output: result.Output, TraceID: traceID, Tokens: result.TokensUsed,
+		CostUSD: result.CostUSD, DurationMs: duration, Tools: mapToolObservations(result.ToolObservations)}, nil
 }
 
 func (l evaluationTenantLister) ListTenantIDs(ctx context.Context) ([]string, error) {
@@ -1093,20 +1094,28 @@ func mapEvaluationEvidence(evidence agentdomain.TraceEvidence) evalport.Observed
 			RevisionID: assignment.RevisionID, ExperimentID: assignment.ExperimentID, Variant: assignment.Variant,
 		}
 	}
-	tools := make([]evalport.ToolObservation, 0, len(evidence.Tools))
-	for _, tool := range evidence.Tools {
-		tools = append(tools, evalport.ToolObservation{
-			ToolName: tool.ToolName, ToolType: tool.ToolType, StepIndex: tool.StepIndex,
-			ProviderType: tool.ProviderType, CapabilityID: tool.CapabilityID,
-			Arguments: tool.Arguments, RawText: tool.RawText,
-		})
-	}
+	tools := mapToolObservations(evidence.Tools)
 	return evalport.ObservedTrace{
 		TraceID: evidence.TraceID, UserID: evidence.UserID, CostUSD: evidence.CostUSD, LatencyMs: evidence.LatencyMs,
 		Input: evidence.Input, Output: evidence.Output, TotalTokens: int64(evidence.TotalTokens), // TraceEvidence.TotalTokens(int) → ObservedTrace.TotalTokens(int64)
 		Success: evidence.Status == agentdomain.ExecStatusSuccess, SecurityViolation: evidence.SecurityViolation,
 		Assignments: assignments, Tools: tools,
 	}
+}
+
+// mapToolObservations 把执行链路工具调用序列（agent domain.ToolObservation）
+// 投影为评测域的 ToolObservation 摘要，逐字段拷贝并保持顺序。Arguments 原样
+// 透传（脱敏在评测结果落库层处理）。
+func mapToolObservations(tools []agentdomain.ToolObservation) []evalport.ToolObservation {
+	mapped := make([]evalport.ToolObservation, 0, len(tools))
+	for _, tool := range tools {
+		mapped = append(mapped, evalport.ToolObservation{
+			ToolName: tool.ToolName, ToolType: tool.ToolType, StepIndex: tool.StepIndex,
+			ProviderType: tool.ProviderType, CapabilityID: tool.CapabilityID,
+			Arguments: tool.Arguments, RawText: tool.RawText,
+		})
+	}
+	return mapped
 }
 
 func (c *Container) buildEvaluation(ctx context.Context) error {
