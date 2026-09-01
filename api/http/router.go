@@ -613,9 +613,11 @@ func registerKnowledge(r *gin.Engine, c *wiring.Container, requireActive gin.Han
 
 		adminMW := []gin.HandlerFunc{middleware.RequireTenantRole("admin")}
 		knowledgeGroup.POST("/workspaces", append(adminMW, requireActive, ragHandler.CreateWorkspace)...)
-		// PATCH name/description 对白名单 member 开放（service UpdateWorkspace
-		// 所有权矩阵 fail-closed：owner/admin 放行，白名单 member 放行，其余 403）。
-		// config/upload/doc/access/delete 保持 admin 门禁。
+		// PATCH workspace 对白名单 member 开放（service UpdateWorkspace 所有权矩阵
+		// fail-closed：owner/admin 放行，白名单 member 放行，其余 403）。白名单 member
+		// 可改 name/description/检索参数（config 中 embedding/chunk 等不可变字段由
+		// domain applyImmutableSettings 兜底）；upload（POST /ingest）同样对白名单
+		// member 开放。doc/access/delete/rollback/editors/create 保持 admin 门禁。
 		knowledgeGroup.PATCH("/workspaces/:name", requireActive, ragHandler.UpdateWorkspace)
 		// 版本历史/回滚：历史 GET member 级（对齐 agent/skill），回滚写 admin
 		// （spec：入口仅 isAdmin 可见）。
@@ -626,7 +628,7 @@ func registerKnowledge(r *gin.Engine, c *wiring.Container, requireActive gin.Han
 		knowledgeGroup.DELETE("/workspaces/:name/documents/:documentID", append(adminMW, requireActive, ragHandler.DeleteDocument)...)
 		knowledgeGroup.PUT("/workspaces/:name/documents/:documentID/access",
 			append(adminMW, requireActive, ragHandler.SetDocumentAccess)...)
-		knowledgeGroup.POST("/ingest", append(adminMW, requireActive, middleware.BodyLimit(constants.MaxUploadBytes), ragHandler.UploadDocument)...)
+		knowledgeGroup.POST("/ingest", requireActive, middleware.BodyLimit(constants.MaxUploadBytes), ragHandler.UploadDocument)
 	}
 }
 
