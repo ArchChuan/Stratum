@@ -192,3 +192,67 @@ func TestAggregateRunMetricsNoJudgeDimensions(t *testing.T) {
 		t.Fatalf("platform_seq must be 0 (unknown) when anchor absent")
 	}
 }
+
+// TestAggregateRunMetricsProcessPassRate covers the §6.5 run-level
+// process_pass_rate metric: it counts evaluated results by ProcessPass with
+// denominator = all evaluated results, and confirms step_judge dimensions
+// (tool_pass / step_reasoning) surface in by_dimension.
+func TestAggregateRunMetricsProcessPassRate(t *testing.T) {
+	mkRun := func(results []domain.EvalCaseResult) domain.EvalRun {
+		passed := 0
+		for _, r := range results {
+			if r.Passed {
+				passed++
+			}
+		}
+		return domain.EvalRun{
+			ID:          uuid.Must(uuid.NewV7()).String(),
+			TotalCases:  len(results),
+			PassedCases: passed,
+			CreatedAt:   time.Now().UTC(),
+			Results:     results,
+		}
+	}
+
+	t.Run("two results one process pass yields 0.5", func(t *testing.T) {
+		run := mkRun([]domain.EvalCaseResult{
+			{Passed: true, ProcessPass: true},
+			{Passed: false, ProcessPass: false},
+		})
+		metrics := aggregateRunMetrics(run, runVersionAnchor{})
+		require.Equal(t, 0.5, metrics["process_pass_rate"])
+	})
+
+	t.Run("process_pass_rate zero for empty results", func(t *testing.T) {
+		metrics := aggregateRunMetrics(mkRun(nil), runVersionAnchor{})
+		require.Equal(t, 0.0, metrics["process_pass_rate"])
+	})
+
+	t.Run("step judge dimensions surface in by_dimension", func(t *testing.T) {
+		run := mkRun([]domain.EvalCaseResult{
+			{Passed: true, ProcessPass: true,
+				Dimensions: []domain.DimensionScore{
+					{Name: "tool_pass", Score: 1.0, Passed: true},
+					{Name: "step_reasoning", Score: 0.8, Passed: true},
+				}},
+			{Passed: false, ProcessPass: false,
+				Dimensions: []domain.DimensionScore{
+					{Name: "tool_pass", Score: 0.0, Passed: false},
+					{Name: "step_reasoning", Score: 0.5, Passed: false},
+				}},
+		})
+		metrics := aggregateRunMetrics(run, runVersionAnchor{})
+		byDim, ok := metrics["by_dimension"].(map[string]any)
+		require.True(t, ok, "by_dimension must be present")
+		toolPass, ok := byDim["tool_pass"].(map[string]any)
+		require.True(t, ok, "tool_pass dimension must surface")
+		require.Equal(t, 2, toolPass["samples"])
+		require.Equal(t, 0.5, toolPass["pass_rate"])
+		require.InDelta(t, 0.5, toolPass["avg_score"], 1e-9)
+		stepReasoning, ok := byDim["step_reasoning"].(map[string]any)
+		require.True(t, ok, "step_reasoning dimension must surface")
+		require.Equal(t, 2, stepReasoning["samples"])
+		require.Equal(t, 0.5, stepReasoning["pass_rate"])
+		require.InDelta(t, 0.65, stepReasoning["avg_score"], 1e-9)
+	})
+}
