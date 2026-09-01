@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import type { EvaluationRun } from '../model/evaluation';
@@ -14,8 +14,9 @@ const results: EvaluationRun['results'] = [
     tokens: 0, cost_usd: 0, duration_ms: 0,
     dimensions: [{ name: 'faithfulness', score: 0.4, passed: false, confidence: 0.6 }] },
   { case_id: 'c3', passed: true, process_pass: true, tokens: 0, cost_usd: 0, duration_ms: 0 },
+  // c4：过程失败但输出断言通过——后端不产生 failure_reason（过程归因单独在
+  // ProcessFailure，spec §6.5），必须仍进入失败聚类并可 drill-down。
   { case_id: 'c4', passed: false, process_pass: false, process_failure: 'process:must_not_call:delete',
-    failure_reason: 'process:must_not_call:delete',
     tools: [{ tool_name: 'delete', tool_type: 'mcp', step_index: 2, provider_type: 'zhipu',
       capability_id: 'cap-1', arguments: { query: 'secret' }, raw_text: '删除一行' }],
     tokens: 0, cost_usd: 0, duration_ms: 0 },
@@ -37,12 +38,20 @@ describe('RunAttributionPanel', () => {
     expect(screen.queryByText('c3')).not.toBeInTheDocument();
   });
 
-  it('shows the process failure and tool sequence in the drill-down', () => {
+  it('clusters process-fail-only cases by process_failure and drills into the tool sequence', () => {
     render(<RunAttributionPanel results={results} />);
+    // c4 无 failure_reason 但 process_pass=false：现按 process_failure 归因进入失败聚类。
+    expect(screen.getByText('1 个失败用例')).toBeInTheDocument();
+    expect(screen.getAllByText('process:must_not_call:delete')).toHaveLength(1);
+
     fireEvent.click(screen.getByText('c4'));
     expect(screen.getByText('过程未通过')).toBeInTheDocument();
     expect(screen.getByText('过程失败')).toBeInTheDocument();
-    expect(screen.getAllByText('process:must_not_call:delete').length).toBeGreaterThan(0);
+    // drill-down 内「失败归因」（process_failure fallback）+「过程失败」各展示一次。
+    const drillDown = within(screen.getByTestId('case-drill-down'));
+    expect(drillDown.getAllByText('process:must_not_call:delete')).toHaveLength(2);
+    // 全局精确计数：聚类行 1 + drill-down 2。
+    expect(screen.getAllByText('process:must_not_call:delete')).toHaveLength(3);
     expect(screen.getByText('工具序列')).toBeInTheDocument();
     expect(screen.getByText('delete')).toBeInTheDocument();
     expect(screen.getByText('zhipu')).toBeInTheDocument();

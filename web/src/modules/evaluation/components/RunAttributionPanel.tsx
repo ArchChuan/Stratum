@@ -32,13 +32,18 @@ export const RunAttributionPanel = ({ results }: { results: EvaluationRun['resul
   const clusters = useMemo<ClusterRow[]>(() => {
     const map = new Map<string, { count: number; ids: string[] }>();
     for (const r of results) {
-      if (r.passed || !r.failure_reason) {
+      // 失败聚类同时纳入过程失败 case（passed=false 且无输出 failure_reason，但
+      // process_pass===false）：过程归因单独在 ProcessFailure（spec §6.5），否则
+      // 工具序列 drill-down 永远不可达。
+      if (r.passed || (!r.failure_reason && r.process_pass !== false)) {
         continue;
       }
-      const entry = map.get(r.failure_reason) ?? { count: 0, ids: [] };
+      const reason = r.failure_reason
+        || (r.process_pass === false ? (r.process_failure || 'process:failed') : '');
+      const entry = map.get(reason) ?? { count: 0, ids: [] };
       entry.count += 1;
       entry.ids.push(r.case_id);
-      map.set(r.failure_reason, entry);
+      map.set(reason, entry);
     }
     return [...map.entries()].map(([reason, e]) => ({
       key: reason, reason, count: e.count, failedCaseIds: e.ids,
@@ -106,7 +111,9 @@ const CaseDrillDown = ({ result }: { result: NonNullable<EvaluationRun['results'
         </>
       )}
       <Descriptions.Item label="实际输出">{result.actual == null ? '无' : (typeof result.actual === 'string' ? result.actual : JSON.stringify(result.actual))}</Descriptions.Item>
-      <Descriptions.Item label="失败归因">{result.failure_reason}</Descriptions.Item>
+      <Descriptions.Item label="失败归因">
+        {result.failure_reason || (result.process_pass === false ? (result.process_failure || '-') : '-')}
+      </Descriptions.Item>
       {result.process_pass === false && (
         <Descriptions.Item label="过程失败">{result.process_failure || '未知'}</Descriptions.Item>
       )}
