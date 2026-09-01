@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -475,6 +476,66 @@ func (f *fakeAgentRevisionService) Create(_ context.Context, tenantID string, in
 
 func agentRef(revisionID string) evaldomain.ResourceRef {
 	return evaldomain.ResourceRef{Kind: evaldomain.ResourceKindAgent, ResourceID: "agent-1", RevisionID: revisionID}
+}
+
+func TestAgentEvaluationAdapterPropagatesToolObservations(t *testing.T) {
+	const snapshotPayload = `{"agent_id":"agent-1","type":"react","system_prompt":"baseline",
+		"model":"qwen-plus","max_iterations":5}`
+	revisions := &fakeAgentRevisionService{revision: evaldomain.ResourceRevision{
+		ID: "published-1", ResourceKind: evaldomain.ResourceKindAgent, ResourceID: "agent-1",
+		Status: evaldomain.RevisionStatusPublished,
+	}, payload: []byte(snapshotPayload), found: true}
+	want := []agentdomain.ToolObservation{
+		{
+			ToolName: "search_web", ToolType: "builtin", StepIndex: 1,
+			ProviderType: "provider-a", CapabilityID: "cap-search",
+			Arguments: map[string]any{"query": "multi-step reasoning"}, RawText: "web results for multi-step reasoning",
+		},
+		{
+			ToolName: "read_memory", ToolType: "memory", StepIndex: 2,
+			ProviderType: "provider-b", CapabilityID: "cap-memory",
+			Arguments: map[string]any{"scope": "recent", "limit": 5}, RawText: "memory excerpt",
+		},
+	}
+	adapter := agentEvaluationAdapter{
+		revisions: revisions,
+		agents: &toolObservationsAgentExecutor{result: &agentapp.AgentResult{
+			Output: "done", ToolObservations: want,
+		}},
+		parameters: parametersdomain.NewParametersRegistry(),
+	}
+	result, err := adapter.ExecuteRevision(
+		context.Background(), "tenant-1", "user-1", agentRef("published-1"), evaldomain.EvalCase{Input: "hello"},
+	)
+	if err != nil {
+		t.Fatalf("execute revision: %v", err)
+	}
+	if len(result.Tools) != len(want) {
+		t.Fatalf("tool sequence length = %d, want %d", len(result.Tools), len(want))
+	}
+	for i, got := range result.Tools {
+		expected := want[i]
+		if got.ToolName != expected.ToolName || got.ToolType != expected.ToolType ||
+			got.StepIndex != expected.StepIndex || got.ProviderType != expected.ProviderType ||
+			got.CapabilityID != expected.CapabilityID || !reflect.DeepEqual(got.Arguments, expected.Arguments) ||
+			got.RawText != expected.RawText {
+			t.Fatalf("tool[%d] mismatch: got %#v, want %#v", i, got, expected)
+		}
+	}
+}
+
+type toolObservationsAgentExecutor struct{ result *agentapp.AgentResult }
+
+func (e *toolObservationsAgentExecutor) SnapshotRevision(
+	context.Context, string, string,
+) (agentdomain.AgentRevision, error) {
+	return agentdomain.AgentRevision{}, nil
+}
+
+func (e *toolObservationsAgentExecutor) ExecuteRevision(
+	context.Context, agentdomain.AgentRevision, agentapp.ExecRequest, agentapp.ExecMeta,
+) (*agentapp.AgentResult, int, error) {
+	return e.result, 1, nil
 }
 
 var _ = agentdomain.AgentRevision{}

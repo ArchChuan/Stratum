@@ -14,6 +14,17 @@ type JudgeSpec struct {
 	Rubric string `json:"rubric"`
 }
 
+type ToolSpec struct {
+	MustCall    []string `json:"must_call"`
+	MustNotCall []string `json:"must_not_call"`
+	Order       []string `json:"order"`
+	MaxCalls    int32    `json:"max_calls"`
+}
+
+type StepJudge struct {
+	Criteria string `json:"criteria"`
+}
+
 type EvaluationCaseRequest struct {
 	Name           string     `json:"name"`
 	Input          any        `json:"input" binding:"required"`
@@ -21,6 +32,8 @@ type EvaluationCaseRequest struct {
 	AssertionMode  string     `json:"assertion_mode" binding:"required,oneof=exact contains regex judge"`
 	Enabled        *bool      `json:"enabled"`
 	JudgeSpec      *JudgeSpec `json:"judge_spec"`
+	ToolSpec       *ToolSpec  `json:"tool_spec"`
+	StepJudge      *StepJudge `json:"step_judge"`
 }
 
 type CreateEvaluationSuiteRequest struct {

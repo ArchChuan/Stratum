@@ -3,11 +3,12 @@ import { useState } from 'react';
 
 import type { ResourceSummary } from '../model/evaluation';
 
-import { AssertionModeField, JudgeSpecFields, type CaseAssertionMode } from './CaseFields';
+import { AssertionModeField, JudgeSpecFields, StepJudgeFields, ToolSpecFields, type CaseAssertionMode } from './CaseFields';
 
 interface Values {
   resource_id: string; name: string; description?: string; case_name: string; input: string; expected_output: string;
   assertion_mode: CaseAssertionMode; judge_model?: string; judge_rubric?: string;
+  must_call?: string[]; must_not_call?: string[]; tool_order?: string[]; max_calls?: number; step_criteria?: string;
 }
 
 export const CreateEvaluationModal = ({ open, resources, onClose, onSubmit }: {
@@ -39,6 +40,8 @@ export const CreateEvaluationModal = ({ open, resources, onClose, onSubmit }: {
       <Form.Item name="expected_output" label="期望输出" rules={[{ required: true, message: '请输入期望输出' }]}><Input.TextArea aria-label="期望输出" /></Form.Item>
       <AssertionModeField />
       <JudgeSpecFields />
+      <ToolSpecFields />
+      <StepJudgeFields />
     </Form>
   </Modal>;
 };

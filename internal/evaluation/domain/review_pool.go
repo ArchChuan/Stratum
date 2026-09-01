@@ -28,16 +28,18 @@ func (v HumanVerdict) Valid() bool {
 type ReviewTriggerReason string
 
 const (
-	TriggerLowConfidence     ReviewTriggerReason = "low_confidence"
-	TriggerDimensionSplit    ReviewTriggerReason = "dimension_split"
-	TriggerJudgeRuleConflict ReviewTriggerReason = "judge_rule_conflict"
-	TriggerNeedsReview       ReviewTriggerReason = "needs_review"
+	TriggerLowConfidence         ReviewTriggerReason = "low_confidence"
+	TriggerDimensionSplit        ReviewTriggerReason = "dimension_split"
+	TriggerJudgeRuleConflict     ReviewTriggerReason = "judge_rule_conflict"
+	TriggerNeedsReview           ReviewTriggerReason = "needs_review"
+	TriggerProcessOutputConflict ReviewTriggerReason = "process_output_conflict"
 )
 
 // Valid 校验入池原因枚举。
 func (r ReviewTriggerReason) Valid() bool {
 	switch r {
-	case TriggerLowConfidence, TriggerDimensionSplit, TriggerJudgeRuleConflict, TriggerNeedsReview:
+	case TriggerLowConfidence, TriggerDimensionSplit, TriggerJudgeRuleConflict, TriggerNeedsReview,
+		TriggerProcessOutputConflict:
 		return true
 	default:
 		return false
@@ -162,11 +164,26 @@ func splitExists(judge []JudgeSignal, threshold float64) (below, above bool) {
 	return below, above
 }
 
+// TriggersForProcessConflict 计算输出断言与过程断言不一致的入池原因（§6.5 §6.6）：
+// 仅输出通过但过程失败（outputPass=true, processPass=false）时触发
+// process_output_conflict；其余组合（一致或输出已失败）不构成冲突，不进池。
+// 纯函数，硬编码规则。规则断言 case 也复用本函数（规则 case 无 judge 信号，
+// 不能走完整 TriggersForCaseResult 以免 low_confidence 误触发）。
+func TriggersForProcessConflict(outputPass, processPass bool) []ReviewTriggerReason {
+	if outputPass && !processPass {
+		return []ReviewTriggerReason{TriggerProcessOutputConflict}
+	}
+	return nil
+}
+
 // TriggersForCaseResult 计算评测集 judge 判定的入池原因（空 = 不进池）。
 // 规则（spec §6.6）：
-//  1. needs_review：EvalCase.NeedsReview == true；
-//  2. low_confidence：assertion.Confidence < cfg.LowConfidenceThreshold。
-func TriggersForCaseResult(needsReview bool, assertion AssertionResult, cfg ReviewConfig) []ReviewTriggerReason {
+//  1. needs_review：EvalCase.NeedsReview == true（assertion_mode 分支由调用方强制，本函数不检查）；
+//  2. low_confidence：assertion.Confidence < cfg.LowConfidenceThreshold；
+//  3. process_output_conflict：输出断言通过但过程断言失败（§6.5）。
+func TriggersForCaseResult(
+	needsReview bool, outputPass, processPass bool, assertion AssertionResult, cfg ReviewConfig,
+) []ReviewTriggerReason {
 	var triggers []ReviewTriggerReason
 	if needsReview {
 		triggers = append(triggers, TriggerNeedsReview)
@@ -174,5 +191,5 @@ func TriggersForCaseResult(needsReview bool, assertion AssertionResult, cfg Revi
 	if assertion.Confidence < cfg.LowConfidenceThreshold {
 		triggers = append(triggers, TriggerLowConfidence)
 	}
-	return triggers
+	return append(triggers, TriggersForProcessConflict(outputPass, processPass)...)
 }

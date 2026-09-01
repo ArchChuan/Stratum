@@ -42,7 +42,11 @@ type ReviewEscalator interface {
 	// TryEscalateObservation 判定观测是否入池并幂等落条目。返回错误表示升级失败
 	// （调用方记日志 + IncEvalReviewEscalateFailure，不得阻断主流程）。
 	TryEscalateObservation(ctx context.Context, tenantID string, obs *domain.EvalObservation) error
-	// TryEscalateCaseResult 判定评测集 judge 结果是否入池并幂等落条目。
-	TryEscalateCaseResult(ctx context.Context, tenantID, runID string,
-		result domain.EvalCaseResult, c domain.EvalCase, assertion domain.AssertionResult) error
+	// TryEscalateCaseResult 判定评测集结果是否入池并幂等落条目。ref 是评测资源引用，
+	// 落条目的 resource_kind/resource_id 归因。outputPass/processPass 是输出断言与
+	// 过程断言（§6.5）的通过结果：实现方按 AssertionMode 分支——judge case 走完整
+	// TriggersForCaseResult，规则 case 仅走 TriggersForProcessConflict。
+	TryEscalateCaseResult(ctx context.Context, tenantID, runID string, ref domain.ResourceRef,
+		result domain.EvalCaseResult, c domain.EvalCase, assertion domain.AssertionResult,
+		outputPass, processPass bool) error
 }

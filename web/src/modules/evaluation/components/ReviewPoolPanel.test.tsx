@@ -80,6 +80,15 @@ describe('ReviewPoolPanel', () => {
     expect(screen.queryByRole('button', { name: '评 审' })).not.toBeInTheDocument();
   });
 
+  it('labels the process_output_conflict trigger reason', async () => {
+    mocks.listReviewItems.mockResolvedValue({
+      items: [{ ...pendingItem, id: 'review-3', trigger_reason: 'process_output_conflict' }], total: 1,
+    });
+    render(<ReviewPoolPanel />);
+
+    expect(await screen.findByText('输出通过但过程未通过')).toBeInTheDocument();
+  });
+
   it('opens the detail drawer showing the snapshot', async () => {
     mocks.listReviewItems.mockResolvedValue({ items: [pendingItem], total: 1 });
     render(<ReviewPoolPanel />);

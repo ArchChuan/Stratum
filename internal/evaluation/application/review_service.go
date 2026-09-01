@@ -82,13 +82,23 @@ func (s *ReviewService) TryEscalateObservation(
 	return nil
 }
 
-// TryEscalateCaseResult 判定评测集 judge 结果入池原因并幂等落条目。断言来源
-// result.Error==""（judge 实际产出）由调用方 runCase 保证。
+// TryEscalateCaseResult 判定评测集结果入池原因并幂等落条目。断言来源
+// result.Error==""（judge 实际产出）由调用方 runCase 保证。按 AssertionMode 分支：
+// judge case 走完整 TriggersForCaseResult（含 needs_review / low_confidence）；
+// 规则 case 仅走 TriggersForProcessConflict——规则 case 无 judge 信号，low_confidence
+// 不得误触发，needs_review 也仅对 judge 生效（spec §6.6）。resource_kind/resource_id
+// 归因取自 ref（与观测路径 obs.Resource 对齐），保证资源维度评审池过滤可用。
 func (s *ReviewService) TryEscalateCaseResult(
-	ctx context.Context, tenantID, runID string,
+	ctx context.Context, tenantID, runID string, ref domain.ResourceRef,
 	result domain.EvalCaseResult, c domain.EvalCase, assertion domain.AssertionResult,
+	outputPass, processPass bool,
 ) error {
-	triggers := domain.TriggersForCaseResult(c.NeedsReview, assertion, s.deps.Cfg)
+	var triggers []domain.ReviewTriggerReason
+	if c.AssertionMode == domain.AssertionJudge {
+		triggers = domain.TriggersForCaseResult(c.NeedsReview, outputPass, processPass, assertion, s.deps.Cfg)
+	} else {
+		triggers = domain.TriggersForProcessConflict(outputPass, processPass)
+	}
 	if len(triggers) == 0 {
 		return nil
 	}
@@ -100,6 +110,8 @@ func (s *ReviewService) TryEscalateCaseResult(
 			SourceID:      result.ID,
 			RunID:         runID,
 			TraceID:       result.TraceID,
+			ResourceKind:  ref.Kind,
+			ResourceID:    ref.ResourceID,
 			TriggerReason: reason,
 			Snapshot:      snapshot,
 			Status:        domain.ReviewStatusPending,
@@ -339,16 +351,21 @@ func observationSnapshot(obs *domain.EvalObservation) map[string]any {
 }
 
 func caseSnapshot(result domain.EvalCaseResult, c domain.EvalCase, assertion domain.AssertionResult) map[string]any {
+	// actual 与 tool_sequence 入评审池快照前经 domain.SanitizeValue / SanitizeTools
+	// 脱敏，与 eval_case_results 读回一致（spec §6.5）：敏感 key 与键值对不落库不外泄。
 	return map[string]any{
 		"case_id":          c.ID,
 		"case_name":        c.Name,
 		"assertion_mode":   string(c.AssertionMode),
 		"input":            c.Input,
 		"expected":         c.ExpectedOutput,
-		"actual":           result.Actual,
+		"actual":           domain.SanitizeValue(result.Actual),
 		"passed":           result.Passed,
 		"message":          result.Message,
 		"judge_confidence": assertion.Confidence,
+		"process_pass":     result.ProcessPass,
+		"process_failure":  result.ProcessFailure,
+		"tool_sequence":    domain.SanitizeTools(result.Tools),
 	}
 }
 

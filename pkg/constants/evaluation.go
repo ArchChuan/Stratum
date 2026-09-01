@@ -112,3 +112,13 @@ const (
 	// evaluation 侧因 DDD 边界只读 pkg/constants）。
 	PlatformGroupEvaluation = "evaluation"
 )
+
+// Evaluation 工具序列过程断言（§6.5 多步推理与工具调用评测）行为边界。
+const (
+	// StepJudgeMaxTools 是 FormatToolSequence 渲染的最大工具条数：超过后截断
+	// 工具序列，防止 step_judge 上下文随长链路无限膨胀。
+	StepJudgeMaxTools = 20
+	// StepJudgeRawTextMaxChars 是 FormatToolSequence 单条工具 RawText 的最大
+	// rune 数：超过后按 rune 截断并追加省略号。
+	StepJudgeRawTextMaxChars = 500
+)

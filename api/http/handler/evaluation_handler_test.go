@@ -696,6 +696,88 @@ func TestEvaluationCreateSuiteJudgeSpecInApprovalArgs(t *testing.T) {
 	}
 }
 
+// D4：admin 创建 agent case 时，tool_spec（must_call/must_not_call/order/max_calls）
+// 与 step_judge（criteria）绑定进 service 输入（§6.5 过程断言契约）。
+func TestEvaluationCreateSuiteBindsToolSpecAndStepJudge(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	suites := &fakeSuiteService{created: domain.EvalSuite{ID: "suite-1"}}
+	approvals := &fakeApprovalRequests{}
+	h := NewEvaluationHandler(suites, nil, nil, nil, nil, nil, nil, nil, zap.NewNop()).
+		WithApprovalService(approvals)
+	r := gin.New()
+	r.Use(middleware.ErrorHandler(zap.NewNop()))
+	r.POST("/evaluations/suites", withTenantAndUser("tenant-1", "admin-1"), withRole("admin"), h.CreateSuite)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/evaluations/suites",
+		strings.NewReader(`{"name":"S","resource_kind":"agent","cases":[{"name":"a1","input":"i","expected_output":"o","assertion_mode":"exact","tool_spec":{"must_call":["search"],"must_not_call":["delete"],"order":["search","execute"],"max_calls":3},"step_judge":{"criteria":"reason about steps"}}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(suites.createInput.Cases) != 1 {
+		t.Fatalf("create input cases=%d, want 1", len(suites.createInput.Cases))
+	}
+	got := suites.createInput.Cases[0]
+	if got.ToolSpec == nil {
+		t.Fatalf("tool_spec not bound: %+v", got)
+	}
+	if got.ToolSpec.MaxCalls != 3 {
+		t.Fatalf("tool_spec.max_calls=%d, want 3", got.ToolSpec.MaxCalls)
+	}
+	if len(got.ToolSpec.MustCall) != 1 || got.ToolSpec.MustCall[0] != "search" ||
+		len(got.ToolSpec.MustNotCall) != 1 || got.ToolSpec.MustNotCall[0] != "delete" {
+		t.Fatalf("tool_spec must_call/must_not_call not bound: %+v", got.ToolSpec)
+	}
+	if len(got.ToolSpec.Order) != 2 || got.ToolSpec.Order[0] != "search" || got.ToolSpec.Order[1] != "execute" {
+		t.Fatalf("tool_spec.order not bound: %+v", got.ToolSpec)
+	}
+	if got.StepJudge == nil || got.StepJudge.Criteria != "reason about steps" {
+		t.Fatalf("step_judge not bound: %+v", got.StepJudge)
+	}
+}
+
+// D4：member 创建带过程断言的 agent case 时，审批 payload 的 args 携带
+// tool_spec/step_judge 供审批人审阅（§6.5）。
+func TestEvaluationCreateSuiteToolSpecInApprovalArgs(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	suites := &fakeSuiteService{}
+	approvals := &fakeApprovalRequests{}
+	h := NewEvaluationHandler(suites, nil, nil, nil, nil, nil, nil, nil, zap.NewNop()).
+		WithApprovalService(approvals)
+	r := gin.New()
+	r.Use(middleware.ErrorHandler(zap.NewNop()))
+	r.POST("/evaluations/suites", withTenantAndUser("tenant-1", "member-1"), withRole("member"), h.CreateSuite)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/evaluations/suites",
+		strings.NewReader(`{"name":"S","resource_kind":"agent","cases":[{"name":"a1","input":"i","expected_output":"o","assertion_mode":"exact","tool_spec":{"must_not_call":["delete"],"max_calls":2},"step_judge":{"criteria":"c"}}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202 pending_approval, got status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	caseArgs, ok := approvals.args["cases"].([]any)
+	if !ok || len(caseArgs) != 1 {
+		t.Fatalf("approval cases args=%v, want 1 case", approvals.args["cases"])
+	}
+	caseArg, ok := caseArgs[0].(map[string]any)
+	if !ok {
+		t.Fatalf("case arg type=%T, want map", caseArgs[0])
+	}
+	spec, ok := caseArg["tool_spec"].(map[string]any)
+	if !ok || spec["max_calls"] != 2 {
+		t.Fatalf("approval tool_spec missing: %v", caseArg)
+	}
+	step, ok := caseArg["step_judge"].(map[string]any)
+	if !ok || step["criteria"] != "c" {
+		t.Fatalf("approval step_judge missing: %v", caseArg)
+	}
+}
+
 // fakeReviewService 实现 evaluationReviewService（P1c 评审池查询/决策 mock）。
 type fakeReviewService struct {
 	listItems []domain.ReviewItem

@@ -701,16 +701,20 @@ func (j judgeAdapter) Judge(ctx context.Context, req evalport.JudgeRequest) (eva
 	if j.completer == nil {
 		return evaldomain.AssertionResult{}, errors.New("LLM judge: no LLM completer configured")
 	}
+	userContent := fmt.Sprintf(
+		"Rubric:\n%s\n\nInput:\n%s\n\nExpected output:\n%s\n\nActual output:\n%s",
+		j.judgeRubric(ctx, req.Rubric), req.Input, req.ExpectedOutput, req.Actual,
+	)
+	if req.ToolSequence != "" {
+		userContent += "\n\nTool sequence:\n" + req.ToolSequence
+	}
 	response, err := j.completer.Complete(ctx, &llmgatewaydomain.CompletionRequest{
 		Model:       j.judgeModel(ctx, req.Model),
 		Temperature: temperaturePtrOrNil(j.judgeTemperature(ctx)),
 		MaxTokens:   constants.JudgeMaxTokens,
 		Messages: []llmgatewaydomain.Message{
 			{Role: "system", Content: "你是评测法官。只输出 JSON，不输出其他内容。"},
-			{Role: "user", Content: fmt.Sprintf(
-				"Rubric:\n%s\n\nInput:\n%s\n\nExpected output:\n%s\n\nActual output:\n%s",
-				j.judgeRubric(ctx, req.Rubric), req.Input, req.ExpectedOutput, req.Actual,
-			)},
+			{Role: "user", Content: userContent},
 		},
 	})
 	if err != nil {
@@ -1043,7 +1047,8 @@ func (a agentScenarioEvaluationAdapter) ExecuteRevision(
 	if err != nil {
 		return evalport.ExecutionResult{}, err
 	}
-	return evalport.ExecutionResult{Output: result.Output, TraceID: traceID, Tokens: result.TokensUsed, CostUSD: result.CostUSD, DurationMs: duration}, nil
+	return evalport.ExecutionResult{Output: result.Output, TraceID: traceID, Tokens: result.TokensUsed,
+		CostUSD: result.CostUSD, DurationMs: duration, Tools: mapToolObservations(result.ToolObservations)}, nil
 }
 
 func (l evaluationTenantLister) ListTenantIDs(ctx context.Context) ([]string, error) {
@@ -1093,20 +1098,28 @@ func mapEvaluationEvidence(evidence agentdomain.TraceEvidence) evalport.Observed
 			RevisionID: assignment.RevisionID, ExperimentID: assignment.ExperimentID, Variant: assignment.Variant,
 		}
 	}
-	tools := make([]evalport.ToolObservation, 0, len(evidence.Tools))
-	for _, tool := range evidence.Tools {
-		tools = append(tools, evalport.ToolObservation{
-			ToolName: tool.ToolName, ToolType: tool.ToolType, StepIndex: tool.StepIndex,
-			ProviderType: tool.ProviderType, CapabilityID: tool.CapabilityID,
-			Arguments: tool.Arguments, RawText: tool.RawText,
-		})
-	}
+	tools := mapToolObservations(evidence.Tools)
 	return evalport.ObservedTrace{
 		TraceID: evidence.TraceID, UserID: evidence.UserID, CostUSD: evidence.CostUSD, LatencyMs: evidence.LatencyMs,
 		Input: evidence.Input, Output: evidence.Output, TotalTokens: int64(evidence.TotalTokens), // TraceEvidence.TotalTokens(int) → ObservedTrace.TotalTokens(int64)
 		Success: evidence.Status == agentdomain.ExecStatusSuccess, SecurityViolation: evidence.SecurityViolation,
 		Assignments: assignments, Tools: tools,
 	}
+}
+
+// mapToolObservations 把执行链路工具调用序列（agent domain.ToolObservation）
+// 投影为评测域的 ToolObservation 摘要，逐字段拷贝并保持顺序。Arguments 原样
+// 透传（脱敏在评测结果落库层处理）。
+func mapToolObservations(tools []agentdomain.ToolObservation) []evalport.ToolObservation {
+	mapped := make([]evalport.ToolObservation, 0, len(tools))
+	for _, tool := range tools {
+		mapped = append(mapped, evalport.ToolObservation{
+			ToolName: tool.ToolName, ToolType: tool.ToolType, StepIndex: tool.StepIndex,
+			ProviderType: tool.ProviderType, CapabilityID: tool.CapabilityID,
+			Arguments: tool.Arguments, RawText: tool.RawText,
+		})
+	}
+	return mapped
 }
 
 func (c *Container) buildEvaluation(ctx context.Context) error {

@@ -519,6 +519,9 @@ CREATE TABLE IF NOT EXISTS eval_case_results (
     dimensions      JSONB NOT NULL DEFAULT '[]'::jsonb,
     failure_reason  TEXT NOT NULL DEFAULT '',
     trace_evidence   JSONB NOT NULL DEFAULT 'null',
+    process_pass     BOOL NOT NULL DEFAULT true,
+    process_failure  TEXT NOT NULL DEFAULT '',
+    tool_sequence    JSONB NOT NULL DEFAULT '[]'::jsonb,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_eval_case_results_run ON eval_case_results(run_id);
@@ -527,6 +530,10 @@ ALTER TABLE eval_case_results ADD COLUMN IF NOT EXISTS dimensions JSONB NOT NULL
 ALTER TABLE eval_case_results ADD COLUMN IF NOT EXISTS failure_reason TEXT NOT NULL DEFAULT '';
 -- P3c 评测输出升级（spec §6.3）：trace 组件级证据，照 actual_output 的 JSON-null round-trip 保留 nil 语义。
 ALTER TABLE eval_case_results ADD COLUMN IF NOT EXISTS trace_evidence JSONB NOT NULL DEFAULT 'null';
+-- P3c 评测输出升级（spec §6.5）：多步推理过程断言与工具序列，升级历史租户。
+ALTER TABLE eval_case_results ADD COLUMN IF NOT EXISTS process_pass BOOL NOT NULL DEFAULT true;
+ALTER TABLE eval_case_results ADD COLUMN IF NOT EXISTS process_failure TEXT NOT NULL DEFAULT '';
+ALTER TABLE eval_case_results ADD COLUMN IF NOT EXISTS tool_sequence JSONB NOT NULL DEFAULT '[]'::jsonb;
 
 -- 运行态观测明细（规格 §4.3 EvalObservation）。param_version/signals/cost_perf
 -- 为 JSONB 结构化字段，由 Go json.Marshal 后写入。
@@ -558,7 +565,7 @@ CREATE TABLE IF NOT EXISTS eval_review_items (
     resource_kind  TEXT NOT NULL,
     resource_id    TEXT NOT NULL,
     trigger_reason TEXT NOT NULL CHECK (trigger_reason IN
-        ('low_confidence','dimension_split','judge_rule_conflict','needs_review')),
+        ('low_confidence','dimension_split','judge_rule_conflict','needs_review','process_output_conflict')),
     snapshot       JSONB NOT NULL DEFAULT '{}'::jsonb,
     status         TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','reviewed')),
     human_verdict  TEXT NOT NULL DEFAULT '' CHECK (human_verdict IN
@@ -568,6 +575,13 @@ CREATE TABLE IF NOT EXISTS eval_review_items (
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     reviewed_at    TIMESTAMPTZ
 );
+-- 升级存量租户：§6.5 process_output_conflict 加入 trigger_reason 枚举后，历史租户
+-- 的旧 check 约束仍拒绝该值（过程断言失败入池即 500）。CREATE TABLE IF NOT EXISTS
+-- 不会重建已有表，故以 DROP IF EXISTS + ADD CONSTRAINT 幂等替换——每次 provision
+-- 先删后加，新旧租户最终都含 process_output_conflict。
+ALTER TABLE eval_review_items DROP CONSTRAINT IF EXISTS eval_review_items_trigger_reason_check;
+ALTER TABLE eval_review_items ADD CONSTRAINT eval_review_items_trigger_reason_check
+    CHECK (trigger_reason IN ('low_confidence','dimension_split','judge_rule_conflict','needs_review','process_output_conflict'));
 CREATE INDEX IF NOT EXISTS idx_eval_review_items_status
     ON eval_review_items(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_eval_review_items_source

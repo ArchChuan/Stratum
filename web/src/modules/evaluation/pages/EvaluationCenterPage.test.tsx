@@ -99,6 +99,31 @@ describe('EvaluationCenterPage', () => {
     await waitFor(() => expect(center.createEvaluation).toHaveBeenCalledWith(expect.objectContaining({
       resource: expect.objectContaining({ kind: 'agent', resource_id: 'agent-1', revision_id: 'agent-v1' }),
       name: '客服基线评测',
+      cases: [expect.objectContaining({ tool_spec: undefined, step_judge: undefined })],
+    })));
+  });
+
+  it('maps tool_spec and step_judge onto the created case when process fields are set', async () => {
+    center.createEvaluation.mockResolvedValue({ job_id: 'job-1', status: 'queued' });
+    renderPage();
+    fireEvent.click(screen.getByRole('button', { name: /新建评测/ }));
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: '目标资源' }));
+    fireEvent.click(await screen.findByText('客服 Agent（agent-1）'));
+    fireEvent.change(screen.getByLabelText('评测名称'), { target: { value: '工具链路评测' } });
+    fireEvent.change(screen.getByLabelText('用例名称'), { target: { value: '查天气' } });
+    fireEvent.change(screen.getByLabelText('测试输入'), { target: { value: '北京天气' } });
+    fireEvent.change(screen.getByLabelText('期望输出'), { target: { value: '晴天' } });
+    const mustCall = screen.getByRole('combobox', { name: '必调用工具' });
+    fireEvent.mouseDown(mustCall);
+    fireEvent.change(mustCall, { target: { value: 'weather' } });
+    fireEvent.keyDown(mustCall, { key: 'Enter', code: 'Enter', keyCode: 13 });
+    fireEvent.change(screen.getByLabelText('步骤判定标准'), { target: { value: '逐步评分' } });
+    fireEvent.click(screen.getByRole('button', { name: '创建并运行' }));
+    await waitFor(() => expect(center.createEvaluation).toHaveBeenCalledWith(expect.objectContaining({
+      cases: [expect.objectContaining({
+        tool_spec: { must_call: ['weather'] },
+        step_judge: { criteria: '逐步评分' },
+      })],
     })));
   });
 

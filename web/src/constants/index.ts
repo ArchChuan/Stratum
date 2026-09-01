@@ -83,6 +83,9 @@ export const EVALUATION_JOB_MAX_WAIT_MS = 120000;
 // 评测集生成采样上限（与后端 pkg/constants DefaultCaseSampleLimit/MaxCaseSampleLimit 一致）。
 export const EVALUATION_GENERATE_DEFAULT_MAX_CASES = 20;
 export const EVALUATION_GENERATE_MAX_CASES = 50;
+// 工具序列过程断言 max_calls 上限（与后端 pkg/constants evaluation.go 同步，
+// 前端表单 InputNumber 硬上限；仅约束表单输入，运行时后端为权威）。
+export const EVALUATION_MAX_CALLS_LIMIT = 50;
 
 export const MEMORY_SEARCH_LIMIT = 20;
 // 记忆事实分类白名单（与后端 internal/memory/domain/fact.go factCategoryAllowSet 一致）。

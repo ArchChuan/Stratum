@@ -16,6 +16,39 @@ export const judgeSpecSchema = z.object({
 }).optional();
 export type JudgeSpec = z.infer<typeof judgeSpecSchema>;
 
+// toolObservationSchema parses one tool invocation from the run tool sequence
+// (§6.5). The backend projects a strict subset of the agent ToolObservation,
+// so zod strips any extra fields the wire might carry.
+export const toolObservationSchema = z.object({
+  tool_name: z.string(),
+  tool_type: z.string().optional(),
+  step_index: z.number().optional(),
+  provider_type: z.string().optional(),
+  capability_id: z.string().optional(),
+  arguments: z.record(z.string(), z.unknown()).optional(),
+  raw_text: z.string().optional(),
+});
+export type ToolObservation = z.infer<typeof toolObservationSchema>;
+
+// toolSpecSchema is the deterministic tool-call rule (§6.5): must_call /
+// must_not_call / order constrain the execution tool sequence, max_calls caps
+// total invocations. Empty fields do not participate in validation.
+export const toolSpecSchema = z.object({
+  must_call: z.array(z.string()).optional(),
+  must_not_call: z.array(z.string()).optional(),
+  order: z.array(z.string()).optional(),
+  max_calls: z.number().optional(),
+}).optional();
+export type ToolSpec = z.infer<typeof toolSpecSchema>;
+
+// stepJudgeSchema is the step-level LLM rubric (§6.5): criteria scores the
+// tool sequence step by step. Empty criteria falls back to the platform
+// default rubric at runtime.
+export const stepJudgeSchema = z.object({
+  criteria: z.string().optional(),
+}).optional();
+export type StepJudge = z.infer<typeof stepJudgeSchema>;
+
 export const evaluationCaseSchema = z.object({
   id: z.string().optional(),
   name: z.string().optional().default(''),
@@ -23,6 +56,8 @@ export const evaluationCaseSchema = z.object({
   expected_output: z.unknown(),
   assertion_mode: z.enum(['exact', 'contains', 'regex', 'judge']),
   judge_spec: judgeSpecSchema,
+  tool_spec: toolSpecSchema,
+  step_judge: stepJudgeSchema,
   enabled: z.boolean().optional().default(true),
   // Provenance from auto-generation (Phase 3c): which production trace and
   // feedback signal the case was generated from, and why.
@@ -120,6 +155,12 @@ export const evaluationRunSchema = z.object({
       dimensions: z.array(dimensionScoreSchema).optional(),
       failure_reason: z.string().optional(),
       trace_evidence: observedTraceEvidenceSchema.optional(),
+      // process_pass/process_failure/tools are the §6.5 process assertions:
+      // the backend always emits process_pass (DB NOT NULL DEFAULT true),
+      // process_failure only on process failure, tools only when collected.
+      process_pass: z.boolean(),
+      process_failure: z.string().optional(),
+      tools: z.array(toolObservationSchema).optional(),
     }),
   ),
 });

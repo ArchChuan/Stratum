@@ -24,6 +24,33 @@ describe('CreateSuiteModal', () => {
     await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
 
+  it('collects tool_spec and step_judge from the always-visible process fields', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    render(<CreateSuiteModal open onClose={vi.fn()} onSubmit={onSubmit} />);
+
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: '资源类型' }));
+    fireEvent.click(await screen.findByText('技能'));
+    fireEvent.change(screen.getByLabelText('套件名称'), { target: { value: '工具链路基线' } });
+    fireEvent.change(screen.getByLabelText('用例名称'), { target: { value: '查天气' } });
+    fireEvent.change(screen.getByLabelText('测试输入'), { target: { value: '北京天气' } });
+    fireEvent.change(screen.getByLabelText('期望输出'), { target: { value: '晴天' } });
+
+    const mustCall = screen.getByRole('combobox', { name: '必调用工具' });
+    fireEvent.mouseDown(mustCall);
+    fireEvent.change(mustCall, { target: { value: 'weather' } });
+    fireEvent.keyDown(mustCall, { key: 'Enter', code: 'Enter', keyCode: 13 });
+    fireEvent.change(screen.getByLabelText('最大调用次数'), { target: { value: '5' } });
+    fireEvent.change(screen.getByLabelText('步骤判定标准'), { target: { value: '每一步都要说明依据' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /创\s*建/ }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
+      resource_kind: 'skill', name: '工具链路基线', case_name: '查天气',
+      input: '北京天气', expected_output: '晴天', assertion_mode: 'contains', enabled: true,
+      must_call: ['weather'], max_calls: 5, step_criteria: '每一步都要说明依据',
+    })));
+  });
+
   it('collects the judge model and rubric when assertion is AI 判定', async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     render(<CreateSuiteModal open onClose={vi.fn()} onSubmit={onSubmit} />);

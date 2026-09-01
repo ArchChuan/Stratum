@@ -107,34 +107,71 @@ func TestTriggersForObservation(t *testing.T) {
 	})
 }
 
+// TestTriggersForProcessConflict 覆盖过程/输出断言不一致的入池触发（§6.5 §6.6）：
+// 仅 output 通过 + 过程失败（true,false）触发 process_output_conflict，其余组合不触发。
+func TestTriggersForProcessConflict(t *testing.T) {
+	t.Run("output pass and process fail triggers conflict", func(t *testing.T) {
+		got := TriggersForProcessConflict(true, false)
+		if len(got) != 1 || got[0] != TriggerProcessOutputConflict {
+			t.Fatalf("got %v, want [process_output_conflict]", got)
+		}
+	})
+
+	t.Run("both pass yields no triggers", func(t *testing.T) {
+		if got := TriggersForProcessConflict(true, true); len(got) != 0 {
+			t.Fatalf("got %v, want none", got)
+		}
+	})
+
+	t.Run("both fail yields no triggers", func(t *testing.T) {
+		if got := TriggersForProcessConflict(false, false); len(got) != 0 {
+			t.Fatalf("got %v, want none", got)
+		}
+	})
+
+	t.Run("output fail and process pass yields no triggers", func(t *testing.T) {
+		if got := TriggersForProcessConflict(false, true); len(got) != 0 {
+			t.Fatalf("got %v, want none", got)
+		}
+	})
+}
+
 func TestTriggersForCaseResult(t *testing.T) {
 	cfg := ReviewConfig{LowConfidenceThreshold: 0.6}
 	passing := AssertionResult{Passed: true, Confidence: 0.9}
 
 	t.Run("passing assertion yields no triggers", func(t *testing.T) {
-		if got := TriggersForCaseResult(false, passing, cfg); len(got) != 0 {
+		if got := TriggersForCaseResult(false, true, true, passing, cfg); len(got) != 0 {
 			t.Fatalf("got %v, want none", got)
 		}
 	})
 
 	t.Run("needs review triggers", func(t *testing.T) {
-		got := TriggersForCaseResult(true, passing, cfg)
+		got := TriggersForCaseResult(true, true, true, passing, cfg)
 		if !containsReason(got, TriggerNeedsReview) {
 			t.Fatalf("got %v, want needs_review present", got)
 		}
 	})
 
 	t.Run("low confidence triggers", func(t *testing.T) {
-		got := TriggersForCaseResult(false, AssertionResult{Passed: true, Confidence: 0.3}, cfg)
+		got := TriggersForCaseResult(false, true, true, AssertionResult{Passed: true, Confidence: 0.3}, cfg)
 		if !containsReason(got, TriggerLowConfidence) {
 			t.Fatalf("got %v, want low_confidence present", got)
 		}
 	})
 
 	t.Run("both triggers coexist", func(t *testing.T) {
-		got := TriggersForCaseResult(true, AssertionResult{Passed: false, Confidence: 0.2}, cfg)
+		got := TriggersForCaseResult(true, true, true, AssertionResult{Passed: false, Confidence: 0.2}, cfg)
 		if !containsReason(got, TriggerNeedsReview) || !containsReason(got, TriggerLowConfidence) {
 			t.Fatalf("got %v, want needs_review + low_confidence", got)
+		}
+	})
+
+	t.Run("low confidence plus output pass and process fail", func(t *testing.T) {
+		got := TriggersForCaseResult(false, true, false, AssertionResult{Passed: true, Confidence: 0.3}, cfg)
+		want := []ReviewTriggerReason{TriggerLowConfidence, TriggerProcessOutputConflict}
+		if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+			t.Fatalf("got %v, want %v", got, want)
 		}
 	})
 }

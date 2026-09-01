@@ -19,6 +19,7 @@ describe('EditDraftCaseModal', () => {
     expect(screen.getByLabelText('用例名称')).toHaveValue('标准问候');
     expect(screen.getByLabelText('测试输入')).toHaveValue('你好');
     expect(screen.getByLabelText('期望输出')).toHaveValue('您好');
+    expect(screen.queryByText(/不可修改/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /保\s*存/ }));
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledWith({
@@ -30,6 +31,15 @@ describe('EditDraftCaseModal', () => {
   it('explains that the judge spec is immutable when editing a judge case', () => {
     const judgeCase: EvaluationCase = { ...containsCase, name: '总结判定', assertion_mode: 'judge' };
     render(<EditDraftCaseModal open draft={judgeCase} onClose={vi.fn()} onSubmit={vi.fn()} />);
-    expect(screen.getByText(/不可修改/)).toBeInTheDocument();
+    expect(screen.getByText(/工具序列与步骤判定在 case 进入草稿时确定/)).toBeInTheDocument();
+  });
+
+  it('warns that tool_spec and step_judge are immutable for a process-configured contains case', () => {
+    const processCase: EvaluationCase = {
+      ...containsCase, name: '工具链路', assertion_mode: 'contains',
+      tool_spec: { must_call: ['weather'], max_calls: 5 }, step_judge: { criteria: '逐步评分' },
+    };
+    render(<EditDraftCaseModal open draft={processCase} onClose={vi.fn()} onSubmit={vi.fn()} />);
+    expect(screen.getByText(/AI 判定、工具序列与步骤判定/)).toBeInTheDocument();
   });
 });

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
@@ -82,15 +83,19 @@ func (s *Service) SetPlatformVersion(fn func(ctx context.Context) (int64, bool, 
 	s.platformVersion = fn
 }
 
-// escalateCaseResult 通过评审池升级器判定评测集 judge 结果是否入池并幂等落条目
-// （fail-open：失败仅日志，不阻断评测流程）。
+// escalateCaseResult 通过评审池升级器判定评测集结果是否入池并幂等落条目
+// （fail-open：失败仅日志，不阻断评测流程）。ref 供条目 resource_kind/resource_id
+// 归因；outputPass/processPass 是输出断言与过程断言（§6.5）的通过结果，
+// 供 process_output_conflict 触发。
 func (s *Service) escalateCaseResult(
-	ctx context.Context, tenantID, runID string, result domain.EvalCaseResult, c domain.EvalCase, assertion domain.AssertionResult,
+	ctx context.Context, tenantID, runID string, ref domain.ResourceRef, result domain.EvalCaseResult,
+	c domain.EvalCase, assertion domain.AssertionResult, outputPass, processPass bool,
 ) {
 	if s.review == nil {
 		return
 	}
-	if err := s.review.TryEscalateCaseResult(ctx, tenantID, runID, result, c, assertion); err != nil {
+	err := s.review.TryEscalateCaseResult(ctx, tenantID, runID, ref, result, c, assertion, outputPass, processPass)
+	if err != nil {
 		s.logReviewEscalateError(ctx, err)
 		if s.metrics != nil {
 			s.metrics.IncEvalReviewEscalateFailure()
@@ -199,6 +204,7 @@ func (s *Service) runCase(
 	result.CostUSD = execution.CostUSD
 	result.DurationMs = execution.DurationMs
 	result.RAGEvidence = execution.RAGEvidence
+	result.Tools = execution.Tools
 
 	// Resolve trace evidence from Opik (best-effort: Opik unavailability must
 	// not block Agent execution or evaluation).
@@ -212,30 +218,145 @@ func (s *Service) runCase(
 		}
 	}
 
-	// Judge assertions dispatch to the LLM judge port; rule assertions stay
-	// in the domain's pure EvaluateAssertion.
-	if testCase.AssertionMode == domain.AssertionJudge {
-		assertion, result := s.judgeCase(ctx, testCase, result)
-		// 评审池内联触发（P1c §6.6）：仅 judge 实际产出判定（result.Error 为空）时
-		// 才可能入池；judge 关闭/故障是基础设施失败，不是评审信号。
-		if result.Error == "" {
-			s.escalateCaseResult(ctx, tenantID, runID, result, testCase, assertion)
-		}
-		return result
-	}
-
-	assertion, err := domain.EvaluateAssertion(testCase.AssertionMode, execution.Output, testCase.ExpectedOutput)
+	// 过程断言（§6.5）：tool_spec 确定性规则 + step_judge 可选 LLM 评分。判定
+	// 失败（或 judge 基础设施故障）时 fail-closed：置 Error + execution 归因返回，
+	// 绝不静默 pass。过程归因单独落 ProcessPass/ProcessFailure，不改输出归因。
+	verdict, err := s.evaluateProcess(ctx, testCase, result)
 	if err != nil {
 		result.Error = err.Error()
 		result.FailureReason = "execution"
 		return result
 	}
-	result.Passed = assertion.Passed
+	result.ProcessPass = verdict.Passed
+	result.ProcessFailure = verdict.Failure
+	// 步骤级 judge 维度先于输出断言维度并入结果（judgeCase 在其基础上追加）。
+	result.Dimensions = verdict.Dimensions
+
+	// 输出断言按 assertion_mode 分派：judge 分支走 LLM judge 端口，规则分支走
+	// domain 纯函数。两种分支都把过程断言与输出断言 AND——任一路失败即 case
+	// 失败；FailureReason 保持输出归因，过程归因单独在 ProcessFailure。两个分支
+	// 都在判定后按新签名触发评审池升级（§6.5 process_output_conflict）。
+	if testCase.AssertionMode == domain.AssertionJudge {
+		return s.judgeCaseResult(ctx, tenantID, runID, ref, testCase, result)
+	}
+	return s.ruleCaseResult(ctx, tenantID, runID, ref, testCase, execution.Output, result)
+}
+
+// judgeCaseResult 走 LLM judge 输出断言并把过程断言并入最终 Passed；随后内联
+// 触发评审池升级（P1c §6.6，仅 judge 实际产出判定时）。ref 供条目资源归因。
+func (s *Service) judgeCaseResult(
+	ctx context.Context, tenantID, runID string, ref domain.ResourceRef, testCase domain.EvalCase,
+	result domain.EvalCaseResult,
+) domain.EvalCaseResult {
+	assertion, result := s.judgeCase(ctx, testCase, result)
+	result.Passed = assertion.Passed && result.ProcessPass
+	if result.Error == "" {
+		s.escalateCaseResult(ctx, tenantID, runID, ref, result, testCase, assertion, assertion.Passed, result.ProcessPass)
+	}
+	return result
+}
+
+// ruleCaseResult 走 domain 纯函数规则断言并把过程断言并入最终 Passed；随后内联
+// 触发评审池升级（§6.5）：规则 case 无 judge 信号，仅 process_output_conflict
+// 可能入池，low_confidence 不生效。ref 供条目资源归因。
+func (s *Service) ruleCaseResult(
+	ctx context.Context, tenantID, runID string, ref domain.ResourceRef, testCase domain.EvalCase, actual any,
+	result domain.EvalCaseResult,
+) domain.EvalCaseResult {
+	assertion, err := domain.EvaluateAssertion(testCase.AssertionMode, actual, testCase.ExpectedOutput)
+	if err != nil {
+		result.Error = err.Error()
+		result.FailureReason = "execution"
+		return result
+	}
+	result.Passed = assertion.Passed && result.ProcessPass
 	result.Message = assertion.Message
 	if !assertion.Passed {
 		result.FailureReason = "assert:" + string(testCase.AssertionMode)
 	}
+	s.escalateCaseResult(ctx, tenantID, runID, ref, result, testCase, assertion, assertion.Passed, result.ProcessPass)
 	return result
+}
+
+// processVerdict 是过程断言（§6.5）的合并判定：tool_spec 确定性规则与 step_judge
+// LLM 评分两路独立、逐路收集失败。Failure 是过程归因失败描述（多失败以 "; " 连接）；
+// Dimensions 来自步骤级 judge，由调用方并入 result.Dimensions。
+type processVerdict struct {
+	Passed     bool
+	Failure    string
+	Dimensions []domain.DimensionScore
+}
+
+// evaluateProcess 判定 case 的过程断言：ToolSpec!=nil → EvaluateToolSequence
+// 确定性规则；StepJudge!=nil → judgeProcess LLM 步骤级评分。任一失败即过程判定
+// 失败；step_judge 基础设施故障（judge nil/disabled/marshal/解析失败）向上返回
+// error，由 runCase fail-closed 处理，绝不静默 pass。
+func (s *Service) evaluateProcess(
+	ctx context.Context, testCase domain.EvalCase, result domain.EvalCaseResult,
+) (processVerdict, error) {
+	verdict := processVerdict{Passed: true}
+	var failures []string
+
+	if testCase.ToolSpec != nil {
+		assertion := domain.EvaluateToolSequence(toolNames(result.Tools), *testCase.ToolSpec)
+		failures = append(failures, assertion.Failures...)
+	}
+	if testCase.StepJudge != nil {
+		ja, err := s.judgeProcess(ctx, testCase, *testCase.StepJudge, result)
+		if err != nil {
+			return processVerdict{}, err
+		}
+		verdict.Dimensions = append(verdict.Dimensions, ja.Dimensions...)
+		if !ja.Passed {
+			failures = append(failures, judgeFailureReason(ja))
+		}
+	}
+
+	if len(failures) > 0 {
+		verdict.Passed = false
+		verdict.Failure = strings.Join(failures, "; ")
+	}
+	return verdict, nil
+}
+
+// judgeProcess 用 LLM 对工具序列做步骤级评分（§6.5 step_judge）。fail-closed：
+// judge nil/disabled 或输入 marshal 失败 → 返回 error。Model 为空表示走平台默认
+// 模型；Rubric 为空时由 judge 适配层回退平台默认步骤 rubric。
+func (s *Service) judgeProcess(
+	ctx context.Context, testCase domain.EvalCase, stepJudge domain.StepJudge, result domain.EvalCaseResult,
+) (domain.AssertionResult, error) {
+	if s.judge == nil || !s.judge.Enabled(ctx) {
+		return domain.AssertionResult{}, errors.New("LLM judge disabled")
+	}
+	inputJSON, err := json.Marshal(testCase.Input)
+	if err != nil {
+		return domain.AssertionResult{}, fmt.Errorf("step judge: marshal input: %w", err)
+	}
+	expectedJSON, err := json.Marshal(testCase.ExpectedOutput)
+	if err != nil {
+		return domain.AssertionResult{}, fmt.Errorf("step judge: marshal expected output: %w", err)
+	}
+	actualJSON, err := json.Marshal(result.Actual)
+	if err != nil {
+		return domain.AssertionResult{}, fmt.Errorf("step judge: marshal actual output: %w", err)
+	}
+	return s.judge.Judge(ctx, port.JudgeRequest{
+		Model:          "",
+		Rubric:         stepJudge.Criteria,
+		Input:          string(inputJSON),
+		ExpectedOutput: string(expectedJSON),
+		Actual:         string(actualJSON),
+		ToolSequence:   domain.FormatToolSequence(result.Tools),
+	})
+}
+
+// toolNames 从工具观察序列提取工具名列表（EvaluateToolSequence 的输入）。
+func toolNames(tools []domain.ToolObservation) []string {
+	names := make([]string, 0, len(tools))
+	for _, t := range tools {
+		names = append(names, t.ToolName)
+	}
+	return names
 }
 
 // judgeCase runs the LLM judge assertion for a judge case. Fail-closed: a
@@ -285,7 +406,9 @@ func (s *Service) judgeCase(ctx context.Context, testCase domain.EvalCase, resul
 	}
 	result.Passed = assertion.Passed
 	result.Message = assertion.Message
-	result.Dimensions = assertion.Dimensions
+	// 步骤级 judge 维度已由 runCase 预置到 result.Dimensions；输出维度追加合并，
+	// 保持单一路径的既有语义（nil 起点 → 仅输出维度）。
+	result.Dimensions = append(result.Dimensions, assertion.Dimensions...)
 	result.FailureReason = judgeFailureReason(assertion)
 	return assertion, result
 }

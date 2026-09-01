@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
 type AssertionMode string
@@ -56,6 +58,12 @@ type EvalCase struct {
 	// parameters and the registered global rubric respectively. Persisted in
 	// the evaluator_config JSONB column (never written before Phase 3).
 	JudgeSpec *JudgeSpec `json:"judge_spec,omitempty"`
+	// ToolSpec 是工具序列确定性过程断言（§6.5）：must_call / must_not_call /
+	// order / max_calls。nil 表示不做工具序列规则校验。
+	ToolSpec *ToolSpec `json:"tool_spec,omitempty"`
+	// StepJudge 是步骤级 LLM rubric（§6.5）：对工具序列逐步骤评分。nil 表示
+	// 不做步骤级 judge。Criteria 空时回退平台默认步骤 rubric。
+	StepJudge *StepJudge `json:"step_judge,omitempty"`
 	// NeedsReview 标记该 case 判定后必须进入人工评审池（spec §6.6 触发规则 4）。
 	// 仅对 assertion_mode=judge 生效；规则断言不触发评审池。
 	NeedsReview bool `json:"needs_review,omitempty"`
@@ -74,6 +82,8 @@ type EvalCase struct {
 // compatibility.
 type EvalCaseConfig struct {
 	JudgeSpec  *JudgeSpec      `json:"judge_spec,omitempty"`
+	ToolSpec   *ToolSpec       `json:"tool_spec,omitempty"`
+	StepJudge  *StepJudge      `json:"step_judge,omitempty"`
 	Generation *GenerationMeta `json:"generation,omitempty"`
 }
 
@@ -84,30 +94,33 @@ type GenerationMeta struct {
 	GenerateReason string `json:"generate_reason,omitempty"`
 }
 
-// ToConfig packs the case's judge spec and provenance for persistence.
+// ToConfig packs the case's judge spec, process assertions (tool_spec /
+// step_judge) and provenance for persistence.
 func (c EvalCase) ToConfig() *EvalCaseConfig {
-	cfg := &EvalCaseConfig{JudgeSpec: c.JudgeSpec}
+	cfg := &EvalCaseConfig{JudgeSpec: c.JudgeSpec, ToolSpec: c.ToolSpec, StepJudge: c.StepJudge}
 	if c.SourceTraceID != "" || c.FeedbackRef != "" || c.GenerateReason != "" {
 		cfg.Generation = &GenerationMeta{
 			SourceTraceID: c.SourceTraceID, FeedbackRef: c.FeedbackRef, GenerateReason: c.GenerateReason,
 		}
 	}
-	if cfg.JudgeSpec == nil && cfg.Generation == nil {
+	if cfg.JudgeSpec == nil && cfg.ToolSpec == nil && cfg.StepJudge == nil && cfg.Generation == nil {
 		return nil
 	}
 	return cfg
 }
 
-// ApplyConfig fills JudgeSpec and provenance from the persisted config,
-// accepting both the wrapped layout and the bare JudgeSpec written before
-// Phase 3c.
+// ApplyConfig fills JudgeSpec, process assertions and provenance from the
+// persisted config, accepting both the wrapped layout and the bare JudgeSpec
+// written before Phase 3c.
 func (c *EvalCase) ApplyConfig(raw []byte) {
 	if len(raw) == 0 {
 		return
 	}
 	var cfg EvalCaseConfig
-	if err := json.Unmarshal(raw, &cfg); err == nil && (cfg.JudgeSpec != nil || cfg.Generation != nil) {
+	if err := json.Unmarshal(raw, &cfg); err == nil && (cfg.JudgeSpec != nil || cfg.ToolSpec != nil || cfg.StepJudge != nil || cfg.Generation != nil) {
 		c.JudgeSpec = cfg.JudgeSpec
+		c.ToolSpec = cfg.ToolSpec
+		c.StepJudge = cfg.StepJudge
 		if cfg.Generation != nil {
 			c.SourceTraceID = cfg.Generation.SourceTraceID
 			c.FeedbackRef = cfg.Generation.FeedbackRef
@@ -125,6 +138,124 @@ func (c *EvalCase) ApplyConfig(raw []byte) {
 type JudgeSpec struct {
 	Model  string `json:"model,omitempty"`
 	Rubric string `json:"rubric,omitempty"`
+}
+
+// ToolSpec 是工具序列确定性过程断言（§6.5）：约束执行链路上工具调用的
+// 行为。空字段不参与校验；MaxCalls <=0 表示不限次数。
+type ToolSpec struct {
+	// MustCall 是必须被调用的工具名；缺一即败（process:must_call:<tool>）。
+	MustCall []string `json:"must_call,omitempty"`
+	// MustNotCall 是禁止调用的工具名；命中即败（process:must_not_call:<tool>）。
+	MustNotCall []string `json:"must_not_call,omitempty"`
+	// Order 要求工具按给定顺序出现（greedy 子序列，允许跨多余调用）；
+	// 违背即败（process:order）。
+	Order []string `json:"order,omitempty"`
+	// MaxCalls 是工具调用次数上限；超限即败（process:max_calls）。<=0 = 不限。
+	MaxCalls int `json:"max_calls,omitempty"`
+}
+
+// StepJudge 是步骤级 LLM rubric（§6.5）：对工具序列逐步骤评分。Criteria
+// 为空时回退平台默认步骤 rubric。
+type StepJudge struct {
+	Criteria string `json:"criteria,omitempty"`
+}
+
+// ProcessAssertion 是工具序列过程断言的判定结果。Passed 与 Failures 同源：
+// Failures 为空即通过。Failures 逐项归因，如 "process:must_not_call:delete"。
+type ProcessAssertion struct {
+	Passed   bool
+	Failures []string
+}
+
+// EvaluateToolSequence 是过程断言纯函数（无 IO、无副作用）：逐项检查
+// must_call / must_not_call / order（greedy 子序列）/ max_calls，收集全部
+// 失败而非首个失败即返回。空 spec 恒通过。
+func EvaluateToolSequence(toolNames []string, spec ToolSpec) ProcessAssertion {
+	var failures []string
+	for _, tool := range spec.MustCall {
+		if !containsTool(toolNames, tool) {
+			failures = append(failures, "process:must_call:"+tool)
+		}
+	}
+	for _, tool := range spec.MustNotCall {
+		if containsTool(toolNames, tool) {
+			failures = append(failures, "process:must_not_call:"+tool)
+		}
+	}
+	if len(spec.Order) > 0 && !orderSatisfied(toolNames, spec.Order) {
+		failures = append(failures, "process:order")
+	}
+	if spec.MaxCalls > 0 && len(toolNames) > spec.MaxCalls {
+		failures = append(failures, "process:max_calls")
+	}
+	return ProcessAssertion{Passed: len(failures) == 0, Failures: failures}
+}
+
+// containsTool reports whether toolNames contains the target tool name.
+func containsTool(toolNames []string, tool string) bool {
+	for _, name := range toolNames {
+		if name == tool {
+			return true
+		}
+	}
+	return false
+}
+
+// orderSatisfied 用 greedy 子序列匹配判断 order 是否被满足：顺序遍历
+// toolNames，命中当前期望项即前进，允许跨多余调用；全部命中才算满足。
+func orderSatisfied(toolNames, order []string) bool {
+	i := 0
+	for _, name := range toolNames {
+		if i < len(order) && name == order[i] {
+			i++
+		}
+	}
+	return i == len(order)
+}
+
+// ToolObservation 是执行链路中一次工具调用的最小可观测摘要（评审池详情展示
+// 工具序列 / step_judge 输入用；agent domain.ToolObservation 的 summary 投影，
+// 见 mapEvaluationEvidence）。由 port 迁移至此（domain 不 import port）。
+type ToolObservation struct {
+	ToolName     string         `json:"tool_name"`
+	ToolType     string         `json:"tool_type"`
+	StepIndex    int            `json:"step_index"`
+	ProviderType string         `json:"provider_type"`
+	CapabilityID string         `json:"capability_id"`
+	Arguments    map[string]any `json:"arguments,omitempty"`
+	RawText      string         `json:"raw_text,omitempty"`
+}
+
+// FormatToolSequence 把工具序列渲染成 judge 可读文本：每行 "[step] name"，
+// RawText 非空时追加 ": <raw_text>"。工具数超过 constants.StepJudgeMaxTools
+// 时截断序列；单条 RawText 超过 constants.StepJudgeRawTextMaxChars 时按 rune
+// 截断并追加省略号。
+func FormatToolSequence(tools []ToolObservation) string {
+	if len(tools) > constants.StepJudgeMaxTools {
+		tools = tools[:constants.StepJudgeMaxTools]
+	}
+	var b strings.Builder
+	for i, tool := range tools {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(fmt.Sprintf("[%d] %s", tool.StepIndex, tool.ToolName))
+		if tool.RawText != "" {
+			b.WriteString(": ")
+			b.WriteString(truncateRunes(tool.RawText, constants.StepJudgeRawTextMaxChars))
+		}
+	}
+	return b.String()
+}
+
+// truncateRunes 按 rune 截断字符串：长度超过 max 时保留前 max 个 rune 并
+// 追加省略号。
+func truncateRunes(s string, max int) string {
+	runes := []rune(s)
+	if len(runes) <= max {
+		return s
+	}
+	return string(runes[:max]) + "…"
 }
 
 type EvalSuiteRevision struct {
@@ -170,13 +301,25 @@ type EvalCaseResult struct {
 	// evaluations; nil for other resource kinds. It replaces brittle parsing
 	// of the serialized Actual payload.
 	RAGEvidence *RAGEvidenceInfo `json:"rag_evidence,omitempty"`
-	// Dimensions 是 judge case 的语义维度分数（spec §6.2），由 judge 判定拷贝；
-	// 规则断言 case 为空。
+	// Dimensions 是 judge/step_judge 产出的语义维度分数（spec §6.2）；规则断言
+	// case 未配置 step_judge 时为空。
 	Dimensions []DimensionScore `json:"dimensions,omitempty"`
 	// FailureReason 是 case 失败的主要归因（spec §6.2）：judge 失败 →
 	// "dimension:<名>"；规则断言失败 → "assert:<mode>"；执行失败 → "execution"。
 	// 通过 case 为空。
 	FailureReason string `json:"failure_reason,omitempty"`
+	// ProcessPass 是工具序列过程断言（§6.5）的判定结果：true 表示过程断言通过
+	// 或未配置过程断言。与 Passed 独立：Passed 是输出归因，ProcessPass 是过程
+	// 归因；最终 Passed = 输出断言 && ProcessPass。无 omitempty（仿 passed，
+	// 过程判定始终在结果 JSON 可见）。
+	ProcessPass bool `json:"process_pass"`
+	// ProcessFailure 是过程断言失败归因（§6.5）：如 "process:must_not_call:delete"
+	// 或步骤级 judge 的主要失败维度。与 FailureReason（输出归因）独立；过程通过
+	// 时为空。
+	ProcessFailure string `json:"process_failure,omitempty"`
+	// Tools 是执行链路工具调用序列（§6.5），过程断言与评审详情展示用；未采集
+	// 时为空。
+	Tools []ToolObservation `json:"tools,omitempty"`
 }
 
 // RAGEvidenceInfo is the per-case retrieval signal for knowledge runs. The

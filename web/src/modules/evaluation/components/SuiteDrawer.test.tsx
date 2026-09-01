@@ -30,6 +30,9 @@ const draft = {
     { id: 'c2', name: '总结判定', input: '帮我总结', expected_output: '要点', assertion_mode: 'judge',
       judge_spec: { model: 'judge-v1', rubric: '总结要点覆盖度' }, enabled: true,
       source_trace_id: 'trace-1', generate_reason: '负样本优先' },
+    { id: 'c3', name: '工具链路', input: '查天气', expected_output: '晴天', assertion_mode: 'contains',
+      tool_spec: { must_call: ['weather'], must_not_call: ['delete'], order: ['search', 'weather'], max_calls: 5 },
+      step_judge: { criteria: '逐步评分' }, enabled: true },
   ],
 };
 
@@ -54,7 +57,17 @@ describe('SuiteDrawer', () => {
     expect(screen.getByText(/judge-v1/)).toBeInTheDocument();
     expect(screen.getByText(/trace-1/)).toBeInTheDocument();
     expect(screen.getByText('负样本优先')).toBeInTheDocument();
-    expect(screen.getAllByRole('button', { name: /编\s*辑/ })).toHaveLength(2);
+    expect(screen.getAllByRole('button', { name: /编\s*辑/ })).toHaveLength(3);
+  });
+
+  it('surfaces tool_spec and step_judge summaries for audit', async () => {
+    render(<SuiteDrawer suite={suite} open onClose={vi.fn()} canManage onChanged={vi.fn()} />);
+
+    expect(await screen.findByText('工具链路')).toBeInTheDocument();
+    expect(screen.getByText(/必调用:weather/)).toBeInTheDocument();
+    expect(screen.getByText(/禁调用:delete/)).toBeInTheDocument();
+    expect(screen.getByText(/上限:5/)).toBeInTheDocument();
+    expect(screen.getByText(/步骤判定：逐步评分/)).toBeInTheDocument();
   });
 
   it('publishes after confirmation and closes with a refresh', async () => {

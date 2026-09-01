@@ -4,6 +4,7 @@ import {
   candidatePageSchema,
   dimensionScoreSchema,
   errorResponseSchema,
+  evaluationCaseSchema,
   evaluationJobSchema,
   evaluationRunSchema,
   experimentPageSchema,
@@ -178,17 +179,58 @@ describe('dimensionScoreSchema', () => {
   });
 });
 
+describe('evaluationCaseSchema', () => {
+  it('parses tool_spec and step_judge on a case', () => {
+    const testCase = evaluationCaseSchema.parse({
+      name: '工具链路', input: '查天气', expected_output: '晴天', assertion_mode: 'contains',
+      tool_spec: { must_call: ['weather'], must_not_call: ['delete'], order: ['search', 'weather'], max_calls: 5 },
+      step_judge: { criteria: '每一步都应给出清晰解释' },
+    });
+    expect(testCase.tool_spec?.must_call).toEqual(['weather']);
+    expect(testCase.tool_spec?.order).toEqual(['search', 'weather']);
+    expect(testCase.tool_spec?.max_calls).toBe(5);
+    expect(testCase.step_judge?.criteria).toContain('清晰解释');
+  });
+
+  it('omits tool_spec and step_judge when the case has none', () => {
+    const testCase = evaluationCaseSchema.parse({
+      name: '简单', input: 'hi', expected_output: 'hello', assertion_mode: 'exact',
+    });
+    expect(testCase.tool_spec).toBeUndefined();
+    expect(testCase.step_judge).toBeUndefined();
+  });
+});
+
 describe('evaluationRunSchema', () => {
   it('parses run results with dimensions and failure_reason', () => {
     const run = evaluationRunSchema.parse({
       id: 'r1', resource: { kind: 'skill', resource_id: 's1', revision_id: 'v1' },
       suite_revision_id: 'rev-1', passed: false, total_cases: 1, passed_cases: 0,
       metrics: { version: { suite_revision_id: 'rev-1', platform_seq: 3, resource_version: 'v1' } },
-      results: [{ case_id: 'c1', passed: false, dimensions: [{ name: 'faithfulness', score: 0.3, passed: false }], failure_reason: 'dimension:faithfulness', trace_evidence: { cost_usd: 0.05, latency_ms: 200, success: false, tool_call_count: 3, tool_error_count: 1 } }],
+      results: [{ case_id: 'c1', passed: false, process_pass: true, dimensions: [{ name: 'faithfulness', score: 0.3, passed: false }], failure_reason: 'dimension:faithfulness', trace_evidence: { cost_usd: 0.05, latency_ms: 200, success: false, tool_call_count: 3, tool_error_count: 1 } }],
     });
     expect(run.results[0].failure_reason).toBe('dimension:faithfulness');
     expect(run.results[0].dimensions?.[0].score).toBe(0.3);
     expect(run.results[0].trace_evidence?.latency_ms).toBe(200);
+  });
+
+  it('parses process_pass, process_failure and the tool sequence on a result', () => {
+    const run = evaluationRunSchema.parse({
+      id: 'r2', resource: { kind: 'skill', resource_id: 's1', revision_id: 'v1' },
+      suite_revision_id: 'rev-1', passed: false, total_cases: 1, passed_cases: 0,
+      results: [{
+        case_id: 'c1', passed: true, process_pass: false,
+        process_failure: 'process:must_not_call:delete',
+        tools: [{ tool_name: 'delete', tool_type: 'mcp', step_index: 2, provider_type: 'zhipu',
+          capability_id: 'cap-1', arguments: { key: 'value' }, raw_text: '删除一行' }],
+      }],
+    });
+    const result = run.results[0];
+    expect(result.process_pass).toBe(false);
+    expect(result.process_failure).toBe('process:must_not_call:delete');
+    expect(result.tools?.[0].tool_name).toBe('delete');
+    expect(result.tools?.[0].arguments).toEqual({ key: 'value' });
+    expect(result.tools?.[0].raw_text).toBe('删除一行');
   });
 });
 

@@ -24,6 +24,7 @@ func aggregateRunMetrics(run domain.EvalRun, version runVersionAnchor) map[strin
 	metrics := map[string]any{
 		"pass_rate":         0.0,
 		"overall_pass_rate": 0.0,
+		"process_pass_rate": 0.0,
 		"total_cases":       run.TotalCases,
 		"cost":              map[string]any{"total_usd": 0.0, "avg_usd": 0.0},
 		"latency":           map[string]any{},
@@ -44,14 +45,21 @@ func aggregateRunMetrics(run domain.EvalRun, version runVersionAnchor) map[strin
 
 	var totalTokens int
 	var totalCostUSD float64
+	var processPassed int
 	latencies := make([]int64, 0, len(run.Results))
 	for _, result := range run.Results {
 		totalTokens += result.Tokens
 		totalCostUSD += result.CostUSD
+		if result.ProcessPass {
+			processPassed++
+		}
 		if result.DurationMs > 0 {
 			latencies = append(latencies, int64(result.DurationMs))
 		}
 	}
+	// process_pass_rate 是过程断言通过比例（§6.5）：分母为全部已评测结果，
+	// 未配置过程断言的 case 其 ProcessPass 为 true，计入分子。
+	metrics["process_pass_rate"] = float64(processPassed) / float64(len(run.Results))
 	metrics["total_tokens"] = totalTokens
 	metrics["total_cost_usd"] = totalCostUSD
 	metrics["avg_tokens_per_case"] = float64(totalTokens) / float64(len(run.Results))
