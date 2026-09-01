@@ -14,6 +14,7 @@
 - **多租户 DDL**：`eval_case_results` 新列走 `pkg/storage/postgres/tenant_schema.sql`（tenant-only 唯一基线）：`CREATE TABLE IF NOT EXISTS` 同步 + `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` 升级历史租户；NOT NULL 带安全默认值（`process_pass BOOL NOT NULL DEFAULT true`）。禁止放 `pkg/migration/sql/`。
 - **工具序列脱敏**：落库前 `Arguments` 复用 `sanitizeValue`（run_repository.go）、`RawText` 走 `sensitiveText` 正则（`$1=[REDACTED]`）。
 - **step_judge fail-closed**：judge nil/disabled/解析失败 → `result.Error` + `FailureReason="execution"`，不静默 pass（与 `judgeCase` 同语义）。
+- **step_judge 模型共用 judge（决策：保持共用，文档说明）**：step_judge 不设独立模型参数，统一走平台参数 `evaluation.judge.model`（与 judgeCase / observation 共用）；case 级 `judge_spec.model` 可单独覆盖。用户决策保持共用，仅文档记录，不改代码。
 - **process 冲突入池只在有冲突时**：规则 case 无 judge 信号，`TryEscalateCaseResult` 按 `AssertionMode` 分支——judge case 走完整 `TriggersForCaseResult`，规则 case 只 `TriggersForProcessConflict`（避免低置信误触发）。
 - **proton 契约唯一事实源**：`proto/evaluation/evaluation.proto`；改后 `make proto-gen`（DTO 不入 git）。`UpdateDraftCaseRequest` 不携带 tool_spec/step_judge（沿用锁定）。
 - **Go 质量门禁**：圈复杂度≤10、认知≤15、行≤120、嵌套≤4；行为数字禁止内联（`pkg/constants/evaluation.go` 加 `StepJudgeMaxTools`/`StepJudgeRawTextMaxChars`；`web/src/constants/index.ts` 加 `EVALUATION_MAX_CALLS_LIMIT`）。

@@ -161,6 +161,7 @@ type EvaluationPoint struct {
 **judge 成本控制**：
 
 - judge 用小/便宜模型（`judgeAdapter` 模型可配），独立于执行模型。
+- **判定环节共用 judge 模型（决策：保持共用，文档说明）**：judgeCase / step_judge / observation 三处判定统一走平台参数 `evaluation.judge.model`；case 级 `judge_spec.model` 可单独覆盖，无需新增平台参数。模型解析：case 级 `judge_spec.model` → 平台参数 `evaluation.judge.model` → LLMGateway 解析链兜底（provider 默认 / 全局目录）。case 生成模型独立（`evaluation.optimizer.model`）。
 - 多维打分一次调用出全部维度，不按维度拆调用。
 - **渐进式判定**：规则断言能判定的（exact/contains/regex）不调 judge，只有规则判不了才走 judge。
 - 运行态采样而非全量；评测集哨兵级全量、深度级按需抽样。
