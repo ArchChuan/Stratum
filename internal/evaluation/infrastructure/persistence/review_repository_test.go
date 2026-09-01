@@ -89,6 +89,9 @@ func TestPgReviewRepositoryGetItem(t *testing.T) {
 	if got == nil || got.TriggerReason != domain.TriggerLowConfidence || got.Status != domain.ReviewStatusPending {
 		t.Fatalf("unexpected item: %+v", got)
 	}
+	if got.RiskLevel != domain.ReviewRiskMedium {
+		t.Fatalf("item risk = %v, want medium (low_confidence)", got.RiskLevel)
+	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("expectations not met: %v", err)
 	}
@@ -160,7 +163,7 @@ func TestPgReviewRepositoryListItems(t *testing.T) {
 			"low_confidence", `{"note":"x"}`, "pending", "", "", "", now, nil).
 		AddRow("ri-2", "case_result", "cr-2", "run-cr-2", "t-cr-2", "skill", "s1",
 			"dimension_split", `{"note":"x"}`, "pending", "", "", "", now, nil)
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, source_type, source_id, run_id, trace_id, resource_kind, resource_id, trigger_reason, snapshot, status, human_verdict, reviewer, review_reason, created_at, reviewed_at FROM eval_review_items WHERE 1=1 ORDER BY created_at DESC LIMIT $1 OFFSET $2`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, source_type, source_id, run_id, trace_id, resource_kind, resource_id, trigger_reason, snapshot, status, human_verdict, reviewer, review_reason, created_at, reviewed_at FROM eval_review_items WHERE 1=1 ORDER BY CASE trigger_reason WHEN 'judge_rule_conflict' THEN 0 WHEN 'process_output_conflict' THEN 0 WHEN 'low_confidence' THEN 1 WHEN 'dimension_split' THEN 1 WHEN 'needs_review' THEN 1 ELSE 2 END, created_at DESC LIMIT $1 OFFSET $2`)).
 		WithArgs(10, 0).
 		WillReturnRows(listRows)
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COUNT(*) FROM eval_review_items WHERE 1=1`)).
@@ -176,6 +179,9 @@ func TestPgReviewRepositoryListItems(t *testing.T) {
 	}
 	if items[0].TriggerReason != domain.TriggerLowConfidence {
 		t.Fatalf("first item reason = %v, want low_confidence", items[0].TriggerReason)
+	}
+	if items[0].RiskLevel != domain.ReviewRiskMedium {
+		t.Fatalf("first item risk = %v, want medium (low_confidence)", items[0].RiskLevel)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("expectations not met: %v", err)

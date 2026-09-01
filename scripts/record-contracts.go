@@ -412,7 +412,7 @@ func recordReviewRoute(router http.Handler, tokens iamport.TokenService, method,
 		// pending → reviewed 转换后 reviewed_at 为 live 时间戳：仅断言结构。
 		c.WantBodyRE = `\{"id":"review-1","source_type":"observation","source_id":"obs-1",` +
 			`"run_id":"run-1","trace_id":"trace-1","resource_kind":"agent","resource_id":"agent-1",` +
-			`"trigger_reason":"low_confidence","snapshot":\{"signals":\{"judge":\[\]\}\},` +
+			`"trigger_reason":"low_confidence","risk_level":"medium","snapshot":\{"signals":\{"judge":\[\]\}\},` +
 			`"status":"reviewed","human_verdict":"pass","reviewer":"contract-admin",` +
 			`"review_reason":"contract-approved","created_at":"2026-01-01T00:00:00Z",` +
 			`"reviewed_at":"[^"]*"\}`
@@ -804,6 +804,7 @@ func contractReviewItem() *domain.ReviewItem {
 		ResourceKind:  domain.ResourceKindAgent,
 		ResourceID:    "agent-1",
 		TriggerReason: domain.TriggerLowConfidence,
+		RiskLevel:     domain.ReviewRiskMedium,
 		Snapshot:      map[string]any{"signals": map[string]any{"judge": []any{}}},
 		Status:        domain.ReviewStatusPending,
 		CreatedAt:     time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),

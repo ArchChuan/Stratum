@@ -100,6 +100,30 @@ func TestTriggersForObservation(t *testing.T) {
 		}
 	})
 
+	t.Run("boundary confidence triggers low confidence", func(t *testing.T) {
+		o := obs()
+		o.Signals.Judge = []JudgeSignal{{Dimension: "faithfulness", Score: 1.0, Confidence: 0.5, Reason: "理由充分"}}
+		if got := TriggersForObservation(o, cfg); !containsReason(got, TriggerLowConfidence) {
+			t.Fatalf("got %v, want low_confidence present", got)
+		}
+	})
+
+	t.Run("vague reason triggers low confidence", func(t *testing.T) {
+		o := obs()
+		o.Signals.Judge = []JudgeSignal{{Dimension: "faithfulness", Score: 1.0, Confidence: 0.9, Reason: "不确定"}}
+		if got := TriggersForObservation(o, cfg); !containsReason(got, TriggerLowConfidence) {
+			t.Fatalf("got %v, want low_confidence present", got)
+		}
+	})
+
+	t.Run("substantive reason and high confidence do not trigger", func(t *testing.T) {
+		o := obs()
+		o.Signals.Judge = []JudgeSignal{{Dimension: "faithfulness", Score: 1.0, Confidence: 0.9, Reason: "输出完全符合预期"}}
+		if got := TriggersForObservation(o, cfg); containsReason(got, TriggerLowConfidence) {
+			t.Fatalf("got %v, want no low_confidence", got)
+		}
+	})
+
 	t.Run("nil observation yields no triggers", func(t *testing.T) {
 		if got := TriggersForObservation(nil, cfg); len(got) != 0 {
 			t.Fatalf("got %v, want none", got)
@@ -138,7 +162,9 @@ func TestTriggersForProcessConflict(t *testing.T) {
 
 func TestTriggersForCaseResult(t *testing.T) {
 	cfg := ReviewConfig{LowConfidenceThreshold: 0.6}
-	passing := AssertionResult{Passed: true, Confidence: 0.9}
+	// 空 Message 现在按 spec §6.6 视为含糊（hasVagueReason("")=true）→ 触发 low_confidence；
+	// 非触发场景必须携带实质理由。
+	passing := AssertionResult{Passed: true, Confidence: 0.9, Message: "输出完全符合预期"}
 
 	t.Run("passing assertion yields no triggers", func(t *testing.T) {
 		if got := TriggersForCaseResult(false, true, true, passing, cfg); len(got) != 0 {
@@ -167,6 +193,27 @@ func TestTriggersForCaseResult(t *testing.T) {
 		}
 	})
 
+	t.Run("boundary confidence triggers low confidence", func(t *testing.T) {
+		got := TriggersForCaseResult(false, true, true, AssertionResult{Passed: true, Confidence: 0.5}, cfg)
+		if !containsReason(got, TriggerLowConfidence) {
+			t.Fatalf("got %v, want low_confidence present", got)
+		}
+	})
+
+	t.Run("vague overall reason triggers low confidence", func(t *testing.T) {
+		got := TriggersForCaseResult(false, true, true, AssertionResult{Passed: true, Confidence: 0.9, Message: "无法判断"}, cfg)
+		if !containsReason(got, TriggerLowConfidence) {
+			t.Fatalf("got %v, want low_confidence present", got)
+		}
+	})
+
+	t.Run("substantive message and high confidence do not trigger", func(t *testing.T) {
+		got := TriggersForCaseResult(false, true, true, AssertionResult{Passed: true, Confidence: 0.9, Message: "输出完全符合预期"}, cfg)
+		if containsReason(got, TriggerLowConfidence) {
+			t.Fatalf("got %v, want no low_confidence", got)
+		}
+	})
+
 	t.Run("low confidence plus output pass and process fail", func(t *testing.T) {
 		got := TriggersForCaseResult(false, true, false, AssertionResult{Passed: true, Confidence: 0.3}, cfg)
 		want := []ReviewTriggerReason{TriggerLowConfidence, TriggerProcessOutputConflict}
@@ -176,6 +223,29 @@ func TestTriggersForCaseResult(t *testing.T) {
 	})
 }
 
+// TestReviewTriggerReasonRiskLevel 断言入池原因到评审优先级（high/medium/low）的映射
+// （spec §6.6 规模控制：评审池按风险排序，安全/写操作/高危资源优先）。
+func TestReviewTriggerReasonRiskLevel(t *testing.T) {
+	cases := []struct {
+		reason ReviewTriggerReason
+		want   ReviewRiskLevel
+	}{
+		{TriggerJudgeRuleConflict, ReviewRiskHigh},
+		{TriggerProcessOutputConflict, ReviewRiskHigh},
+		{TriggerLowConfidence, ReviewRiskMedium},
+		{TriggerDimensionSplit, ReviewRiskMedium},
+		{TriggerNeedsReview, ReviewRiskMedium},
+		{ReviewTriggerReason("unknown_future"), ReviewRiskLow},
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.reason), func(t *testing.T) {
+			if got := tc.reason.RiskLevel(); got != tc.want {
+				t.Fatalf("RiskLevel(%q) = %q, want %q", tc.reason, got, tc.want)
+			}
+		})
+	}
+}
+
 func containsReason(got []ReviewTriggerReason, want ReviewTriggerReason) bool {
 	for _, g := range got {
 		if g == want {
@@ -183,4 +253,48 @@ func containsReason(got []ReviewTriggerReason, want ReviewTriggerReason) bool {
 		}
 	}
 	return false
+}
+
+func TestIsBoundaryConfidence(t *testing.T) {
+	cases := []struct {
+		name string
+		conf float64
+		want bool
+	}{
+		{"boundary low edge", 0.45, true},
+		{"boundary midpoint", 0.50, true},
+		{"boundary high edge", 0.55, true},
+		{"below boundary", 0.44, false},
+		{"above boundary", 0.56, false},
+		{"normal high", 0.6, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isBoundaryConfidence(tc.conf); got != tc.want {
+				t.Fatalf("isBoundaryConfidence(%v) = %v, want %v", tc.conf, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestHasVagueReason(t *testing.T) {
+	cases := []struct {
+		name   string
+		reason string
+		want   bool
+	}{
+		{"empty reason is vague", "", true},
+		{"whitespace only is vague", "   ", true},
+		{"too short reason is vague", "pass", true},
+		{"hedging word is vague", "无法确定答案是否正确", true},
+		{"maybe is vague", "可能正确", true},
+		{"substantive reason is not vague", "输出完全符合预期，无任何偏差或遗漏", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := hasVagueReason(tc.reason); got != tc.want {
+				t.Fatalf("hasVagueReason(%q) = %v, want %v", tc.reason, got, tc.want)
+			}
+		})
+	}
 }

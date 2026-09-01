@@ -1,6 +1,12 @@
 package domain
 
-import "time"
+import (
+	"strings"
+	"time"
+	"unicode/utf8"
+
+	"github.com/byteBuilderX/stratum/pkg/constants"
+)
 
 // HumanVerdict 人工评审结论 4 分类（spec §6.6 回写动作）。
 // 常量以 HumanVerdict 前缀命名：同包已有 ObservationVerdict.VerdictPass，
@@ -46,6 +52,31 @@ func (r ReviewTriggerReason) Valid() bool {
 	}
 }
 
+// ReviewRiskLevel 评审优先级（spec §6.6 规模控制：评审池按风险排序，安全/写操作/高危资源优先）。
+type ReviewRiskLevel string
+
+const (
+	ReviewRiskHigh   ReviewRiskLevel = "high"
+	ReviewRiskMedium ReviewRiskLevel = "medium"
+	ReviewRiskLow    ReviewRiskLevel = "low"
+)
+
+// RiskLevel 把入池原因映射为评审优先级。硬编码规则，与 persistence 的 reviewRiskOrderSQL
+// 保持镜像（两端注释互指，修改必须同步）：
+//   - high：judge_rule_conflict（规则护栏命中 = 安全类）、process_output_conflict（副作用/写操作越界）；
+//   - medium：low_confidence、dimension_split、needs_review；
+//   - low：其余（未来新增触发默认低，人工可随时介入）。
+func (r ReviewTriggerReason) RiskLevel() ReviewRiskLevel {
+	switch r {
+	case TriggerJudgeRuleConflict, TriggerProcessOutputConflict:
+		return ReviewRiskHigh
+	case TriggerLowConfidence, TriggerDimensionSplit, TriggerNeedsReview:
+		return ReviewRiskMedium
+	default:
+		return ReviewRiskLow
+	}
+}
+
 // ReviewSourceType 评审条目来源。
 type ReviewSourceType string
 
@@ -80,13 +111,16 @@ type ReviewItem struct {
 	ResourceKind  ResourceKind        `json:"resource_kind"`
 	ResourceID    string              `json:"resource_id"`
 	TriggerReason ReviewTriggerReason `json:"trigger_reason"`
-	Snapshot      any                 `json:"snapshot"`
-	Status        ReviewItemStatus    `json:"status"`
-	HumanVerdict  HumanVerdict        `json:"human_verdict,omitempty"`
-	Reviewer      string              `json:"reviewer,omitempty"`
-	ReviewReason  string              `json:"review_reason,omitempty"`
-	CreatedAt     time.Time           `json:"created_at"`
-	ReviewedAt    *time.Time          `json:"reviewed_at,omitempty"`
+	// RiskLevel 评审优先级（派生自 trigger_reason；不落库，repository 读取后填充，
+	// JSON 透出供前端展示排序依据）。
+	RiskLevel    ReviewRiskLevel  `json:"risk_level"`
+	Snapshot     any              `json:"snapshot"`
+	Status       ReviewItemStatus `json:"status"`
+	HumanVerdict HumanVerdict     `json:"human_verdict,omitempty"`
+	Reviewer     string           `json:"reviewer,omitempty"`
+	ReviewReason string           `json:"review_reason,omitempty"`
+	CreatedAt    time.Time        `json:"created_at"`
+	ReviewedAt   *time.Time       `json:"reviewed_at,omitempty"`
 }
 
 // CalibrationSample judge 误判校准样本（对应 eval_calibration_samples）。
@@ -121,7 +155,9 @@ type AttributionEntry struct {
 
 // TriggersForObservation 计算观测应入池的触发原因（空 = 不进池）。纯函数，硬编码规则。
 // 规则（spec §6.6）：
-//  1. low_confidence：任一 judge 维度 Confidence < cfg.LowConfidenceThreshold；
+//  1. low_confidence：任一 judge 维度 Confidence < cfg.LowConfidenceThreshold，
+//     或 Confidence 落在边界区间 [ConfidenceBoundaryLow, ConfidenceBoundaryHigh]，
+//     或打分理由含糊（hasVagueReason：为空/过短 <VagueReasonMinRunes/含不确定性措辞）；
 //  2. dimension_split：存在 Score >= JudgePassThreshold 且存在 Score < JudgePassThreshold；
 //  3. judge_rule_conflict：规则命中（Signals.Rule 非空）+ Verdict == block + 全部维度 pass。
 func TriggersForObservation(obs *EvalObservation, cfg ReviewConfig) []ReviewTriggerReason {
@@ -142,10 +178,40 @@ func TriggersForObservation(obs *EvalObservation, cfg ReviewConfig) []ReviewTrig
 	return triggers
 }
 
-// hasLowConfidence 返回任一 judge 维度 Confidence < threshold。
+// hasLowConfidence 返回任一 judge 维度满足低置信：Confidence < threshold、落在边界区间，
+// 或打分理由含糊（spec §6.6 置信度机制）。
 func hasLowConfidence(judge []JudgeSignal, threshold float64) bool {
 	for _, j := range judge {
-		if j.Confidence < threshold {
+		if j.Confidence < threshold || isBoundaryConfidence(j.Confidence) || hasVagueReason(j.Reason) {
+			return true
+		}
+	}
+	return false
+}
+
+// vagueReasonKeywords 是打分理由含糊的硬编码判据（spec §6.6：理由含不确定性措辞视为含糊）。
+// 规则断言天然确定，不参与——本判定仅作用于 judge 信号。
+var vagueReasonKeywords = []string{
+	"不确定", "无法确定", "无法判断", "不能判断", "不清楚", "可能", "也许", "大概", "似乎",
+}
+
+// isBoundaryConfidence 判定 confidence 是否落在边界区间 [ConfidenceBoundaryLow, ConfidenceBoundaryHigh]
+// （spec §6.6：分数落在边界视为低置信）。
+func isBoundaryConfidence(c float64) bool {
+	return c >= constants.ConfidenceBoundaryLow && c <= constants.ConfidenceBoundaryHigh
+}
+
+// hasVagueReason 判定打分理由是否含糊：为空/过短（< VagueReasonMinRunes rune），或含不确定性措辞。
+// spec §6.6「打分理由含糊也视为低置信」。
+func hasVagueReason(reason string) bool {
+	if strings.TrimSpace(reason) == "" {
+		return true
+	}
+	if utf8.RuneCountInString(reason) < constants.VagueReasonMinRunes {
+		return true
+	}
+	for _, kw := range vagueReasonKeywords {
+		if strings.Contains(reason, kw) {
 			return true
 		}
 	}
@@ -179,7 +245,9 @@ func TriggersForProcessConflict(outputPass, processPass bool) []ReviewTriggerRea
 // TriggersForCaseResult 计算评测集 judge 判定的入池原因（空 = 不进池）。
 // 规则（spec §6.6）：
 //  1. needs_review：EvalCase.NeedsReview == true（assertion_mode 分支由调用方强制，本函数不检查）；
-//  2. low_confidence：assertion.Confidence < cfg.LowConfidenceThreshold；
+//  2. low_confidence：assertion.Confidence < cfg.LowConfidenceThreshold，
+//     或 Confidence 落在边界区间 [ConfidenceBoundaryLow, ConfidenceBoundaryHigh]，
+//     或打分理由含糊（hasVagueReason：为空/过短 <VagueReasonMinRunes/含不确定性措辞）；
 //  3. process_output_conflict：输出断言通过但过程断言失败（§6.5）。
 func TriggersForCaseResult(
 	needsReview bool, outputPass, processPass bool, assertion AssertionResult, cfg ReviewConfig,
@@ -188,7 +256,9 @@ func TriggersForCaseResult(
 	if needsReview {
 		triggers = append(triggers, TriggerNeedsReview)
 	}
-	if assertion.Confidence < cfg.LowConfidenceThreshold {
+	if assertion.Confidence < cfg.LowConfidenceThreshold ||
+		isBoundaryConfidence(assertion.Confidence) ||
+		hasVagueReason(assertion.Message) {
 		triggers = append(triggers, TriggerLowConfidence)
 	}
 	return append(triggers, TriggersForProcessConflict(outputPass, processPass)...)
