@@ -8,6 +8,7 @@ export interface ReviewItem {
   resource_kind: string;
   resource_id: string;
   trigger_reason: string;
+  risk_level?: string;
   snapshot: unknown;
   status: string;
   created_by?: string;

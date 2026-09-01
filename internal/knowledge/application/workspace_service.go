@@ -259,9 +259,6 @@ func (s *WorkspaceService) UpdateWorkspace(ctx context.Context, tenantID, name s
 	if err != nil {
 		return nil, err
 	}
-	if err := s.rejectMemberConfigUpdate(editorActor, in); err != nil {
-		return nil, err
-	}
 	before := KnowledgeSafeProjection(current)
 
 	var renameTo *string
@@ -290,17 +287,6 @@ func (s *WorkspaceService) UpdateWorkspace(ctx context.Context, tenantID, name s
 	return after, nil
 }
 
-// rejectMemberConfigUpdate 拒绝白名单 member 携带 config 的更新：I-1 方案 a 下
-// member 编辑面仅限 name/description，config 属管理操作仅 owner/admin 可改。
-// 前端 isAdmin 门禁只是 UI，这里按 editorActor 判别 fail-closed——直连 API
-// 携带 config 的 member 请求整体 403（owner/admin 的 editorActor 为空，不受影响）。
-func (s *WorkspaceService) rejectMemberConfigUpdate(editorActor string, in UpdateWorkspaceInput) error {
-	if editorActor != "" && in.Config != nil {
-		return domain.ErrForbidden
-	}
-	return nil
-}
-
 // recordFailure 旁路记录一次失败的知识库工作区创建/更新（best-effort）。
 // 记录失败仅 WARN，不改变主流程错误。
 func (s *WorkspaceService) recordFailure(ctx context.Context, id, op string, err error) {
@@ -321,10 +307,11 @@ func (s *WorkspaceService) recordFailure(ctx context.Context, id, op string, err
 }
 
 // resolveUpdateActor applies the ownership matrix with the editor grant on
-// the update path. Owner and creator-admin pass with an empty editorActor
-// (the write proceeds without editor revalidation); an actor granted editor
-// rights passes with editorActor set, which the repo re-validates inside the
-// write transaction. Fail closed on missing repo, list failure or denial.
+// the update and upload paths (UpdateWorkspace + IngestUpload). Owner and
+// creator-admin pass with an empty editorActor (the write proceeds without
+// editor revalidation); an actor granted editor rights passes with
+// editorActor set, which the repo re-validates inside the write transaction.
+// Fail closed on missing repo, list failure or denial.
 func (s *WorkspaceService) resolveUpdateActor(ctx context.Context, tenantID, actorID string, current *domain.Workspace) (string, error) {
 	if err := s.checkOwnership(ctx, tenantID, actorID, current.CreatedBy, nil, OpEdit); err == nil {
 		return "", nil
@@ -573,7 +560,10 @@ func (s *WorkspaceService) IngestUpload(
 	if err != nil {
 		return nil, err
 	}
-	if err := s.checkOwnership(ctx, tenantID, actorID, ws.CreatedBy, nil, OpEdit); err != nil {
+	// 上传复用 update 的 editor-aware 所有权判定：owner/admin 直接放行，
+	// 白名单 member 以 editorActor 身份通过（editors 必须加载，传 nil 会导致
+	// 白名单成员恒 403）。返回值仅供事务内 TOCTOU 复核，此处忽略。
+	if _, err := s.resolveUpdateActor(ctx, tenantID, actorID, ws); err != nil {
 		return nil, err
 	}
 

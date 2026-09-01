@@ -225,34 +225,99 @@ func TestWorkspaceUpdateEditorGranted(t *testing.T) {
 	require.Len(t, repo.audits, 1)
 }
 
-// TestWorkspaceUpdateMemberConfigDenied pins the I-1 config boundary: a
-// whitelisted member may edit name/description, but config stays admin-only —
-// a member PATCH carrying config fails closed with ErrForbidden (the frontend
-// isAdmin gate is UI only; the service is the security boundary).
-func TestWorkspaceUpdateMemberConfigDenied(t *testing.T) {
+// TestWorkspaceUpdateMemberEditorCanUpdateConfig pins the aligned config
+// boundary: a whitelisted member (可编辑人) may now carry full config edits
+// (检索参数等), matching the unified whitelist spec and the sibling modules
+// (agent/workflow/mcp). Immutable fields stay guarded by the domain
+// applyImmutableSettings for everyone; a non-editor member still fails closed.
+func TestWorkspaceUpdateMemberEditorCanUpdateConfig(t *testing.T) {
 	t.Parallel()
 
-	repo := newFakeWorkspaceRepo()
-	ws := seedWorkspace(repo, "ws1")
-	ws.CreatedBy = "owner-user"
-	editors := newStubKnowledgeEditorRepo()
-	editors.editors[ws.ID] = []string{"editor-1"}
-	svc, _ := buildWorkspaceService(repo)
-	svc.SetTenantRoleResolver(stubTenantRole{role: "member"})
-	svc.SetEditorRepo(editors)
+	newMemberSvc := func(editorIDs []string) (*WorkspaceService, *fakeWorkspaceRepo) {
+		repo := newFakeWorkspaceRepo()
+		ws := seedWorkspace(repo, "ws1")
+		ws.CreatedBy = "owner-user"
+		editors := newStubKnowledgeEditorRepo()
+		editors.editors[ws.ID] = append([]string(nil), editorIDs...)
+		svc, _ := buildWorkspaceService(repo)
+		svc.SetTenantRoleResolver(stubTenantRole{role: "member"})
+		svc.SetEditorRepo(editors)
+		return svc, repo
+	}
 
-	cfg := domain.WorkspaceConfig{TopK: 5}
-	_, err := svc.UpdateWorkspace(context.Background(), "t1", "ws1",
-		UpdateWorkspaceInput{Config: &cfg}, "editor-1")
-	require.ErrorIs(t, err, domain.ErrForbidden)
-	require.Empty(t, repo.audits, "denied config update must not persist or audit")
+	t.Run("editor updates retrieval config", func(t *testing.T) {
+		t.Parallel()
+		svc, repo := newMemberSvc([]string{"editor-1"})
+		cfg := domain.WorkspaceConfig{TopK: 5}
+		_, err := svc.UpdateWorkspace(context.Background(), "t1", "ws1",
+			UpdateWorkspaceInput{Config: &cfg}, "editor-1")
+		require.NoError(t, err)
+		require.Equal(t, 5, repo.workspaces["ws1"].Config.TopK)
+		require.Len(t, repo.audits, 1, "editor config update is audited")
+	})
 
-	// 同一 member 仅改 description 仍可编辑（I-1 承诺的编辑面）。
-	desc := "new desc"
-	_, err = svc.UpdateWorkspace(context.Background(), "t1", "ws1",
-		UpdateWorkspaceInput{Description: &desc}, "editor-1")
-	require.NoError(t, err)
-	require.Len(t, repo.audits, 1)
+	t.Run("editor cannot mutate immutable embedding model", func(t *testing.T) {
+		t.Parallel()
+		svc, repo := newMemberSvc([]string{"editor-1"})
+		cfg := domain.WorkspaceConfig{EmbeddingModel: "embedding-3"}
+		_, err := svc.UpdateWorkspace(context.Background(), "t1", "ws1",
+			UpdateWorkspaceInput{Config: &cfg}, "editor-1")
+		require.ErrorIs(t, err, domain.ErrEmbeddingModelImmutable)
+		require.Empty(t, repo.audits, "rejected immutable update must not audit")
+	})
+
+	t.Run("non-editor member with config is forbidden", func(t *testing.T) {
+		t.Parallel()
+		svc, repo := newMemberSvc([]string{"editor-1"})
+		cfg := domain.WorkspaceConfig{TopK: 5}
+		_, err := svc.UpdateWorkspace(context.Background(), "t1", "ws1",
+			UpdateWorkspaceInput{Config: &cfg}, "outsider")
+		require.ErrorIs(t, err, domain.ErrForbidden)
+		require.Empty(t, repo.audits, "denied config update must not persist or audit")
+	})
+}
+
+// TestWorkspaceIngestUploadOwnershipMatrix pins the ingest ownership row: the
+// same editor grant that permits PATCH also permits document upload. A
+// whitelisted member may ingest; a non-editor member fails closed (this was
+// broken before — IngestUpload passed editors=nil so whitelisted members were
+// always 403, and the route carried adminMW).
+func TestWorkspaceIngestUploadOwnershipMatrix(t *testing.T) {
+	t.Parallel()
+
+	newMemberSvc := func(editorIDs []string) (*WorkspaceService, *KnowledgeIngest, *mockDocRepo) {
+		repo := newFakeWorkspaceRepo()
+		ws := seedWorkspace(repo, "ws1")
+		ws.CreatedBy = "owner-user"
+		editors := newStubKnowledgeEditorRepo()
+		editors.editors[ws.ID] = append([]string(nil), editorIDs...)
+		svc, ki := buildWorkspaceService(repo)
+		svc.SetTenantRoleResolver(stubTenantRole{role: "member"})
+		svc.SetEditorRepo(editors)
+		docRepo := newMockDocRepo()
+		ki.SetDocRepo(docRepo)
+		svc.SetDocRepo(docRepo)
+		return svc, ki, docRepo
+	}
+
+	t.Run("whitelisted editor uploads document", func(t *testing.T) {
+		t.Parallel()
+		svc, ki, docRepo := newMemberSvc([]string{"editor-1"})
+		fh := newUploadFileHeader(t, "doc.txt", paragraphInput(3))
+		result, err := svc.IngestUpload(context.Background(), "t1", "ws1", fh, "editor-1", nil, nil)
+		require.NoError(t, err)
+		require.NotEmpty(t, result.DocumentID)
+		require.NoError(t, ki.Shutdown(context.Background()))
+		require.Equal(t, 1, docRepo.savedCount())
+	})
+
+	t.Run("non-editor member upload is forbidden", func(t *testing.T) {
+		t.Parallel()
+		svc, _, _ := newMemberSvc([]string{"editor-1"})
+		fh := newUploadFileHeader(t, "doc.txt", paragraphInput(3))
+		_, err := svc.IngestUpload(context.Background(), "t1", "ws1", fh, "outsider", nil, nil)
+		require.ErrorIs(t, err, domain.ErrForbidden)
+	})
 }
 
 // TestWorkspaceDeleteEditorDenied pins the delete column: editors never grant

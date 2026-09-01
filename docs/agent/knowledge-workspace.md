@@ -31,15 +31,17 @@ Base：`/knowledge`（挂在 JWT + tenant 中间件下，member 角色可读）
 | GET | `/knowledge/workspaces/:name/documents/:documentID/preview` | member + active | 按 chunk 重组预览文档内容（原始文本不落库） |
 | POST | `/knowledge/query` | member + active | RAG 查询：vector/keyword/hybrid |
 | POST | `/knowledge/workspaces` | admin + active | 创建 workspace |
-| PATCH | `/knowledge/workspaces/:name` | admin + active | 部分更新（rename / description / 可变 config） |
+| PATCH | `/knowledge/workspaces/:name` | member* + active | 部分更新（rename / description / 可变检索参数） |
 | DELETE | `/knowledge/workspaces/:name` | admin + active | 删除 workspace，级联清 Milvus + PG chunks + DB 记录 |
 | PUT | `/knowledge/workspaces/:name/editors` | admin + active | 设置 workspace 编辑器集合（`editors`） |
 | DELETE | `/knowledge/workspaces/:name/documents/:documentID` | admin + active | 删除文档（级联清向量 + chunks） |
 | PUT | `/knowledge/workspaces/:name/documents/:documentID/access` | admin + active | 整体替换文档级访问白名单（`allowed_user_ids` / `allowed_role_ids`） |
 | POST | `/knowledge/workspaces/:name/documents/:documentID/request-access` | member + active | 申请文档查看权（operation-proposal grant 通道） |
-| POST | `/knowledge/ingest` | admin + active + `BodyLimit` | multipart 上传文档并异步摄取（202 Accepted） |
+| POST | `/knowledge/ingest` | member* + active + `BodyLimit` | multipart 上传文档并异步摄取（202 Accepted） |
 
 请求/响应形状：见 `api/http/dto/gen/`（`rag.go` + `rag_manual.go`）。响应错误体固定 `{"error":"..."}`（由 `middleware.ErrorHandler` 映射）。
+
+\* 带 `*` 的写操作路由只挂 `requireActive`（member 可进），真正判定在 service 所有权矩阵：owner/admin 天然放行；白名单「可编辑人」member 获得与 admin 一致的编辑能力——PATCH 可改 name/description/检索参数、POST ingest 可上传文档；其余 member 一律 403（fail-closed）。删除文档/workspace、白名单管理（editors/access）、版本回滚仍 admin 门禁。不可变字段（embedding_model / chunk_size / chunk_overlap / chunking_strategy）对所有人由 domain `applyImmutableSettings` 拒绝（返回 4xx），member 能改的 config 仅检索参数。
 
 ---
 

@@ -20,6 +20,9 @@ const REASON_LABELS: Record<string, string> = {
   process_output_conflict: '输出通过但过程未通过',
 };
 
+const RISK_LABELS: Record<string, string> = { high: '高', medium: '中', low: '低' };
+const RISK_COLORS: Record<string, string> = { high: 'red', medium: 'orange', low: 'blue' };
+
 const VERDICT_LABELS: Record<string, string> = {
   pass: '通过',
   fail: '不通过',
@@ -112,6 +115,8 @@ export default function ReviewPoolPanel({ canDelete }: {
     // case_result 来源条目的 resource_kind/resource_id 恒为空（Task 10 已知限制），显示占位符而非空白。
     { title: '资源', dataIndex: 'resource_kind', width: 180,
       render: (v: string, row) => (v || row.resource_id ? [v, row.resource_id].filter(Boolean).join(':') : '-') },
+    { title: '优先级', dataIndex: 'risk_level', width: 90,
+      render: (v: string) => (v ? <Tag color={RISK_COLORS[v]}>{RISK_LABELS[v] ?? v}</Tag> : '-') },
     { title: '状态', dataIndex: 'status', width: 80,
       render: (v: string) => (v === 'pending' ? '待评审' : '已评审') },
     { title: '创建时间', dataIndex: 'created_at', width: 180 },
@@ -144,7 +149,7 @@ export default function ReviewPoolPanel({ canDelete }: {
         {detail ? (
           <>
             <Space direction="vertical" size={4} style={{ width: '100%', marginBottom: 12 }}>
-              <div>来源：{detail.source_type === 'observation' ? '观测' : '评测集'} · 原因：{REASON_LABELS[detail.trigger_reason] ?? detail.trigger_reason}</div>
+              <div>来源：{detail.source_type === 'observation' ? '观测' : '评测集'} · 原因：{REASON_LABELS[detail.trigger_reason] ?? detail.trigger_reason} · 优先级：{detail.risk_level ? RISK_LABELS[detail.risk_level] : '-'}</div>
               <div>资源：{detail.resource_kind ? `${detail.resource_kind}:${detail.resource_id || '-'}` : '-'} · 状态：{detail.status === 'pending' ? '待评审' : '已评审'}</div>
               {detail.human_verdict && <div>评审结论：{VERDICT_LABELS[detail.human_verdict] ?? detail.human_verdict}</div>}
               {detail.reviewer && <div>评审人：{detail.reviewer}</div>}

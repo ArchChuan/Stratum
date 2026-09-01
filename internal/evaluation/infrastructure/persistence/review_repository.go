@@ -86,6 +86,7 @@ func (r *PgReviewRepository) GetItem(ctx context.Context, tenantID, id string) (
 	item.SourceType = domain.ReviewSourceType(sourceType)
 	item.ResourceKind = domain.ResourceKind(resourceKind)
 	item.TriggerReason = domain.ReviewTriggerReason(trigger)
+	item.RiskLevel = item.TriggerReason.RiskLevel()
 	item.Status = domain.ReviewItemStatus(status)
 	item.HumanVerdict = domain.HumanVerdict(verdict)
 	item.ReviewedAt = reviewedAt
@@ -104,7 +105,8 @@ func (r *PgReviewRepository) ListItems(
                        trigger_reason, snapshot, status, human_verdict, reviewer, review_reason,
                        created_at, reviewed_at
                 FROM eval_review_items` + conds +
-		fmt.Sprintf(` ORDER BY created_at DESC LIMIT $%d OFFSET $%d`, len(args)+1, len(args)+2)
+		fmt.Sprintf(` ORDER BY %s, created_at DESC LIMIT $%d OFFSET $%d`,
+			reviewRiskOrderSQL(), len(args)+1, len(args)+2)
 
 	limit := f.Limit
 	if limit <= 0 {
@@ -144,6 +146,7 @@ func (r *PgReviewRepository) ListItems(
 			item.SourceType = domain.ReviewSourceType(sourceType)
 			item.ResourceKind = domain.ResourceKind(resourceKind)
 			item.TriggerReason = domain.ReviewTriggerReason(trigger)
+			item.RiskLevel = item.TriggerReason.RiskLevel()
 			item.Status = domain.ReviewItemStatus(status)
 			item.HumanVerdict = domain.HumanVerdict(verdict)
 			item.ReviewedAt = reviewedAt
@@ -191,6 +194,14 @@ func reviewFilterConds(f port.ReviewFilter) (string, []any) {
 		return ` WHERE 1=1`, args
 	}
 	return ` WHERE` + strings.Join(conds, " AND"), args
+}
+
+// reviewRiskOrderSQL 是评审池风险优先排序表达式（spec §6.6 规模控制：评审池按风险排序，
+// 安全/写操作/高危资源优先）。与 domain.ReviewTriggerReason.RiskLevel() 保持镜像：
+// high=0、medium=1、low=2；同风险按 created_at DESC（维持既有最新优先）。修改 RiskLevel()
+// 必须同步本表达式（两端注释互指）。
+func reviewRiskOrderSQL() string {
+	return `CASE trigger_reason WHEN 'judge_rule_conflict' THEN 0 WHEN 'process_output_conflict' THEN 0 WHEN 'low_confidence' THEN 1 WHEN 'dimension_split' THEN 1 WHEN 'needs_review' THEN 1 ELSE 2 END`
 }
 
 func (r *PgReviewRepository) MarkReviewed(

@@ -15,6 +15,7 @@
           "resource_kind": "agent",
           "resource_id": "agent-1",
           "trigger_reason": "low_confidence",
+          "risk_level": "medium",
           "snapshot": {
             "signals": {
               "judge": []

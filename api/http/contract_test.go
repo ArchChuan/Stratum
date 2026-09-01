@@ -731,6 +731,7 @@ func contractReviewItem() *domain.ReviewItem {
 		ResourceKind:  domain.ResourceKindAgent,
 		ResourceID:    "agent-1",
 		TriggerReason: domain.TriggerLowConfidence,
+		RiskLevel:     domain.ReviewRiskMedium,
 		Snapshot:      map[string]any{"signals": map[string]any{"judge": []any{}}},
 		Status:        domain.ReviewStatusPending,
 		CreatedAt:     time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
