@@ -6,14 +6,14 @@ import type { EvaluationRun } from '../model/evaluation';
 import { RunAttributionPanel } from './RunAttributionPanel';
 
 const results: EvaluationRun['results'] = [
-  { case_id: 'c1', passed: false, failure_reason: 'dimension:faithfulness',
+  { case_id: 'c1', passed: false, process_pass: true, failure_reason: 'dimension:faithfulness',
     trace_id: 't-1', actual: '回复不准确', tokens: 0, cost_usd: 0, duration_ms: 0,
     dimensions: [{ name: 'faithfulness', score: 0.3, passed: false, confidence: 0.7 }],
     trace_evidence: { cost_usd: 0.05, latency_ms: 200, success: false, tool_call_count: 3, tool_error_count: 1 } },
-  { case_id: 'c2', passed: false, failure_reason: 'dimension:faithfulness',
+  { case_id: 'c2', passed: false, process_pass: true, failure_reason: 'dimension:faithfulness',
     tokens: 0, cost_usd: 0, duration_ms: 0,
     dimensions: [{ name: 'faithfulness', score: 0.4, passed: false, confidence: 0.6 }] },
-  { case_id: 'c3', passed: true, tokens: 0, cost_usd: 0, duration_ms: 0 },
+  { case_id: 'c3', passed: true, process_pass: true, tokens: 0, cost_usd: 0, duration_ms: 0 },
 ];
 
 describe('RunAttributionPanel', () => {
