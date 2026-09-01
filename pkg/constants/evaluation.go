@@ -104,6 +104,17 @@ const (
 	ReviewBacklogAlertThreshold = 50
 )
 
+// Evaluation 人工评审池置信度机制（§6.6 置信度机制：分数落边界或理由含糊也视为低置信）。
+const (
+	// ConfidenceBoundaryLow/High 界定 confidence 边界区间 [0.45, 0.55]：落在此区间的分数
+	// 视为低置信（spec §6.6「分数落在边界(如 0.45–0.55)…也视为低置信」）。
+	ConfidenceBoundaryLow  = 0.45
+	ConfidenceBoundaryHigh = 0.55
+	// VagueReasonMinRunes 打分理由视为含糊的最短有效 rune 数：理由为空或更短不足以支撑
+	// 判定，视为含糊（spec §6.6「打分理由含糊也视为低置信」）。
+	VagueReasonMinRunes = 8
+)
+
 // Evaluation 平台配置组（Phase 2 §4.3 版本锚点）。
 const (
 	// PlatformGroupEvaluation 是平台配置的 evaluation 分组 key：evaluation 配置组

@@ -1,6 +1,12 @@
 package domain
 
-import "time"
+import (
+	"strings"
+	"time"
+	"unicode/utf8"
+
+	"github.com/byteBuilderX/stratum/pkg/constants"
+)
 
 // HumanVerdict 人工评审结论 4 分类（spec §6.6 回写动作）。
 // 常量以 HumanVerdict 前缀命名：同包已有 ObservationVerdict.VerdictPass，
@@ -142,10 +148,40 @@ func TriggersForObservation(obs *EvalObservation, cfg ReviewConfig) []ReviewTrig
 	return triggers
 }
 
-// hasLowConfidence 返回任一 judge 维度 Confidence < threshold。
+// hasLowConfidence 返回任一 judge 维度满足低置信：Confidence < threshold、落在边界区间，
+// 或打分理由含糊（spec §6.6 置信度机制）。
 func hasLowConfidence(judge []JudgeSignal, threshold float64) bool {
 	for _, j := range judge {
-		if j.Confidence < threshold {
+		if j.Confidence < threshold || isBoundaryConfidence(j.Confidence) || hasVagueReason(j.Reason) {
+			return true
+		}
+	}
+	return false
+}
+
+// vagueReasonKeywords 是打分理由含糊的硬编码判据（spec §6.6：理由含不确定性措辞视为含糊）。
+// 规则断言天然确定，不参与——本判定仅作用于 judge 信号。
+var vagueReasonKeywords = []string{
+	"不确定", "无法确定", "无法判断", "不能判断", "不清楚", "可能", "也许", "大概", "似乎",
+}
+
+// isBoundaryConfidence 判定 confidence 是否落在边界区间 [ConfidenceBoundaryLow, ConfidenceBoundaryHigh]
+// （spec §6.6：分数落在边界视为低置信）。
+func isBoundaryConfidence(c float64) bool {
+	return c >= constants.ConfidenceBoundaryLow && c <= constants.ConfidenceBoundaryHigh
+}
+
+// hasVagueReason 判定打分理由是否含糊：为空/过短（< VagueReasonMinRunes rune），或含不确定性措辞。
+// spec §6.6「打分理由含糊也视为低置信」。
+func hasVagueReason(reason string) bool {
+	if strings.TrimSpace(reason) == "" {
+		return true
+	}
+	if utf8.RuneCountInString(reason) < constants.VagueReasonMinRunes {
+		return true
+	}
+	for _, kw := range vagueReasonKeywords {
+		if strings.Contains(reason, kw) {
 			return true
 		}
 	}
@@ -188,7 +224,9 @@ func TriggersForCaseResult(
 	if needsReview {
 		triggers = append(triggers, TriggerNeedsReview)
 	}
-	if assertion.Confidence < cfg.LowConfidenceThreshold {
+	if assertion.Confidence < cfg.LowConfidenceThreshold ||
+		isBoundaryConfidence(assertion.Confidence) ||
+		hasVagueReason(assertion.Message) {
 		triggers = append(triggers, TriggerLowConfidence)
 	}
 	return append(triggers, TriggersForProcessConflict(outputPass, processPass)...)
