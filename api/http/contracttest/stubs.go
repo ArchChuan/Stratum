@@ -1,8 +1,9 @@
 // Package contracttest is the single source of truth for the golden HTTP
 // contract harness: the domain-port stubs (canonical, copied verbatim from
-// api/http/contract_test.go) and, in later tasks, the wiring.Container
-// assembly. Consumers are the goldens recorder (scripts/record-contracts.go)
-// and the golden verifier (api/http/contract_test.go).
+// api/http/contract_test.go), fixtures, and the wiring.Container assembly
+// in container.go. Consumers are the goldens recorder
+// (scripts/record-contracts.go) and the golden verifier
+// (api/http/contract_test.go).
 package contracttest
 
 import (
