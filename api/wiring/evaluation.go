@@ -1025,6 +1025,13 @@ func (a agentScenarioEvaluationAdapter) ExecuteRevision(
 	if snap == nil {
 		return evalport.ExecutionResult{}, errors.New("agent scenario evaluation: evaluation context snapshot required")
 	}
+	// 评测后台 worker 路径 ctx 本无 tenant：一次性包裹并贯穿 bindings /
+	// ResolveSkills / ExecuteSkillScenarioRevision 调用（publishedSkillActivationResolver
+	// 与 skill repo 只从 ctx 读 tenant，缺失即 fail-closed）。resolvePinnedAgent 内的
+	// 局部包裹是幂等双保险，两处重复无害。
+	ctx = postgres.WithTenant(ctx, &postgres.TenantContext{
+		TenantID: tenantID, UserID: requestedBy, Role: postgres.RoleTenantAdmin,
+	})
 	agentRev, agentID, err := a.resolvePinnedAgent(ctx, tenantID, requestedBy, snap, ref)
 	if err != nil {
 		return evalport.ExecutionResult{}, err
@@ -1071,6 +1078,8 @@ func (a agentScenarioEvaluationAdapter) resolvePinnedAgent(
 	if pinnedID == "" {
 		return agentdomain.AgentRevision{}, "", fmt.Errorf("agent scenario evaluation: no pinned agent revision for Skill %s; recreate the run", ref.ResourceID)
 	}
+	// ExecuteRevision 顶层已包裹 tenant；此处局部包裹为幂等双保险（WithTenant 覆盖
+	// 同值 TenantContext），保证本 helper 单独被调用时 bindings/revisions 仍带租户。
 	ctx = postgres.WithTenant(ctx, &postgres.TenantContext{
 		TenantID: tenantID, UserID: requestedBy, Role: postgres.RoleTenantAdmin,
 	})
