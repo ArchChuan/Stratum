@@ -15,6 +15,7 @@ import (
 type StoredRunner interface {
 	RunStored(
 		ctx context.Context, tenantID, requestedBy string, resource domain.ResourceRef, suiteRevisionID string,
+		snapshot *domain.EvaluationContextSnapshot,
 	) (domain.EvalRun, error)
 }
 
@@ -28,12 +29,13 @@ type EnqueueRunInput struct {
 }
 
 type JobService struct {
-	repo   port.JobRepository
-	runner StoredRunner
+	repo     port.JobRepository
+	runner   StoredRunner
+	capturer port.SnapshotCapturer
 }
 
-func NewJobService(repo port.JobRepository, runner StoredRunner) *JobService {
-	return &JobService{repo: repo, runner: runner}
+func NewJobService(repo port.JobRepository, runner StoredRunner, capturer port.SnapshotCapturer) *JobService {
+	return &JobService{repo: repo, runner: runner, capturer: capturer}
 }
 
 func (s *JobService) EnqueueRun(ctx context.Context, tenantID string, input EnqueueRunInput) (domain.EvaluationJob, error) {
@@ -49,10 +51,20 @@ func (s *JobService) EnqueueRun(ctx context.Context, tenantID string, input Enqu
 	if input.RequestedBy == "" {
 		return domain.EvaluationJob{}, errors.New("requesting user id required")
 	}
+	if s.capturer == nil {
+		return domain.EvaluationJob{}, errors.New("evaluation job: snapshot capturer not configured")
+	}
+	snapshot, err := s.capturer.Capture(ctx, tenantID, port.CaptureInput{
+		Resource: input.Resource, SuiteRevisionID: input.SuiteRevisionID, RequestedBy: input.RequestedBy,
+	})
+	if err != nil {
+		return domain.EvaluationJob{}, fmt.Errorf("evaluation job: capture context snapshot: %w", err)
+	}
 	job := domain.EvaluationJob{
 		ID: uuid.Must(uuid.NewV7()).String(), Type: domain.JobTypeEvalRun, Status: domain.JobQueued,
 		Payload: domain.EvalRunJobPayload{
 			Resource: input.Resource, SuiteRevisionID: input.SuiteRevisionID, RequestedBy: input.RequestedBy,
+			Snapshot: snapshot,
 		},
 		IdempotencyKey: input.IdempotencyKey, CreatedBy: input.RequestedBy, CreatedAt: time.Now().UTC(),
 	}
@@ -94,7 +106,7 @@ func (s *JobService) RunOnce(
 		return true, errors.Join(err, s.repo.Fail(ctx, tenantID, job.ID, err.Error()))
 	}
 	run, err := s.runner.RunStored(
-		ctx, tenantID, job.Payload.RequestedBy, job.Payload.Resource, job.Payload.SuiteRevisionID,
+		ctx, tenantID, job.Payload.RequestedBy, job.Payload.Resource, job.Payload.SuiteRevisionID, job.Payload.Snapshot,
 	)
 	if err != nil {
 		_ = s.repo.Fail(ctx, tenantID, job.ID, err.Error())

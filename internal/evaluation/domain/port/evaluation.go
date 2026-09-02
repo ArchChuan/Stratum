@@ -264,3 +264,17 @@ type TraceEvidenceReader interface {
 	Resolve(context.Context, string, string) (ObservedTrace, error)
 	ResolveBatch(context.Context, string, []string) (map[string]ObservedTrace, error)
 }
+
+// SnapshotCapturer 在评测 run 创建时捕获执行上下文版本快照（D1/D5：创建时
+// fail-closed 锚定）。任何捕获失败返回 error → EnqueueRun 拒绝创建，绝不
+// 入队一个无快照的 job。
+type SnapshotCapturer interface {
+	Capture(ctx context.Context, tenantID string, input CaptureInput) (*domain.EvaluationContextSnapshot, error)
+}
+
+// CaptureInput 描述一次快照捕获：被测资源 + 评测套件 revision + 请求者。
+type CaptureInput struct {
+	Resource        domain.ResourceRef
+	SuiteRevisionID string
+	RequestedBy     string
+}

@@ -147,7 +147,7 @@ func TestContracts(t *testing.T) {
 		},
 		Knowledge: &wiring.Knowledge{},
 		Evaluation: &wiring.Evaluation{
-			SuiteService: evalapp.NewSuiteService(nil), JobService: evalapp.NewJobService(nil, nil),
+			SuiteService: evalapp.NewSuiteService(nil), JobService: evalapp.NewJobService(nil, nil, nil),
 			QueryService:      evalapp.NewQueryService(contractQueryRepo{}),
 			ExperimentService: evalapp.NewExperimentService(contractExperimentRepo{}),
 			CandidateService:  evalapp.NewCandidateCommandService(contractCandidateRepo{}),

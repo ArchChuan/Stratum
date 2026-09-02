@@ -118,7 +118,7 @@ func buildDDDContainer(cfg *config.Config, key *rsa.PrivateKey, logger *zap.Logg
 		},
 		Knowledge: &wiring.Knowledge{},
 		Evaluation: &wiring.Evaluation{
-			SuiteService: evalapp.NewSuiteService(nil), JobService: evalapp.NewJobService(nil, nil),
+			SuiteService: evalapp.NewSuiteService(nil), JobService: evalapp.NewJobService(nil, nil, nil),
 			QueryService:      evalapp.NewQueryService(contractQueryRepo{}),
 			ExperimentService: evalapp.NewExperimentService(contractExpRepo{}),
 			CandidateService:  evalapp.NewCandidateCommandService(contractCandRepo{}),

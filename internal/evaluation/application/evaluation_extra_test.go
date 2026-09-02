@@ -91,7 +91,7 @@ func TestSuiteServiceGetRevision(t *testing.T) {
 
 func TestJobServiceGet(t *testing.T) {
 	repo := &fakeJobRepo{enqueued: domain.EvaluationJob{ID: "j1"}}
-	svc := NewJobService(repo, nil)
+	svc := NewJobService(repo, nil, nil)
 
 	job, err := svc.Get(context.Background(), "t1", "j1")
 	if err != nil || job.ID != "j1" {

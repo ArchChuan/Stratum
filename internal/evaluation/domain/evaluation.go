@@ -380,6 +380,9 @@ type EvalRunJobPayload struct {
 	Resource        ResourceRef `json:"resource"`
 	SuiteRevisionID string      `json:"suite_revision_id"`
 	RequestedBy     string      `json:"requested_by"`
+	// Snapshot 是 run 创建时捕获的全链路版本快照（Task 3 创建时 fail-closed
+	// 集成）。旧 job（无快照）由 RunOnce → RunStored → Run fail-closed 拒绝执行。
+	Snapshot *EvaluationContextSnapshot `json:"snapshot,omitempty"`
 }
 
 type EvaluationJob struct {

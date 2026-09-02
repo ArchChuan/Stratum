@@ -21,6 +21,7 @@ import (
 	iampersistence "github.com/byteBuilderX/stratum/internal/iam/infrastructure/persistence"
 	knowledgeapp "github.com/byteBuilderX/stratum/internal/knowledge/application"
 	llmgatewaydomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
+	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
 	pipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
 	parametersapp "github.com/byteBuilderX/stratum/internal/parameters/application"
@@ -1205,11 +1206,13 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	service, reviewSvc := newEvaluationServiceWithReview(
 		c, db, evaluationResourceRouter{adapters: resourceAdapters}, runRepo, traceReader, judge, suiteRepo,
 	)
-	jobService := evalapp.NewJobService(jobRepo, service)
+	experimentService := evalapp.NewExperimentService(experimentRepo)
+	jobService := evalapp.NewJobService(jobRepo, service, c.buildSnapshotCapturer(
+		experimentService, runtimeMCPAdapter, runtimeKnowledgeAdapter, sharedRevisionService,
+	))
 	optimizationService := evalapp.NewOptimizationService(
 		evaluationCandidateRouter{creators: candidateCreators}, buildEvaluationPromptRewriter(c), optimizationRepo,
 	)
-	experimentService := evalapp.NewExperimentService(experimentRepo)
 	observationSvc := buildObservationService(c, db, traceReader, judge, reviewSvc)
 	feedbackService := buildEvaluationFeedbackService(c, feedbackRepo, experimentService, observationSvc)
 	worker := c.newEvaluationWorker(ctx, db, jobService, experimentService, experimentRepo, feedbackRepo)
@@ -1242,6 +1245,36 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	c.applySkillEvaluationReader(experimentRepo)
 	c.buildApprovalActionExecutor()
 	return nil
+}
+
+// buildSnapshotCapturer 装配创建时快照捕获器：从既有 wiring 组件取 parameters、
+// revision 读取、窗口解析与 MCP/Knowledge 分流 resolver。revision 服务或
+// parameters 组件缺失时返回 nil（EnqueueRun fail-closed：capturer 未配置即
+// 拒绝创建）。bindings/baselines 由 Task 6 skill 分支补。
+func (c *Container) buildSnapshotCapturer(
+	experimentService *evalapp.ExperimentService,
+	runtimeMCPAdapter *mcpEvaluationAdapter,
+	runtimeKnowledgeAdapter *knowledgeEvaluationAdapter,
+	revisions agentRevisionService,
+) evalport.SnapshotCapturer {
+	if c.Parameters == nil || c.Parameters.Service == nil {
+		return nil
+	}
+	capturer := &snapshotCapturer{
+		params:    c.Parameters.Service,
+		revisions: revisions,
+		modelCtx:  modelContextProvider(c.Agent.TenantResolver),
+		details:   tenantModelDetailsProvider(c.Agent.TenantResolver),
+		vendor:    llmgateway.LookupModelSpec,
+		logger:    c.Logger,
+	}
+	if runtimeMCPAdapter != nil && c.MCP != nil && c.MCP.Manager != nil {
+		capturer.mcpResolver = experimentMCPRevisionResolver{service: experimentService, adapter: *runtimeMCPAdapter}
+	}
+	if runtimeKnowledgeAdapter != nil {
+		capturer.knowRes = experimentKnowledgeRevisionResolver{service: experimentService, adapter: *runtimeKnowledgeAdapter}
+	}
+	return capturer
 }
 
 // buildEvaluationDeleteService 装配删除服务：owner-or-creator 门禁（fail-closed）。
