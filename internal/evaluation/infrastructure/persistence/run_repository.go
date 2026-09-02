@@ -30,15 +30,25 @@ func (r *PgRunRepository) SaveRun(ctx context.Context, tenantID string, run doma
 	if string(metricsJSON) == "null" {
 		metricsJSON = []byte("{}")
 	}
+	// 快照序列化为 JSON 文本（pgx v5 JSONB 收 string）：nil = 旧 run/未捕获，
+	// 落库 '{}'，GetRun 读回 nil 与 omitempty 序列化自洽。
+	snapshotJSON := "{}"
+	if run.ContextSnapshot != nil {
+		b, err := json.Marshal(run.ContextSnapshot)
+		if err != nil {
+			return fmt.Errorf("evaluation run repository: marshal context snapshot: %w", err)
+		}
+		snapshotJSON = string(b)
+	}
 	return execTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO eval_runs
 			 (id, resource_kind, resource_id, revision_id, suite_revision_id, status, passed,
-			  total_cases, passed_cases, metrics, created_by, created_at, started_at, completed_at)
-			 VALUES ($1,$2,$3,$4,$5,'succeeded',$6,$7,$8,$9,$10,$11,$11,NOW())`,
+			  total_cases, passed_cases, metrics, context_snapshot, created_by, created_at, started_at, completed_at)
+			 VALUES ($1,$2,$3,$4,$5,'succeeded',$6,$7,$8,$9,$10,$11,$12,$12,NOW())`,
 			run.ID, string(run.Resource.Kind), run.Resource.ResourceID, run.Resource.RevisionID,
 			run.SuiteRevisionID, run.Passed, run.TotalCases, run.PassedCases, string(metricsJSON),
-			run.CreatedBy, run.CreatedAt,
+			snapshotJSON, run.CreatedBy, run.CreatedAt,
 		); err != nil {
 			return fmt.Errorf("evaluation run repository: insert run: %w", err)
 		}
@@ -108,14 +118,23 @@ func (r *PgRunRepository) GetRun(
 	err := execTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		var kind string
 		var metricsJSON []byte
+		var snapshotJSON []byte
 		err := tx.QueryRow(ctx,
 			`SELECT id, resource_kind, resource_id, revision_id, suite_revision_id,
-			        passed, total_cases, passed_cases, metrics, created_by, created_at
+			        passed, total_cases, passed_cases, metrics, context_snapshot, created_by, created_at
 			 FROM eval_runs WHERE id=$1`, runID,
 		).Scan(&run.ID, &kind, &run.Resource.ResourceID, &run.Resource.RevisionID,
-			&run.SuiteRevisionID, &run.Passed, &run.TotalCases, &run.PassedCases, &metricsJSON, &run.CreatedBy, &run.CreatedAt)
-		if err == nil && len(metricsJSON) > 0 {
-			_ = json.Unmarshal(metricsJSON, &run.Metrics)
+			&run.SuiteRevisionID, &run.Passed, &run.TotalCases, &run.PassedCases, &metricsJSON,
+			&snapshotJSON, &run.CreatedBy, &run.CreatedAt)
+		if err == nil {
+			if len(metricsJSON) > 0 {
+				_ = json.Unmarshal(metricsJSON, &run.Metrics)
+			}
+			snap, derr := decodeContextSnapshot(snapshotJSON)
+			if derr != nil {
+				return derr
+			}
+			run.ContextSnapshot = snap
 		}
 		if err == pgx.ErrNoRows {
 			return nil
@@ -144,6 +163,19 @@ func (r *PgRunRepository) GetRun(
 		return rows.Err()
 	})
 	return run, found, err
+}
+
+// decodeContextSnapshot 解码 eval_runs.context_snapshot JSONB：空/'{}'（旧 run
+// 未捕获）→ (nil, nil)；损坏 JSON 显式报错而非静默丢快照。
+func decodeContextSnapshot(raw []byte) (*domain.EvaluationContextSnapshot, error) {
+	if len(raw) == 0 || string(raw) == "{}" {
+		return nil, nil
+	}
+	var snap domain.EvaluationContextSnapshot
+	if err := json.Unmarshal(raw, &snap); err != nil {
+		return nil, fmt.Errorf("evaluation run repository: unmarshal context snapshot: %w", err)
+	}
+	return &snap, nil
 }
 
 // scanCaseResult 从一行 eval_case_results 读出 case 结果，并把 JSON 列反序列化

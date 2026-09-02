@@ -39,7 +39,7 @@ func TestEvaluationEvolutionRoutesRBAC(t *testing.T) {
 		deleteRepo, deleteRepo, deleteRepo, deleteRepo, deleteRepo, deleteRepo, deleteRepo,
 	)
 	c := &wiring.Container{Logger: zap.NewNop(), Platform: &wiring.Platform{JWTService: tokens}, Evaluation: &wiring.Evaluation{
-		SuiteService: application.NewSuiteService(nil), JobService: application.NewJobService(nil, nil),
+		SuiteService: application.NewSuiteService(nil), JobService: application.NewJobService(nil, nil, nil),
 		QueryService: application.NewQueryService(queryRepo), ExperimentService: application.NewExperimentService(experimentRepo),
 		CandidateService: application.NewCandidateCommandService(candidateRepo), DeleteService: deleteSvc,
 	}}

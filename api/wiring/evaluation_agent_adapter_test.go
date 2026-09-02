@@ -8,8 +8,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	agentapp "github.com/byteBuilderX/stratum/internal/agent/application"
 	agentdomain "github.com/byteBuilderX/stratum/internal/agent/domain"
+	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	evalapp "github.com/byteBuilderX/stratum/internal/evaluation/application"
 	evaldomain "github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	evalport "github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
@@ -382,6 +385,12 @@ func (e *tenantCaptureAgentExecutor) ExecuteRevision(
 	return &agentapp.AgentResult{Output: "ok"}, 1, nil
 }
 
+func (e *tenantCaptureAgentExecutor) ExecuteSkillScenarioRevision(
+	context.Context, agentdomain.AgentRevision, agentapp.ExecRequest, agentapp.ExecMeta, []agentport.SkillActivation,
+) (*agentapp.AgentResult, int, error) {
+	return &agentapp.AgentResult{Output: "ok"}, 1, nil
+}
+
 type validatingRevisionStore struct{ payloads map[string][]byte }
 
 func (s *validatingRevisionStore) Put(_ context.Context, payload evalport.RevisionPayload) (evalport.RevisionPayloadRef, error) {
@@ -456,6 +465,12 @@ func (f fakeAgentRevisionExecutor) SnapshotRevision(
 
 func (f fakeAgentRevisionExecutor) ExecuteRevision(
 	context.Context, agentdomain.AgentRevision, agentapp.ExecRequest, agentapp.ExecMeta,
+) (*agentapp.AgentResult, int, error) {
+	return nil, 0, f.err
+}
+
+func (f fakeAgentRevisionExecutor) ExecuteSkillScenarioRevision(
+	context.Context, agentdomain.AgentRevision, agentapp.ExecRequest, agentapp.ExecMeta, []agentport.SkillActivation,
 ) (*agentapp.AgentResult, int, error) {
 	return nil, 0, f.err
 }
@@ -538,4 +553,98 @@ func (e *toolObservationsAgentExecutor) ExecuteRevision(
 	return e.result, 1, nil
 }
 
+func (e *toolObservationsAgentExecutor) ExecuteSkillScenarioRevision(
+	context.Context, agentdomain.AgentRevision, agentapp.ExecRequest, agentapp.ExecMeta, []agentport.SkillActivation,
+) (*agentapp.AgentResult, int, error) {
+	return e.result, 1, nil
+}
+
 var _ = agentdomain.AgentRevision{}
+
+func TestProjectExecutionSnapshot(t *testing.T) {
+	adapter := agentEvaluationAdapter{}
+	snap := &evaldomain.EvaluationContextSnapshot{
+		ResolvedExecution: evaldomain.ResolvedExecution{ContextWindow: 32768, OutputReserve: 8192},
+		PinnedAssignments: evaldomain.PinnedAssignments{
+			MCPRevisions:       map[string]string{"mcp-server-1": "rev-mcp-1"},
+			KnowledgeRevisions: map[string]string{"workspace-a": "rev-know-1"},
+		},
+		Execution: []evaldomain.GroupSnapshot{
+			{GroupKey: evaldomain.GroupTrace, Values: map[string]any{"trace.capture_parameters": true}},
+			{GroupKey: evaldomain.GroupAgent, Values: map[string]any{"agent.temperature": 0.7}},
+		},
+	}
+	es := adapter.projectExecutionSnapshot(snap)
+	require.Equal(t, 32768, es.ContextWindowTokens)
+	require.Equal(t, 8192, es.OutputReserveTokens)
+	require.Equal(t, "rev-mcp-1", es.PinnedMCP["mcp-server-1"].RevisionID)
+	require.Equal(t, "rev-know-1", es.PinnedKnowledge["workspace-a"].RevisionID)
+	// 仅 trace 组投影为 TraceParameters，其他组不进入。
+	require.Equal(t, true, es.TraceParameters["trace.capture_parameters"])
+	require.NotContains(t, es.TraceParameters, "agent.temperature")
+}
+
+func TestExecuteRevisionInjectsExecutionSnapshot(t *testing.T) {
+	revisions := &fakeAgentRevisionService{revision: evaldomain.ResourceRevision{
+		ID: "published-1", ResourceKind: evaldomain.ResourceKindAgent, ResourceID: "agent-1",
+		Status: evaldomain.RevisionStatusPublished,
+	}, payload: []byte(`{"agent_id":"agent-1","type":"react","system_prompt":"baseline","model":"qwen-plus","max_iterations":5}`), found: true}
+	executor := &snapshotCaptureAgentExecutor{}
+	adapter := agentEvaluationAdapter{revisions: revisions, agents: executor, parameters: parametersdomain.NewParametersRegistry()}
+	snap := &evaldomain.EvaluationContextSnapshot{
+		ResolvedExecution: evaldomain.ResolvedExecution{ContextWindow: 32768, OutputReserve: 8192},
+		PinnedAssignments: evaldomain.PinnedAssignments{
+			MCPRevisions:       map[string]string{"mcp-server-1": "rev-mcp-1"},
+			KnowledgeRevisions: map[string]string{"workspace-a": "rev-know-1"},
+		},
+		Execution: []evaldomain.GroupSnapshot{
+			{GroupKey: evaldomain.GroupTrace, Values: map[string]any{"trace.capture_parameters": true}},
+		},
+	}
+	ctx := evaldomain.WithEvalSnapshot(context.Background(), snap)
+	_, err := adapter.ExecuteRevision(ctx, "tenant-1", "user-1", agentRef("published-1"), evaldomain.EvalCase{Input: "hello"})
+	require.NoError(t, err)
+	require.True(t, executor.hasSnap, "execution snapshot must be injected into ctx")
+	require.Equal(t, 32768, executor.window)
+	require.Equal(t, 8192, executor.reserve)
+	require.Equal(t, "rev-mcp-1", executor.mcpPins["mcp-server-1"])
+	require.True(t, executor.meta.KnowledgeAssignmentsPinned)
+	require.Equal(t, "rev-know-1", executor.meta.PinnedKnowledgeRevisions["workspace-a"].RevisionID)
+	require.Equal(t, "rev-mcp-1", executor.meta.PinnedMCPRevisions["mcp-server-1"].RevisionID)
+}
+
+type snapshotCaptureAgentExecutor struct {
+	meta    agentapp.ExecMeta
+	hasSnap bool
+	window  int
+	reserve int
+	mcpPins map[string]string
+}
+
+func (e *snapshotCaptureAgentExecutor) SnapshotRevision(
+	context.Context, string, string,
+) (agentdomain.AgentRevision, error) {
+	return agentdomain.AgentRevision{}, nil
+}
+
+func (e *snapshotCaptureAgentExecutor) ExecuteRevision(
+	ctx context.Context, _ agentdomain.AgentRevision, _ agentapp.ExecRequest, meta agentapp.ExecMeta,
+) (*agentapp.AgentResult, int, error) {
+	e.meta = meta
+	if es := agentport.ExecutionSnapshotFromCtx(ctx); es != nil {
+		e.hasSnap = true
+		e.window = es.ContextWindowTokens
+		e.reserve = es.OutputReserveTokens
+		e.mcpPins = make(map[string]string, len(es.PinnedMCP))
+		for serverID, pin := range es.PinnedMCP {
+			e.mcpPins[serverID] = pin.RevisionID
+		}
+	}
+	return &agentapp.AgentResult{Output: "ok"}, 1, nil
+}
+
+func (e *snapshotCaptureAgentExecutor) ExecuteSkillScenarioRevision(
+	context.Context, agentdomain.AgentRevision, agentapp.ExecRequest, agentapp.ExecMeta, []agentport.SkillActivation,
+) (*agentapp.AgentResult, int, error) {
+	return &agentapp.AgentResult{Output: "ok"}, 1, nil
+}

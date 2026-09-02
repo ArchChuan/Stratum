@@ -124,7 +124,7 @@ func TestPgRunRepository_dimensionsFailureReasonRoundTrip(t *testing.T) {
 	// SaveRun 侧：dimensions 序列化为 JSON 数组，failure_reason 原样写入。
 	expectTenantTx(writeMock)
 	writeMock.ExpectExec("INSERT INTO eval_runs").
-		WithArgs("run-rt", "prompt", "r-1", "rev-1", "s-1", true, 1, 1, `{"pass_rate":1}`, "", now).
+		WithArgs("run-rt", "prompt", "r-1", "rev-1", "s-1", true, 1, 1, `{"pass_rate":1}`, "{}", "", now).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	writeMock.ExpectExec("INSERT INTO eval_case_results").
 		WithArgs("case-rt", "run-rt", "case-1", true, `{"ok":true}`, "m", "", "tr-1", 5, 0.1, 2,
@@ -144,8 +144,8 @@ func TestPgRunRepository_dimensionsFailureReasonRoundTrip(t *testing.T) {
 		WithArgs("run-rt").
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "resource_kind", "resource_id", "revision_id", "suite_revision_id",
-			"passed", "total_cases", "passed_cases", "metrics", "created_by", "created_at",
-		}).AddRow("run-rt", "prompt", "r-1", "rev-1", "s-1", true, 1, 1, []byte(`{"pass_rate":1}`), "creator-1", now))
+			"passed", "total_cases", "passed_cases", "metrics", "context_snapshot", "created_by", "created_at",
+		}).AddRow("run-rt", "prompt", "r-1", "rev-1", "s-1", true, 1, 1, []byte(`{"pass_rate":1}`), []byte("{}"), "creator-1", now))
 	readMock.ExpectQuery("SELECT case_id, passed, actual_output").
 		WithArgs("run-rt").
 		WillReturnRows(pgxmock.NewRows([]string{
@@ -219,7 +219,7 @@ func TestPgRunRepository_processAndToolRoundTrip(t *testing.T) {
 	// SaveRun 侧：process_pass/failure 原样，tool_sequence 为脱敏后的工具序列 JSON。
 	expectTenantTx(writeMock)
 	writeMock.ExpectExec("INSERT INTO eval_runs").
-		WithArgs("run-pt", "prompt", "r-1", "rev-1", "s-1", true, 1, 1, `{"pass_rate":1}`, "", now).
+		WithArgs("run-pt", "prompt", "r-1", "rev-1", "s-1", true, 1, 1, `{"pass_rate":1}`, "{}", "", now).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	writeMock.ExpectExec("INSERT INTO eval_case_results").
 		WithArgs("case-pt", "run-pt", "case-1", true, `{"ok":true}`, "m", "", "tr-1", 5, 0.1, 2,
@@ -237,8 +237,8 @@ func TestPgRunRepository_processAndToolRoundTrip(t *testing.T) {
 		WithArgs("run-pt").
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "resource_kind", "resource_id", "revision_id", "suite_revision_id",
-			"passed", "total_cases", "passed_cases", "metrics", "created_by", "created_at",
-		}).AddRow("run-pt", "prompt", "r-1", "rev-1", "s-1", true, 1, 1, []byte(`{"pass_rate":1}`), "creator-1", now))
+			"passed", "total_cases", "passed_cases", "metrics", "context_snapshot", "created_by", "created_at",
+		}).AddRow("run-pt", "prompt", "r-1", "rev-1", "s-1", true, 1, 1, []byte(`{"pass_rate":1}`), []byte("{}"), "creator-1", now))
 	readMock.ExpectQuery("SELECT case_id, passed, actual_output").
 		WithArgs("run-pt").
 		WillReturnRows(pgxmock.NewRows([]string{
@@ -258,4 +258,114 @@ func TestPgRunRepository_processAndToolRoundTrip(t *testing.T) {
 	require.Equal(t, run.Results[0].ProcessFailure, got.Results[0].ProcessFailure)
 	require.Equal(t, sanitized, got.Results[0].Tools)
 	require.NoError(t, readMock.ExpectationsWereMet())
+}
+
+// TestRunRoundTripSnapshot 验证 SaveRun（含 ContextSnapshot）→ GetRun 的
+// context_snapshot 列 round-trip：存入的非 nil 快照读回相等；"{}"（旧 run /
+// 未捕获）读回 nil，与 omitempty 序列化自洽（§7 版本快照落库）。
+func TestRunRoundTripSnapshot(t *testing.T) {
+	writeMock := newMockRepo(t)
+	readMock := newMockRepo(t)
+	now := time.Now().Truncate(time.Microsecond).UTC()
+
+	snap := &domain.EvaluationContextSnapshot{
+		SchemaVersion: domain.SnapshotSchemaVersion,
+		Evaluation: domain.GroupSnapshot{
+			GroupKey:   domain.GroupEvaluation,
+			VersionSeq: 7,
+			Values:     map[string]any{"judge_model": "qwen-max", "observe": "enabled", "pass_threshold": 0.8},
+		},
+		Execution: []domain.GroupSnapshot{
+			{GroupKey: domain.GroupAgent, VersionSeq: 3, Values: map[string]any{"model": "qwen-plus", "temperature": 0.3}},
+			{GroupKey: domain.GroupTrace, VersionSeq: 1, Values: map[string]any{"level": "step", "verbose": true}},
+		},
+		ResolvedExecution: domain.ResolvedExecution{ContextWindow: 2000, OutputReserve: 500},
+		PinnedAssignments: domain.PinnedAssignments{
+			SkillAgentRevision: map[string]string{"skill-1": "rev-abc"},
+			MCPRevisions:       map[string]string{"mcp-1": "rev-mcp"},
+			KnowledgeRevisions: map[string]string{"kb-1": "rev-kb"},
+		},
+		CapturedAt: time.Date(2026, 8, 1, 12, 30, 0, 0, time.UTC),
+		CapturedBy: "user-1",
+	}
+	snapshotJSON, err := json.Marshal(snap)
+	require.NoError(t, err)
+
+	run := domain.EvalRun{
+		ID:              "run-snap",
+		Resource:        domain.ResourceRef{Kind: "prompt", ResourceID: "r-1", RevisionID: "rev-1"},
+		SuiteRevisionID: "s-1",
+		Passed:          true,
+		TotalCases:      1,
+		PassedCases:     1,
+		Metrics:         map[string]any{"pass_rate": 1.0},
+		CreatedAt:       now,
+		ContextSnapshot: snap,
+	}
+
+	// SaveRun 侧：context_snapshot 序列化进 INSERT（pgx v5 JSONB 收 string）。
+	expectTenantTx(writeMock)
+	writeMock.ExpectExec("INSERT INTO eval_runs").
+		WithArgs("run-snap", "prompt", "r-1", "rev-1", "s-1", true, 1, 1,
+			`{"pass_rate":1}`, string(snapshotJSON), "", now).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	writeMock.ExpectCommit()
+	writeRepo := &PgRunRepository{pool: writeMock}
+	require.NoError(t, writeRepo.SaveRun(context.Background(), "t1", run))
+	require.NoError(t, writeMock.ExpectationsWereMet())
+
+	// GetRun 侧：context_snapshot 列读回并反序列化，快照相等。
+	expectTenantTx(readMock)
+	readMock.ExpectQuery("SELECT id, resource_kind, resource_id, revision_id, suite_revision_id").
+		WithArgs("run-snap").
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "resource_kind", "resource_id", "revision_id", "suite_revision_id",
+			"passed", "total_cases", "passed_cases", "metrics", "context_snapshot", "created_by", "created_at",
+		}).AddRow("run-snap", "prompt", "r-1", "rev-1", "s-1", true, 1, 1,
+			[]byte(`{"pass_rate":1}`), snapshotJSON, "creator-1", now))
+	readMock.ExpectQuery("SELECT case_id, passed, actual_output").
+		WithArgs("run-snap").
+		WillReturnRows(pgxmock.NewRows([]string{
+			"case_id", "passed", "actual_output", "message", "error_message", "trace_id",
+			"tokens", "cost_usd", "duration_ms", "dimensions", "failure_reason", "trace_evidence",
+			"process_pass", "process_failure", "tool_sequence",
+		}))
+	readMock.ExpectCommit()
+	readRepo := &PgRunRepository{pool: readMock}
+	got, found, err := readRepo.GetRun(context.Background(), "t1", "run-snap")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, snap, got.ContextSnapshot)
+	require.NoError(t, readMock.ExpectationsWereMet())
+}
+
+// TestRunRoundTripSnapshotEmptyJSON 验证旧 run（context_snapshot='{}'）读回
+// nil ContextSnapshot，与 omitempty 序列化行为自洽。
+func TestRunRoundTripSnapshotEmptyJSON(t *testing.T) {
+	mock := newMockRepo(t)
+	repo := &PgRunRepository{pool: mock}
+	now := time.Now().Truncate(time.Microsecond).UTC()
+
+	expectTenantTx(mock)
+	mock.ExpectQuery("SELECT id, resource_kind, resource_id, revision_id, suite_revision_id").
+		WithArgs("run-legacy").
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "resource_kind", "resource_id", "revision_id", "suite_revision_id",
+			"passed", "total_cases", "passed_cases", "metrics", "context_snapshot", "created_by", "created_at",
+		}).AddRow("run-legacy", "prompt", "r-1", "rev-1", "s-1", true, 1, 1,
+			[]byte(`{"pass_rate":1}`), []byte("{}"), "creator-1", now))
+	mock.ExpectQuery("SELECT case_id, passed, actual_output").
+		WithArgs("run-legacy").
+		WillReturnRows(pgxmock.NewRows([]string{
+			"case_id", "passed", "actual_output", "message", "error_message", "trace_id",
+			"tokens", "cost_usd", "duration_ms", "dimensions", "failure_reason", "trace_evidence",
+			"process_pass", "process_failure", "tool_sequence",
+		}))
+	mock.ExpectCommit()
+
+	got, found, err := repo.GetRun(context.Background(), "t1", "run-legacy")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Nil(t, got.ContextSnapshot)
+	require.NoError(t, mock.ExpectationsWereMet())
 }

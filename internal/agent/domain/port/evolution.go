@@ -57,6 +57,13 @@ type KnowledgeRevisionPin struct {
 	Variant      string `json:"variant"`
 }
 
+// MCPRevisionPin 是评测执行固定的 MCP 版本 pin（canary 隔离，D4）。
+type MCPRevisionPin struct {
+	RevisionID   string
+	ExperimentID string
+	Variant      string
+}
+
 type KnowledgeRevisionResolver interface {
 	ResolveKnowledgeRevision(
 		ctx context.Context,

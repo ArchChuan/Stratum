@@ -7,11 +7,12 @@ import (
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
+	"github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
 )
 
 func TestJobServiceEnqueuesIdempotentEvaluationRun(t *testing.T) {
 	repo := &fakeJobRepo{}
-	svc := NewJobService(repo, nil)
+	svc := NewJobService(repo, nil, &fakeCapturer{snapshot: snapFixture()})
 
 	job, err := svc.EnqueueRun(context.Background(), "tenant-1", EnqueueRunInput{
 		Resource:        domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "version-2"},
@@ -38,7 +39,7 @@ func TestJobServiceRunOnceExecutesClaimedEvaluation(t *testing.T) {
 	}
 	repo := &fakeJobRepo{claimed: &job}
 	runner := &fakeStoredRunner{}
-	svc := NewJobService(repo, runner)
+	svc := NewJobService(repo, runner, nil)
 
 	worked, err := svc.RunOnce(context.Background(), "tenant-1", "worker-1", time.Minute)
 	if err != nil {
@@ -63,7 +64,7 @@ func TestJobServiceRunOnceRejectsLegacyJobWithoutRequestIdentity(t *testing.T) {
 	}
 	repo := &fakeJobRepo{claimed: &job}
 	runner := &fakeStoredRunner{}
-	svc := NewJobService(repo, runner)
+	svc := NewJobService(repo, runner, nil)
 
 	worked, err := svc.RunOnce(context.Background(), "tenant-1", "worker-1", time.Minute)
 	if !worked || err == nil || repo.failedID != "job-legacy" || repo.failedMessage == "" {
@@ -86,11 +87,96 @@ func TestJobServiceRunOnceExposesLegacyJobFailureWriteError(t *testing.T) {
 		},
 	}
 	repo := &fakeJobRepo{claimed: &job, failErr: wantErr}
-	svc := NewJobService(repo, &fakeStoredRunner{})
+	svc := NewJobService(repo, &fakeStoredRunner{}, nil)
 
 	worked, err := svc.RunOnce(context.Background(), "tenant-1", "worker-1", time.Minute)
 	if !worked || !errors.Is(err, wantErr) {
 		t.Fatalf("failure write error not exposed: worked=%v err=%v", worked, err)
+	}
+}
+
+func TestJobServiceRunOncePassesSnapshotToRunner(t *testing.T) {
+	job := domain.EvaluationJob{
+		ID: "job-1", Type: domain.JobTypeEvalRun, Status: domain.JobRunning,
+		Payload: domain.EvalRunJobPayload{
+			Resource:        domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "version-2"},
+			SuiteRevisionID: "suite-revision-1",
+			RequestedBy:     "user-1",
+			Snapshot:        snapFixture(),
+		},
+	}
+	repo := &fakeJobRepo{claimed: &job}
+	runner := &fakeStoredRunner{}
+	svc := NewJobService(repo, runner, nil)
+
+	worked, err := svc.RunOnce(context.Background(), "tenant-1", "worker-1", time.Minute)
+	if err != nil {
+		t.Fatalf("RunOnce returned error: %v", err)
+	}
+	if !worked || runner.snapshot == nil || runner.snapshot.SchemaVersion != domain.SnapshotSchemaVersion {
+		t.Fatalf("runner did not receive job snapshot: worked=%v runner=%+v", worked, runner)
+	}
+}
+
+func TestEnqueueRunSnapshotCapturesIntoJobPayload(t *testing.T) {
+	repo := &fakeJobRepo{}
+	capturer := &fakeCapturer{snapshot: snapFixture()}
+	svc := NewJobService(repo, nil, capturer)
+
+	job, err := svc.EnqueueRun(context.Background(), "tenant-1", EnqueueRunInput{
+		Resource:        domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "version-2"},
+		SuiteRevisionID: "suite-revision-1",
+		IdempotencyKey:  "request-1",
+		RequestedBy:     "user-1",
+	})
+	if err != nil {
+		t.Fatalf("EnqueueRun returned error: %v", err)
+	}
+	if capturer.calls != 1 {
+		t.Fatalf("capturer calls = %d, want 1", capturer.calls)
+	}
+	if job.Payload.Snapshot == nil || job.Payload.Snapshot.SchemaVersion != domain.SnapshotSchemaVersion {
+		t.Fatalf("expected captured snapshot in job payload, got %+v", job.Payload.Snapshot)
+	}
+	if repo.enqueued.Payload.Snapshot == nil {
+		t.Fatal("snapshot was not persisted with the enqueued job")
+	}
+}
+
+func TestEnqueueRunSnapshotFailsClosedWhenCapturerErrors(t *testing.T) {
+	repo := &fakeJobRepo{}
+	capturer := &fakeCapturer{err: errors.New("capture down")}
+	svc := NewJobService(repo, nil, capturer)
+
+	_, err := svc.EnqueueRun(context.Background(), "tenant-1", EnqueueRunInput{
+		Resource:        domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "version-2"},
+		SuiteRevisionID: "suite-revision-1",
+		IdempotencyKey:  "request-1",
+		RequestedBy:     "user-1",
+	})
+	if err == nil {
+		t.Fatal("EnqueueRun must reject creation when capture fails")
+	}
+	if repo.enqueued.ID != "" {
+		t.Fatalf("job must not be enqueued on capture failure: %+v", repo.enqueued)
+	}
+}
+
+func TestEnqueueRunSnapshotFailsClosedWhenCapturerNil(t *testing.T) {
+	repo := &fakeJobRepo{}
+	svc := NewJobService(repo, nil, nil)
+
+	_, err := svc.EnqueueRun(context.Background(), "tenant-1", EnqueueRunInput{
+		Resource:        domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "version-2"},
+		SuiteRevisionID: "suite-revision-1",
+		IdempotencyKey:  "request-1",
+		RequestedBy:     "user-1",
+	})
+	if err == nil {
+		t.Fatal("EnqueueRun must reject creation when capturer not configured")
+	}
+	if repo.enqueued.ID != "" {
+		t.Fatalf("job must not be enqueued without a capturer: %+v", repo.enqueued)
 	}
 }
 
@@ -131,12 +217,32 @@ func (f *fakeJobRepo) Fail(_ context.Context, _ string, jobID, message string) e
 	return f.failErr
 }
 
-type fakeStoredRunner struct{ suiteRevisionID, requestedBy string }
+type fakeStoredRunner struct {
+	suiteRevisionID, requestedBy string
+	snapshot                     *domain.EvaluationContextSnapshot
+}
 
 func (f *fakeStoredRunner) RunStored(
 	_ context.Context, _, requestedBy string, _ domain.ResourceRef, suiteRevisionID string,
+	snapshot *domain.EvaluationContextSnapshot,
 ) (domain.EvalRun, error) {
 	f.suiteRevisionID = suiteRevisionID
 	f.requestedBy = requestedBy
+	f.snapshot = snapshot
 	return domain.EvalRun{ID: "run-1"}, nil
+}
+
+// fakeCapturer 是 port.SnapshotCapturer 的桩：返回固定快照或 error。
+type fakeCapturer struct {
+	snapshot *domain.EvaluationContextSnapshot
+	err      error
+	calls    int
+}
+
+func (f *fakeCapturer) Capture(_ context.Context, _ string, _ port.CaptureInput) (*domain.EvaluationContextSnapshot, error) {
+	f.calls++
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.snapshot, nil
 }
