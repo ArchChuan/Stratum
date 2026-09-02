@@ -4,11 +4,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { agentApi } from '@/modules/agent/api/agent.api';
 import { mcpApi } from '@/modules/mcp/api/mcp.api';
 import { skillApi } from '@/modules/skill/api/skill.api';
+import { extractErrorMessage } from '@/shared/lib';
 
 type Option = { value: string; label: string };
-interface RequestError { response?: { data?: { error?: string } } }
-
-const errorText = (error: unknown) => (error as RequestError).response?.data?.error || '操作失败';
 
 export const useWorkflowResources = () => {
   const [agents, setAgents] = useState<Option[]>([]);
@@ -29,7 +27,7 @@ export const useWorkflowResources = () => {
         setAgents(agentResult.value.map((agent) => ({ value: agent.id, label: agent.name })));
         setAgentAllowedSkills(Object.fromEntries(agentResult.value.map((agent) => [agent.id, agent.allowedSkills])));
       } else {
-        message.error({ content: errorText(agentResult.reason), duration: 3 });
+        message.error({ content: extractErrorMessage(agentResult.reason), duration: 3 });
       }
       if (skillResult.status === 'fulfilled') {
         // 等化后 builtin skill 对普通 workflow 开放挂载：只保留已发布修订。
@@ -40,12 +38,12 @@ export const useWorkflowResources = () => {
           label: `${skill.name}（已发布）`,
         })));
       } else {
-        message.error({ content: errorText(skillResult.reason), duration: 3 });
+        message.error({ content: extractErrorMessage(skillResult.reason), duration: 3 });
       }
       if (mcpResult.status === 'fulfilled') {
         setMCPServers(mcpResult.value.map((server) => ({ value: server.id, label: server.name })));
       } else {
-        message.error({ content: errorText(mcpResult.reason), duration: 3 });
+        message.error({ content: extractErrorMessage(mcpResult.reason), duration: 3 });
       }
     };
     void load();

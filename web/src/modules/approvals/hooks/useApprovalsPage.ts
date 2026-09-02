@@ -7,13 +7,9 @@ import type { ApprovalDetail, ApprovalRow, ApprovalDecision } from '../api';
 import { APPROVAL_POLL_MS } from '@/constants';
 import { tenantApi, type Member } from '@/modules/iam';
 import { usePagination } from '@/shared/hooks';
-
-interface RequestError { response?: { data?: { error?: string } } }
+import { extractErrorMessage } from '@/shared/lib';
 
 export type ApprovalsTab = 'pending' | 'history';
-
-const errorMessage = (err: unknown, fallback: string): string =>
-  (err as RequestError).response?.data?.error || fallback;
 
 // 可指派审批人的角色白名单：后端 GET /tenant/members?role=admin,owner 按此过滤
 // 且 SetAssignee 会再次校验（ErrApprovalAssigneeInvalid 兜底），前端不自行过滤。
@@ -55,7 +51,7 @@ export const useApprovalsPage = () => {
       setPendingRows(rows);
     } catch (err) {
       if (seq !== pendingSeqRef.current) return;
-      message.error({ content: errorMessage(err, '加载待审批列表失败'), duration: 3 });
+      message.error({ content: extractErrorMessage(err, '加载待审批列表失败'), duration: 3 });
     } finally {
       if (seq === pendingSeqRef.current) setPendingLoading(false);
     }
@@ -84,7 +80,7 @@ export const useApprovalsPage = () => {
       setTotal(data.total);
     } catch (err) {
       if (seq !== historySeqRef.current) return;
-      message.error({ content: errorMessage(err, '加载审批历史失败'), duration: 3 });
+      message.error({ content: extractErrorMessage(err, '加载审批历史失败'), duration: 3 });
     } finally {
       if (seq === historySeqRef.current) setHistoryLoading(false);
     }
@@ -98,7 +94,7 @@ export const useApprovalsPage = () => {
       const pageData = await tenantApi.members(1, 100, ASSIGNABLE_ROLES);
       setApprovers(pageData.members);
     } catch (err) {
-      message.error({ content: errorMessage(err, '加载可指派成员失败'), duration: 3 });
+      message.error({ content: extractErrorMessage(err, '加载可指派成员失败'), duration: 3 });
     } finally {
       setApproversLoading(false);
     }
@@ -143,7 +139,7 @@ export const useApprovalsPage = () => {
       setDetail(data);
     } catch (err) {
       if (seq !== detailSeqRef.current) return;
-      message.error({ content: errorMessage(err, '加载审批详情失败'), duration: 3 });
+      message.error({ content: extractErrorMessage(err, '加载审批详情失败'), duration: 3 });
     } finally {
       if (seq === detailSeqRef.current) setDetailLoading(false);
     }
@@ -173,7 +169,7 @@ export const useApprovalsPage = () => {
       void refresh(activeTab);
       return true;
     } catch (err) {
-      message.error({ content: errorMessage(err, '操作失败'), duration: 3 });
+      message.error({ content: extractErrorMessage(err, '操作失败'), duration: 3 });
       return false;
     } finally {
       setActionKey(null);
@@ -200,7 +196,7 @@ export const useApprovalsPage = () => {
       void refresh(activeTab);
       return true;
     } catch (err) {
-      message.error({ content: errorMessage(err, '指派失败'), duration: 3 });
+      message.error({ content: extractErrorMessage(err, '指派失败'), duration: 3 });
       return false;
     } finally {
       setActionKey(null);

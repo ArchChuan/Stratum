@@ -6,7 +6,7 @@ import type { WorkflowVersion } from '../model/workflow';
 
 import { createIdempotencyKey } from './idempotencyKey';
 
-interface RequestError { response?: { data?: { error?: string } } }
+import { extractErrorMessage } from '@/shared/lib';
 
 export const useWorkflowExecution = (workflowId: string) => {
   const [version, setVersion] = useState<WorkflowVersion | null>(null);
@@ -28,7 +28,7 @@ export const useWorkflowExecution = (workflowId: string) => {
         if (!preferredId) throw new Error('这个工作流还没有可运行的发布版本');
         return workflowApi.getWorkflowVersion(workflowId, preferredId);
       } catch (error: unknown) {
-        if (!cancelled) message.error({ content: (error as RequestError).response?.data?.error || (error as Error).message || '操作失败', duration: 3 });
+        if (!cancelled) message.error({ content: extractErrorMessage(error, '操作失败'), duration: 3 });
         return null;
       }
     };
@@ -44,7 +44,7 @@ export const useWorkflowExecution = (workflowId: string) => {
       idempotencyKey.current = createIdempotencyKey();
       return result;
     } catch (error: unknown) {
-      message.error({ content: (error as RequestError).response?.data?.error || '操作失败', duration: 3 });
+      message.error({ content: extractErrorMessage(error, '操作失败'), duration: 3 });
       return null;
     } finally {
       setSubmitting(false);

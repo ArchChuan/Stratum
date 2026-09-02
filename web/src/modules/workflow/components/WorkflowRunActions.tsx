@@ -3,7 +3,7 @@ import { Button, Modal, Space, message } from 'antd';
 import { workflowApi } from '../api/workflow.api';
 import type { WorkflowRunState } from '../model/run-state';
 
-interface RequestError { response?: { data?: { error?: string }; status?: number } }
+import { extractErrorMessage } from '@/shared/lib';
 
 export const WorkflowRunActions = ({ state, onChanged }: { state: WorkflowRunState; onChanged: () => void }) => {
   const execute = (action: 'cancel' | 'pause' | 'resume') => Modal.confirm({
@@ -18,8 +18,9 @@ export const WorkflowRunActions = ({ state, onChanged }: { state: WorkflowRunSta
         message.success({ content: '操作成功', duration: 2 });
         onChanged();
       } catch (error: unknown) {
-        const requestError = error as RequestError;
-        message.error({ content: requestError.response?.status === 409 ? '运行状态已变化，已重新加载最新状态' : requestError.response?.data?.error || '操作失败', duration: 3 });
+        // 409 = generation 冲突（并发变更），走特判文案并触发刷新；其余错误文案统一抽取。
+        const requestError = error as { response?: { status?: number } };
+        message.error({ content: requestError.response?.status === 409 ? '运行状态已变化，已重新加载最新状态' : extractErrorMessage(error, '操作失败'), duration: 3 });
         onChanged();
       }
     },

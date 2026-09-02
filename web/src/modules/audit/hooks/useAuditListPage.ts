@@ -5,6 +5,7 @@ import { auditApi } from '../api/audit.api';
 import type { ResourceChangeAudit } from '../model/audit';
 
 import { usePagination } from '@/shared/hooks';
+import { extractErrorMessage } from '@/shared/lib';
 
 export interface AuditFilters {
   from?: string;
@@ -12,8 +13,6 @@ export interface AuditFilters {
   resourceKind?: string;
   actorName?: string;
 }
-
-interface RequestError { response?: { data?: { error?: string } } }
 
 const EMPTY_FILTERS: AuditFilters = {};
 
@@ -49,7 +48,7 @@ export const useAuditListPage = (fetchers?: AuditListPageFetchers) => {
       setTotal(pageData.total);
     } catch (err) {
       if (seq !== requestSeqRef.current) return;
-      message.error({ content: (err as RequestError).response?.data?.error || '加载审计记录失败', duration: 3 });
+      message.error({ content: extractErrorMessage(err, '加载审计记录失败'), duration: 3 });
     } finally {
       if (seq === requestSeqRef.current) setLoading(false);
     }
@@ -79,7 +78,7 @@ export const useAuditListPage = (fetchers?: AuditListPageFetchers) => {
       const event = await getEvent(id);
       setDetailEvent(event);
     } catch (err) {
-      message.error({ content: (err as RequestError).response?.data?.error || '加载审计详情失败', duration: 3 });
+      message.error({ content: extractErrorMessage(err, '加载审计详情失败'), duration: 3 });
     } finally {
       setDetailLoading(false);
     }
