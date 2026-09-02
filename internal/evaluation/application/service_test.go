@@ -66,6 +66,40 @@ func TestServiceRunEvaluatesEnabledCasesAndPersistsResults(t *testing.T) {
 	}
 }
 
+// TestServiceRunPersistsContextSnapshotOnRun 覆盖 spec §7 落库接线：Service.Run
+// 把注入 ctx 的创建时快照挂到 EvalRun.ContextSnapshot，随 SaveRun 持久化到
+// eval_runs.context_snapshot（fake repo 记录断言）。
+func TestServiceRunPersistsContextSnapshotOnRun(t *testing.T) {
+	adapter := &fakeAdapter{outputs: map[string]any{"case-1": "ok"}}
+	repo := &fakeRunRepo{}
+	svc := NewService(adapter, repo, nil, nil)
+	snap := snapFixture()
+
+	run, err := svc.Run(domain.WithEvalSnapshot(context.Background(), snap), RunInput{
+		TenantID: "tenant-1",
+		Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "v1"},
+		Suite: domain.EvalSuiteRevision{ID: "sv-1", Cases: []domain.EvalCase{
+			{ID: "case-1", Input: "物流状态", ExpectedOutput: "发货", AssertionMode: domain.AssertionContains, Enabled: true},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if run.ContextSnapshot == nil {
+		t.Fatal("returned run must carry the context snapshot")
+	}
+	if repo.saved.ID != run.ID {
+		t.Fatal("run was not persisted")
+	}
+	// 传入的是注入 ctx 的同一个快照指针（Run 直接透传，未复制/改写）。
+	if repo.saved.ContextSnapshot == nil {
+		t.Fatal("persisted run must carry a non-nil context snapshot")
+	}
+	if repo.saved.ContextSnapshot != snap {
+		t.Fatalf("persisted snapshot %+v does not match injected snapshot %+v", repo.saved.ContextSnapshot, snap)
+	}
+}
+
 func TestServiceRunPersistsExecutionErrorsAsFailedCases(t *testing.T) {
 	adapter := &fakeAdapter{errCase: "case-1"}
 	repo := &fakeRunRepo{}

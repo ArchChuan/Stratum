@@ -152,12 +152,15 @@ func (s *Service) Run(ctx context.Context, input RunInput) (domain.EvalRun, erro
 	if err := input.Resource.Validate(); err != nil {
 		return domain.EvalRun{}, err
 	}
+	// ContextSnapshot 取注入 ctx 的创建时快照（上方已 fail-closed 确保非 nil），
+	// 随 SaveRun 落库 eval_runs.context_snapshot（spec §7 版本快照持久化）。
 	run := domain.EvalRun{
 		ID:              uuid.Must(uuid.NewV7()).String(),
 		Resource:        input.Resource,
 		SuiteRevisionID: input.Suite.ID,
 		Passed:          true,
 		Results:         make([]domain.EvalCaseResult, 0, len(input.Suite.Cases)),
+		ContextSnapshot: domain.EvalSnapshotFromCtx(ctx),
 		CreatedAt:       time.Now().UTC(),
 	}
 	for _, testCase := range input.Suite.Cases {
