@@ -104,8 +104,14 @@ func searchWorkspace(ctx context.Context, rs *RAGService, tenantID, viewerID, ws
 		// System-actor contexts (privileged wiring paths such as eval workers)
 		// carry the same trust as an admin owner and bypass the D2 gate.
 		SkipAccessCheck: reqctx.SystemActorFromContext(ctx) != "",
-		RerankModel:     rw.rerankModel,
-		JudgeModel:      rw.judgeModel,
+		// workspace 重排触发与模型/评分指令单一事实源：Reranking 使普通查询
+		// 触发配置的重排（builtin 或外部 provider:model）；指令随策略消费。
+		Reranking:                 rw.reranking,
+		RerankModel:               rw.rerankModel,
+		RerankTopK:                rw.rerankTopK,
+		JudgeModel:                rw.judgeModel,
+		RerankScoringInstructions: rw.rerankScoringInstructions,
+		JudgeScoringInstructions:  rw.judgeScoringInstructions,
 	})
 	if err != nil {
 		return wsResult{err: err}
@@ -116,13 +122,17 @@ func searchWorkspace(ctx context.Context, rs *RAGService, tenantID, viewerID, ws
 // resolvedWorkspace 收敛 resolveWorkspaceConfig 的多返回值，避免 6 值元组
 // 解构位错（review I2）。
 type resolvedWorkspace struct {
-	mode          string
-	effectiveTopK int
-	embedModel    string
-	workspaceID   string
-	threshold     float32
-	rerankModel   string
-	judgeModel    string
+	mode                      string
+	effectiveTopK             int
+	embedModel                string
+	workspaceID               string
+	threshold                 float32
+	reranking                 string
+	rerankModel               string
+	rerankTopK                int
+	judgeModel                string
+	rerankScoringInstructions string
+	judgeScoringInstructions  string
 }
 
 func resolveWorkspaceConfig(ctx context.Context, rs *RAGService, tenantID, ws string, topK int) (resolvedWorkspace, error) {
@@ -146,11 +156,16 @@ func resolveWorkspaceConfig(ctx context.Context, rs *RAGService, tenantID, ws st
 	if w.Config.QueryMode != "" {
 		rw.mode = w.Config.QueryMode
 	}
-	// 模型来自 workspace 显式配置（Global Constraint 1/5）：RerankModel 供 builtin
-	// 重排消费（当前触发面是 snapshot/evaluation 路径，Plain Query/API 面板
-	// Reranking 恒空，字段暂为潜在）；JudgeModel 由证据充分性门消费。
+	// 模型/重排触发/评分指令来自 workspace 显式配置：Reranking 触发重排（普通
+	// 查询据此生效，不再仅 snapshot/evaluation 路径）；RerankModel 供 builtin
+	// 语义重排消费；JudgeModel 由证据充分性门消费。评分指令随各自策略，空 =
+	// 内置评分 prompt。
+	rw.reranking = w.Config.Reranking
 	rw.rerankModel = w.Config.RerankModel
+	rw.rerankTopK = w.Config.RerankTopK
 	rw.judgeModel = w.Config.JudgeModel
+	rw.rerankScoringInstructions = w.Config.RerankScoringInstructions
+	rw.judgeScoringInstructions = w.Config.JudgeScoringInstructions
 	return rw, nil
 }
 
@@ -303,6 +318,10 @@ type RAGQueryRequest struct {
 	RerankModel string
 	// JudgeModel 是证据充分性 judge 模型（workspace 显式配置）；空 = 关闭 judge 门。
 	JudgeModel string
+	// RerankScoringInstructions / JudgeScoringInstructions 是 workspace 级评分
+	// 指令附加段（空 = 使用代码内置评分 prompt；JSON 输出结构固定不可改）。
+	RerankScoringInstructions string
+	JudgeScoringInstructions  string
 }
 
 type RAGQueryResult struct {
@@ -1152,6 +1171,7 @@ func (rs *RAGService) rerankSemantic(ctx context.Context, req RAGQueryRequest, p
 	}
 	results, err := rs.semanticReranker.Rerank(ctx, knowledgeport.RerankRequest{
 		Query: req.Question, Documents: docs, Model: req.RerankModel, TopN: topN,
+		ScoringInstructions: req.RerankScoringInstructions,
 	})
 	if err != nil {
 		return nil, err
@@ -1352,8 +1372,14 @@ func searchWorkspaceWithEvidence(ctx context.Context, rs *RAGService, tenantID, 
 		// System-actor contexts (privileged wiring paths) carry admin-owner
 		// trust and bypass the D2 gate.
 		SkipAccessCheck: reqctx.SystemActorFromContext(ctx) != "",
-		RerankModel:     rw.rerankModel,
-		JudgeModel:      rw.judgeModel,
+		// workspace 重排触发与模型/评分指令单一事实源：Reranking 使普通查询
+		// 触发配置的重排（builtin 或外部 provider:model）；指令随策略消费。
+		Reranking:                 rw.reranking,
+		RerankModel:               rw.rerankModel,
+		RerankTopK:                rw.rerankTopK,
+		JudgeModel:                rw.judgeModel,
+		RerankScoringInstructions: rw.rerankScoringInstructions,
+		JudgeScoringInstructions:  rw.judgeScoringInstructions,
 	})
 	if err != nil {
 		return wsEvidenceResult{err: err}
@@ -1361,7 +1387,7 @@ func searchWorkspaceWithEvidence(ctx context.Context, rs *RAGService, tenantID, 
 	// 充分性门（仅 evidence 路径）：判 INSUFFICIENT 时本 workspace 按无内容
 	// 处理（Sources 置空 + NoAnswer=insufficient_evidence），聚合按严重度
 	// 上报；fail-closed 降级原样放行。
-	out = rs.judgeSufficiencyGate(ctx, tenantID, ws, query, rw.judgeModel, out)
+	out = rs.judgeSufficiencyGate(ctx, tenantID, ws, query, rw.judgeModel, rw.judgeScoringInstructions, out)
 	titles := rs.documentTitles(ctx, tenantID, rw.workspaceID)
 	sources := make([]RAGSearchSource, 0, len(out.Sources))
 	for _, src := range out.Sources {

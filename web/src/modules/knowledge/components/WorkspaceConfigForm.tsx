@@ -1,4 +1,4 @@
-import { Button, Card, Col, Form, InputNumber, Modal, Row, Select, type FormInstance } from 'antd';
+import { Button, Card, Col, Form, Input, InputNumber, Modal, Row, Select, type FormInstance } from 'antd';
 
 import {
   KNOWLEDGE_DEFAULT_CHUNK_OVERLAP,
@@ -9,6 +9,7 @@ import {
   KNOWLEDGE_MAX_CHUNK_SIZE,
   KNOWLEDGE_MAX_RERANK_TOP_K,
   KNOWLEDGE_MAX_SCORE_THRESHOLD,
+  KNOWLEDGE_MAX_SCORING_INSTRUCTIONS_RUNES,
   KNOWLEDGE_MAX_TOP_K,
   KNOWLEDGE_MIN_CHUNK_OVERLAP,
   KNOWLEDGE_MIN_CHUNK_SIZE,
@@ -37,6 +38,8 @@ interface ConfigValues {
   judge_model?: string;
   score_threshold?: number;
   rerank_top_k?: number;
+  rerank_scoring_instructions?: string;
+  judge_scoring_instructions?: string;
 }
 
 interface WorkspaceConfigFormProps {
@@ -221,6 +224,32 @@ export const WorkspaceConfigForm = ({ form, loading, onSubmit, onUndo }: Workspa
             </Form.Item>
           </Col>
         </Row>
+        {reranking === 'builtin-score-v1' && (
+          <Form.Item
+            label="重排评分指令"
+            name="rerank_scoring_instructions"
+            tooltip="内置重排的相关性打分标准（附加段）；留空使用内置评分标准。JSON 输出结构固定，不可修改"
+          >
+            <Input.TextArea
+              rows={3}
+              showCount
+              maxLength={KNOWLEDGE_MAX_SCORING_INSTRUCTIONS_RUNES}
+              placeholder="留空使用内置评分标准"
+            />
+          </Form.Item>
+        )}
+        <Form.Item
+          label="证据充分性评分指令"
+          name="judge_scoring_instructions"
+          tooltip="证据充分性判断的评分标准（附加段，需配置判断模型后生效）；留空使用内置评分标准。JSON 输出结构固定，不可修改"
+        >
+          <Input.TextArea
+            rows={3}
+            showCount
+            maxLength={KNOWLEDGE_MAX_SCORING_INSTRUCTIONS_RUNES}
+            placeholder="留空使用内置评分标准"
+          />
+        </Form.Item>
         <Form.Item>
           <Button type="primary" htmlType="submit" size="small" loading={loading}>
             保存

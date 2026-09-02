@@ -41,38 +41,46 @@ type jsonbConfig struct {
 	// 不带 omitempty：空模型也显式落键，迁移谓词依赖（见 TestJSONBEmptyModelsWriteEmptyKeys）。
 	RerankModel string `json:"rerank_model"`
 	JudgeModel  string `json:"judge_model"`
+	// 评分指令带 omitempty：空指令不落键，存量 workspace 无需迁移（读回零值 =
+	// 内置评分 prompt，与空指令语义一致）。
+	RerankScoringInstructions string `json:"rerank_scoring_instructions,omitempty"`
+	JudgeScoringInstructions  string `json:"judge_scoring_instructions,omitempty"`
 }
 
 func toJSONB(c domain.WorkspaceConfig) string {
 	b, _ := json.Marshal(jsonbConfig{
-		EmbeddingModel:   c.EmbeddingModel,
-		ChunkSize:        c.ChunkSize,
-		ChunkOverlap:     c.ChunkOverlap,
-		QueryMode:        c.QueryMode,
-		TopK:             c.TopK,
-		ChunkingStrategy: c.ChunkingStrategy,
-		Reranking:        c.Reranking,
-		ScoreThreshold:   c.ScoreThreshold,
-		RerankTopK:       c.RerankTopK,
-		RerankModel:      c.RerankModel,
-		JudgeModel:       c.JudgeModel,
+		EmbeddingModel:            c.EmbeddingModel,
+		ChunkSize:                 c.ChunkSize,
+		ChunkOverlap:              c.ChunkOverlap,
+		QueryMode:                 c.QueryMode,
+		TopK:                      c.TopK,
+		ChunkingStrategy:          c.ChunkingStrategy,
+		Reranking:                 c.Reranking,
+		ScoreThreshold:            c.ScoreThreshold,
+		RerankTopK:                c.RerankTopK,
+		RerankModel:               c.RerankModel,
+		JudgeModel:                c.JudgeModel,
+		RerankScoringInstructions: c.RerankScoringInstructions,
+		JudgeScoringInstructions:  c.JudgeScoringInstructions,
 	})
 	return string(b)
 }
 
 func fromJSONB(c jsonbConfig) domain.WorkspaceConfig {
 	return domain.WorkspaceConfig{
-		EmbeddingModel:   c.EmbeddingModel,
-		ChunkSize:        c.ChunkSize,
-		ChunkOverlap:     c.ChunkOverlap,
-		QueryMode:        c.QueryMode,
-		TopK:             c.TopK,
-		ChunkingStrategy: c.ChunkingStrategy,
-		Reranking:        c.Reranking,
-		ScoreThreshold:   c.ScoreThreshold,
-		RerankTopK:       c.RerankTopK,
-		RerankModel:      c.RerankModel,
-		JudgeModel:       c.JudgeModel,
+		EmbeddingModel:            c.EmbeddingModel,
+		ChunkSize:                 c.ChunkSize,
+		ChunkOverlap:              c.ChunkOverlap,
+		QueryMode:                 c.QueryMode,
+		TopK:                      c.TopK,
+		ChunkingStrategy:          c.ChunkingStrategy,
+		Reranking:                 c.Reranking,
+		ScoreThreshold:            c.ScoreThreshold,
+		RerankTopK:                c.RerankTopK,
+		RerankModel:               c.RerankModel,
+		JudgeModel:                c.JudgeModel,
+		RerankScoringInstructions: c.RerankScoringInstructions,
+		JudgeScoringInstructions:  c.JudgeScoringInstructions,
 	}
 }
 

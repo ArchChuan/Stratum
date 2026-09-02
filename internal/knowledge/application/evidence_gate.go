@@ -15,7 +15,7 @@ import (
 // 不变量），经聚合严重度排序上报。fail-closed：model 为空（judge 门关闭）/
 // resolver 未装配/解析失败/调用失败/超时 → 原样放行（WARN 留痕），行为与不
 // 配置时完全一致，绝不误杀检索。
-func (rs *RAGService) judgeSufficiencyGate(ctx context.Context, tenantID, workspace, query, model string, result *RAGQueryResult) *RAGQueryResult {
+func (rs *RAGService) judgeSufficiencyGate(ctx context.Context, tenantID, workspace, query, model, instructions string, result *RAGQueryResult) *RAGQueryResult {
 	if model == "" || rs.judgeResolver == nil || len(result.Sources) == 0 {
 		return result
 	}
@@ -32,7 +32,7 @@ func (rs *RAGService) judgeSufficiencyGate(ctx context.Context, tenantID, worksp
 			zap.String("model", model))
 		return result
 	}
-	verdict, err := judge.JudgeSufficiency(ctx, query, formatSources(result.Sources))
+	verdict, err := judge.JudgeSufficiency(ctx, query, formatSources(result.Sources), instructions)
 	if err != nil {
 		rs.logger.Warn("knowledge.judge.sufficiency_degraded",
 			zap.String("tenant_id", tenantID), zap.String("workspace", workspace),

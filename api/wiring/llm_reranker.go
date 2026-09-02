@@ -67,6 +67,12 @@ func (r *llmReranker) Rerank(ctx context.Context, req knowledgeport.RerankReques
 	for i, doc := range req.Documents {
 		fmt.Fprintf(&prompt, "%d. %s\n", i, textutil.TruncateRunes(doc, constants.RerankLLMMaxDocRunes))
 	}
+	// 附加评分指令插在输出 JSON 结构之前，避免用户文本覆盖格式要求（JSON 结构
+	// 解析安全依赖其不被篡改）。空指令保持纯内置 prompt 行为不变。
+	if req.ScoringInstructions != "" {
+		prompt.WriteString("\n附加评分指令：")
+		prompt.WriteString(req.ScoringInstructions)
+	}
 	prompt.WriteString("\n输出 JSON：{\"scores\":[{\"index\":<候选编号>,\"score\":<0..1>},...]}，为每个候选恰好输出一个条目。")
 
 	zero := float64(0) // 显式 0 = 确定性采样，避免 provider 默认温度（review M4/F2）

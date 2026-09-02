@@ -46,7 +46,7 @@ func TestKnowledgeJudgeSufficiencyParsesVerdict(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stub := &knowledgeJudgeCompleterStub{content: tc.content}
-			got, err := newKnowledgeJudge(stub).JudgeSufficiency(context.Background(), "q", "evidence")
+			got, err := newKnowledgeJudge(stub).JudgeSufficiency(context.Background(), "q", "evidence", "")
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -67,7 +67,7 @@ func TestKnowledgeJudgeSufficiencyParsesVerdict(t *testing.T) {
 func TestKnowledgeJudgeDegradesOnErrors(t *testing.T) {
 	for _, content := range []string{"not json", `{}`} {
 		stub := &knowledgeJudgeCompleterStub{content: content}
-		if _, err := newKnowledgeJudge(stub).JudgeSufficiency(context.Background(), "q", "e"); err == nil {
+		if _, err := newKnowledgeJudge(stub).JudgeSufficiency(context.Background(), "q", "e", ""); err == nil {
 			t.Errorf("invalid sufficiency response %q must surface an error", content)
 		}
 	}
@@ -79,15 +79,44 @@ func TestKnowledgeJudgeDegradesOnErrors(t *testing.T) {
 		t.Error("bad JSON must surface an error for contradiction")
 	}
 	stub.err = context.DeadlineExceeded
-	if _, err := newKnowledgeJudge(stub).JudgeSufficiency(context.Background(), "q", "e"); err == nil {
+	if _, err := newKnowledgeJudge(stub).JudgeSufficiency(context.Background(), "q", "e", ""); err == nil {
 		t.Error("completer failure must surface an error")
+	}
+}
+
+func TestKnowledgeJudgeSufficiencyAppendsInstructions(t *testing.T) {
+	stub := &knowledgeJudgeCompleterStub{content: `{"sufficient": true}`}
+	jdg := newKnowledgeJudge(stub)
+
+	if _, err := jdg.JudgeSufficiency(context.Background(), "q", "e", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := stub.messages[1].Content; strings.Contains(got, "附加评分指令") {
+		t.Errorf("empty instructions must keep builtin prompt only, got %q", got)
+	}
+
+	if _, err := jdg.JudgeSufficiency(context.Background(), "q", "e", "证据不足时禁止猜测"); err != nil {
+		t.Fatal(err)
+	}
+	got := stub.messages[1].Content
+	// 指令作为附加段插入，且必须在 JSON 输出结构之前（结构解析安全依赖其不被篡改）。
+	idxJSON := strings.Index(got, `"sufficient"`)
+	idxIns := strings.Index(got, "证据不足时禁止猜测")
+	if idxJSON < 0 {
+		t.Errorf("JSON output structure must remain, got %q", got)
+	}
+	if !strings.Contains(got, "附加评分指令：证据不足时禁止猜测") {
+		t.Errorf("instructions must be appended as extra segment, got %q", got)
+	}
+	if idxIns < 0 || idxIns > idxJSON {
+		t.Errorf("instructions (%d) must precede JSON structure (%d), got %q", idxIns, idxJSON, got)
 	}
 }
 
 func TestKnowledgeJudgeTruncatesEvidence(t *testing.T) {
 	long := strings.Repeat("长", constants.KnowledgeJudgeMaxEvidenceRunes*2)
 	stub := &knowledgeJudgeCompleterStub{content: `{"sufficient": true}`}
-	if _, err := newKnowledgeJudge(stub).JudgeSufficiency(context.Background(), "q", long); err != nil {
+	if _, err := newKnowledgeJudge(stub).JudgeSufficiency(context.Background(), "q", long, ""); err != nil {
 		t.Fatal(err)
 	}
 	got := stub.messages[1].Content

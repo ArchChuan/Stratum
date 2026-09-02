@@ -28,9 +28,18 @@ func (j knowledgeJudge) judgeContext(ctx context.Context) (context.Context, cont
 	return context.WithTimeout(ctx, timeout)
 }
 
-func (j knowledgeJudge) JudgeSufficiency(ctx context.Context, query, evidence string) (knowledgeport.SufficiencyVerdict, error) {
+func (j knowledgeJudge) JudgeSufficiency(ctx context.Context, query, evidence, instructions string) (knowledgeport.SufficiencyVerdict, error) {
 	ctx, cancel := j.judgeContext(ctx)
 	defer cancel()
+	// 附加评分指令插在输出 JSON 结构之前（空指令保持纯内置 prompt 行为不变）。
+	scoring := fmt.Sprintf(
+		"判断给定证据是否足以支撑回答该问题。证据不足时宁可判不足，禁止猜测。\n\nQuestion:\n%s\n\nEvidence:\n%s",
+		query, textutil.TruncateRunes(evidence, constants.KnowledgeJudgeMaxEvidenceRunes),
+	)
+	if instructions != "" {
+		scoring += "\n\n附加评分指令：" + instructions
+	}
+	scoring += "\n\n输出 JSON：{\"sufficient\": true|false}。"
 	resp, err := j.completer.Complete(ctx, &llmgatewaydomain.CompletionRequest{
 		Model:     j.model,
 		MaxTokens: constants.KnowledgeJudgeMaxTokens,
@@ -39,10 +48,7 @@ func (j knowledgeJudge) JudgeSufficiency(ctx context.Context, query, evidence st
 		},
 		Messages: []llmgatewaydomain.Message{
 			{Role: "system", Content: "你是严谨的证据充分性法官。只输出 JSON，不输出其他内容。"},
-			{Role: "user", Content: fmt.Sprintf(
-				"判断给定证据是否足以支撑回答该问题。证据不足时宁可判不足，禁止猜测。\n\nQuestion:\n%s\n\nEvidence:\n%s\n\n输出 JSON：{\"sufficient\": true|false}。",
-				query, textutil.TruncateRunes(evidence, constants.KnowledgeJudgeMaxEvidenceRunes),
-			)},
+			{Role: "user", Content: scoring},
 		},
 	})
 	if err != nil {

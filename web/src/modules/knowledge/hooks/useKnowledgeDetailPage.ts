@@ -30,6 +30,8 @@ interface ConfigValues {
   judge_model?: string;
   score_threshold?: number;
   rerank_top_k?: number;
+  rerank_scoring_instructions?: string;
+  judge_scoring_instructions?: string;
 }
 
 interface QueryValues {
@@ -132,6 +134,10 @@ export const useKnowledgeDetailPage = () => {
         judge_model: data.config?.judge_model,
         score_threshold: data.config?.score_threshold,
         rerank_top_k: data.config?.rerank_top_k,
+        // 新建 workspace 由后端 applyDefaults 预填内置推荐文本，回填即显示；
+        // 存量 workspace 无键读回 undefined → 表单空 → 留空使用内置评分标准。
+        rerank_scoring_instructions: data.config?.rerank_scoring_instructions,
+        judge_scoring_instructions: data.config?.judge_scoring_instructions,
       };
       for (const field of Object.keys(values) as (keyof ConfigValues)[]) {
         const currentValue = configForm.getFieldValue(field);
@@ -229,6 +235,12 @@ export const useKnowledgeDetailPage = () => {
             rerank_model: values.rerank_model,
             // 清空必须发 ""（allowClear 置 undefined 会被 JSON 丢弃 → 后端 partial 保留旧值 → 判断门关不掉）
             judge_model: values.judge_model ?? '',
+            // 评分指令附加段：judge 指令常驻表单，清空发 ""（handler 哨兵转义 →
+            // 后端显式清空 → 回退内置评分标准）；rerank 指令仅 builtin 时随字段
+            // 存在，否则 undefined → JSON 省略 → 后端保留库中指令（切回策略恢复）。
+            rerank_scoring_instructions:
+              values.reranking === 'builtin-score-v1' ? (values.rerank_scoring_instructions ?? '') : undefined,
+            judge_scoring_instructions: values.judge_scoring_instructions ?? '',
           },
         });
         message.success({ content: '配置已保存', duration: 2 });

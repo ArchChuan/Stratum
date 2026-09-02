@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/byteBuilderX/stratum/pkg/constants"
 )
@@ -11,21 +12,22 @@ import (
 // Sentinel errors raised by Workspace domain methods. Application-level
 // names mirror these so the HTTP error mapping table can route both layers.
 var (
-	ErrInvalidEmbeddingModel     = errors.New("unsupported embedding model")
-	ErrEmbeddingModelRequired    = errors.New("embedding model is required")
-	ErrInvalidQueryMode          = errors.New("invalid query_mode")
-	ErrInvalidChunkingStrategy   = errors.New("invalid chunking_strategy")
-	ErrInvalidRerankIdentity     = errors.New("invalid reranking identity")
-	ErrInvalidScoreThreshold     = errors.New("score_threshold must be within [0, 1]")
-	ErrEmbeddingModelImmutable   = errors.New("embedding_model is immutable after creation")
-	ErrChunkSizeImmutable        = errors.New("chunk_size is immutable after creation")
-	ErrChunkOverlapImmutable     = errors.New("chunk_overlap is immutable after creation")
-	ErrChunkingStrategyImmutable = errors.New("chunking_strategy is immutable after creation")
-	ErrRerankModelRequired       = errors.New("rerank model is required")
-	ErrInvalidRerankModel        = errors.New("unsupported rerank model")
-	ErrInvalidJudgeModel         = errors.New("unsupported judge model")
-	ErrInvalidTopK               = errors.New("top_k must be within [1, max]")
-	ErrInvalidRerankTopK         = errors.New("rerank_top_k must be within [0, max]")
+	ErrInvalidEmbeddingModel      = errors.New("unsupported embedding model")
+	ErrEmbeddingModelRequired     = errors.New("embedding model is required")
+	ErrInvalidQueryMode           = errors.New("invalid query_mode")
+	ErrInvalidChunkingStrategy    = errors.New("invalid chunking_strategy")
+	ErrInvalidRerankIdentity      = errors.New("invalid reranking identity")
+	ErrInvalidScoreThreshold      = errors.New("score_threshold must be within [0, 1]")
+	ErrEmbeddingModelImmutable    = errors.New("embedding_model is immutable after creation")
+	ErrChunkSizeImmutable         = errors.New("chunk_size is immutable after creation")
+	ErrChunkOverlapImmutable      = errors.New("chunk_overlap is immutable after creation")
+	ErrChunkingStrategyImmutable  = errors.New("chunking_strategy is immutable after creation")
+	ErrRerankModelRequired        = errors.New("rerank model is required")
+	ErrInvalidRerankModel         = errors.New("unsupported rerank model")
+	ErrInvalidJudgeModel          = errors.New("unsupported judge model")
+	ErrInvalidTopK                = errors.New("top_k must be within [1, max]")
+	ErrInvalidRerankTopK          = errors.New("rerank_top_k must be within [0, max]")
+	ErrInvalidScoringInstructions = errors.New("scoring instructions exceed max runes")
 )
 
 const (
@@ -34,6 +36,12 @@ const (
 	DefaultChunkOverlap     = 64
 	DefaultTopK             = 5
 	DefaultChunkingStrategy = ChunkingStrategyStructureRecursive
+
+	// DefaultRerankScoringInstructions / DefaultJudgeScoringInstructions 是新建
+	// workspace 时预填的评分指令推荐文本（可直接编辑）。语义与内置评分 prompt
+	// 一致，编辑/清空都安全：清空后指令为空，运行时回落代码内置 prompt。
+	DefaultRerankScoringInstructions = "按查询与候选片段的语义相关性打分（0-1）：越相关分越高，分数须有明显区分度，避免全部同分或全部高分。结合查询中的限定条件（时间、范围、实体、数量）修正判断。"
+	DefaultJudgeScoringInstructions  = "逐条核对证据能否支撑问题所问的结论。证据缺失、仅支持部分结论、或与问题范围不符时判定为证据不足；证据不足时不得猜测作答。"
 
 	ChunkingStrategyRecursive          = "recursive"
 	ChunkingStrategyStructureRecursive = "structure_recursive"
@@ -105,6 +113,11 @@ type WorkspaceConfig struct {
 	// 模型；空 = judge 门关闭（fail-closed 放行）。
 	RerankModel string
 	JudgeModel  string
+	// RerankScoringInstructions 是内置重排（builtin-score-v1）的评分指令附加段；
+	// JudgeScoringInstructions 是证据充分性 judge 的评分指令附加段。空 = 使用
+	// 代码内置评分 prompt；JSON 输出结构固定不可编辑（解析安全依赖）。
+	RerankScoringInstructions string
+	JudgeScoringInstructions  string
 }
 
 // ScoreThresholdResetSentinel 是 MergeUpdate 对「显式 0」的编码：partial 合并
@@ -124,6 +137,11 @@ const (
 	RerankingResetSentinel   = "\x00rerank_reset"
 	RerankModelResetSentinel = "\x00rerank_model_reset"
 	JudgeModelResetSentinel  = "\x00judge_model_reset"
+
+	// RerankScoringInstructionsResetSentinel / JudgeScoringInstructionsResetSentinel
+	// 同上，作用于两条评分指令字段（handler PATCH 显式清空指令时编码）。
+	RerankScoringInstructionsResetSentinel = "\x00rerank_scoring_instructions_reset"
+	JudgeScoringInstructionsResetSentinel  = "\x00judge_scoring_instructions_reset"
 )
 
 // NewWorkspace constructs a Workspace, applying defaults to cfg and validating it.
@@ -166,6 +184,9 @@ func (c WorkspaceConfig) Validate() error {
 		{inRange(c.ScoreThreshold, 0, 1), ErrInvalidScoreThreshold},
 		{inRange(c.TopK, 1, constants.MaxRAGTopK), ErrInvalidTopK},
 		{inRange(c.RerankTopK, 0, constants.MaxRerankTopK), ErrInvalidRerankTopK},
+		{withinRuneLimit(c.RerankScoringInstructions, constants.MaxRerankScoringInstructionsRunes) &&
+			withinRuneLimit(c.JudgeScoringInstructions, constants.MaxJudgeScoringInstructionsRunes),
+			ErrInvalidScoringInstructions},
 		{c.EmbeddingModel != "", ErrEmbeddingModelRequired},
 		{!missingRerankModel, ErrRerankModelRequired},
 	} {
@@ -180,6 +201,12 @@ func (c WorkspaceConfig) Validate() error {
 // 把 "v<lo || v>hi" 两个判定点收敛为单一谓词，避免散落 if 抬高圈复杂度。
 func inRange[T int | float32](v, lo, hi T) bool {
 	return v >= lo && v <= hi
+}
+
+// withinRuneLimit 判断字符串 rune 长度不超过上限；空串（0 rune）恒合法——
+// 存量 workspace JSONB 无指令键读回空，运行时回落内置评分 prompt。
+func withinRuneLimit(s string, max int) bool {
+	return utf8.RuneCountInString(s) <= max
 }
 
 // ValidRerankIdentity 校验 rerank identity 结构：内部策略（""/builtin）直接
@@ -208,6 +235,13 @@ func applyDefaults(c WorkspaceConfig, defaultChunkSize, defaultTopK int) Workspa
 	}
 	if c.ChunkingStrategy == "" {
 		c.ChunkingStrategy = DefaultChunkingStrategy
+	}
+	// 新建 workspace 预填内置推荐指令文本（可编辑；空指令运行时回落内置 prompt）。
+	if c.RerankScoringInstructions == "" {
+		c.RerankScoringInstructions = DefaultRerankScoringInstructions
+	}
+	if c.JudgeScoringInstructions == "" {
+		c.JudgeScoringInstructions = DefaultJudgeScoringInstructions
 	}
 	return c
 }
@@ -283,13 +317,38 @@ func (c WorkspaceConfig) applyRerankSettings(partial WorkspaceConfig) (Workspace
 		}
 		out.RerankTopK = partial.RerankTopK
 	}
-	if rerankModel, ok := mergeResetField(out.RerankModel, partial.RerankModel, RerankModelResetSentinel); ok {
-		out.RerankModel = rerankModel
-	}
-	if judgeModel, ok := mergeResetField(out.JudgeModel, partial.JudgeModel, JudgeModelResetSentinel); ok {
-		out.JudgeModel = judgeModel
+	if err := mergeBoundedStrings(&out, partial); err != nil {
+		return c, err
 	}
 	return out, nil
+}
+
+// mergeBoundedStrings 归并「可清空字符串」字段的 partial 合并：rerank_model /
+// judge_model 与两条评分指令同构（哨兵清空 / 非空覆盖 / 零值保留）。评分指令带
+// rune 上限——Update 路径不经过 Validate，merge 内同步做长度校验（越界
+// fail-closed）；maxRunes=0 表示不设上限（模型名目录校验不在此处）。
+func mergeBoundedStrings(out *WorkspaceConfig, partial WorkspaceConfig) error {
+	for _, f := range []struct {
+		dst      *string
+		partial  string
+		sentinel string
+		maxRunes int
+	}{
+		{&out.RerankModel, partial.RerankModel, RerankModelResetSentinel, 0},
+		{&out.JudgeModel, partial.JudgeModel, JudgeModelResetSentinel, 0},
+		{&out.RerankScoringInstructions, partial.RerankScoringInstructions, RerankScoringInstructionsResetSentinel, constants.MaxRerankScoringInstructionsRunes},
+		{&out.JudgeScoringInstructions, partial.JudgeScoringInstructions, JudgeScoringInstructionsResetSentinel, constants.MaxJudgeScoringInstructionsRunes},
+	} {
+		v, ok := mergeResetField(*f.dst, f.partial, f.sentinel)
+		if !ok {
+			continue
+		}
+		if f.maxRunes > 0 && !withinRuneLimit(v, f.maxRunes) {
+			return ErrInvalidScoringInstructions
+		}
+		*f.dst = v
+	}
+	return nil
 }
 
 // mergeResetField applies the reset-sentinel merge for a string config field:

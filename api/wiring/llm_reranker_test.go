@@ -98,6 +98,37 @@ func TestLLMRerankerParsesScoresAndConfiguresDeterministicCall(t *testing.T) {
 	}
 }
 
+func TestLLMRerankerAppendsScoringInstructions(t *testing.T) {
+	stub := &llmRerankerCompleterStub{content: `{"scores":[]}`}
+	r := newLLMRerankerStub(stub, nil)
+
+	if _, err := r.Rerank(context.Background(), knowledgeport.RerankRequest{
+		Query: "q", Documents: []string{"a"}, Model: "qwen-turbo", TopN: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := stub.messages[1].Content; strings.Contains(got, "附加评分指令") {
+		t.Fatalf("empty instructions must keep builtin prompt only, got %q", got)
+	}
+
+	if _, err := r.Rerank(context.Background(), knowledgeport.RerankRequest{
+		Query: "q", Documents: []string{"a"}, Model: "qwen-turbo", TopN: 1,
+		ScoringInstructions: "分数须有明显区分度，避免全部同分",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got := stub.messages[1].Content
+	// 指令作为附加段插入，且必须在 JSON 输出结构之前（结构解析安全依赖其不被篡改）。
+	idxJSON := strings.Index(got, `"scores"`)
+	idxIns := strings.Index(got, "附加评分指令：分数须有明显区分度，避免全部同分")
+	if idxJSON < 0 {
+		t.Fatalf("JSON output structure must remain, got %q", got)
+	}
+	if idxIns < 0 || idxIns > idxJSON {
+		t.Fatalf("instructions (%d) must precede JSON structure (%d), got %q", idxIns, idxJSON, got)
+	}
+}
+
 func TestLLMRerankerTruncatesCandidates(t *testing.T) {
 	long := strings.Repeat("长", constants.RerankLLMMaxDocRunes*2)
 	stub := &llmRerankerCompleterStub{content: `{"scores":[]}`}

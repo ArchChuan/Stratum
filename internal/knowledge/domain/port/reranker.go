@@ -12,6 +12,9 @@ type RerankRequest struct {
 	Documents []string
 	Model     string
 	TopN      int
+	// ScoringInstructions 是内置语义重排（builtin-score-v1）的评分指令附加段；
+	// 外部 reranker（Cohere）不消费该字段，构造时为零值即可。
+	ScoringInstructions string
 }
 
 // RerankResult is one reranked candidate: Index references the caller's
