@@ -46,6 +46,9 @@
 
 judge 外部依赖持续不可用（§11.2 judge 健康）。
 
+- 语义：任一 30 分钟窗口内 `eval_judge_failure_total{reason="judge_unavailable"}` 累计
+  ≥ 3 次且持续 15 分钟触发；单次瞬时抖动不告警。恢复后需等失败事件滚出 30 分钟窗口，
+  告警自动消除。
 - 定位：查询 `eval_judge_failure_total` 的 `reason="judge_unavailable"` 维度，核对 LLM provider 可用性、限额与配置。
 - 确认：judge 属异步外部依赖，需有超时预算、有限重试与熔断/隔离；区分瞬时抖动与持续降级。
 - 处置：恢复 provider 可用性或调整 judge 配置；恢复后告警自动消除。
@@ -56,6 +59,8 @@ judge 外部依赖持续不可用（§11.2 judge 健康）。
 
 评测观测消费队列积压超过阈值。
 
-- 定位：查询 `eval_queue_backlog` 按 queue 分组，观察消费停滞来源（消费速率、落库链路）。
+- 语义：仅评测观测消费队列 `eval_queue_backlog{queue="observation"}` 积压 > 1000 持续
+  15 分钟触发；同指标下其它队列不计入本告警。
+- 定位：查询 `eval_queue_backlog{queue="observation"}`，观察消费停滞来源（消费速率、落库链路）。
 - 确认：消费停滞将延迟观测落库与采样覆盖统计，先确认是消费端故障还是上游突发。
 - 处置：修复 observation consumer（重启/扩容/修落库），积压消化后告警自动恢复。

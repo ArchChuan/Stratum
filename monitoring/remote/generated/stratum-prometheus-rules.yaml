@@ -710,8 +710,10 @@ spec:
             dashboard_url: https://stratum.grafana/d/evaluation
             runbook_url: /docs/operations/alerts/stratum-evaluation.md#stratum-eval-rule-blocked
         - alert: StratumEvalJudgeDegraded
+          # 事件计数阈值而非瞬时 rate>0：任一 30 分钟窗口内 judge_unavailable 累计 ≥ 3 次
+          # 且持续 15 分钟才告警，隔离单次瞬时抖动。恢复后需等失败事件滚出窗口自动消除。
           expr: |
-            rate(eval_judge_failure_total{reason="judge_unavailable"}[15m]) > 0
+            increase(eval_judge_failure_total{reason="judge_unavailable"}[30m]) >= 3
           for: 15m
           labels:
             severity: warning
@@ -721,14 +723,15 @@ spec:
           annotations:
             summary: judge 外部依赖持续不可用
             description: >-
-              judge 调用持续 15 分钟因 judge_unavailable 失败（§11.2 judge 健康）。
-              judge 是异步外部依赖，需有超时预算、有限重试与熔断/隔离；核对 LLM provider
-              可用性、限额与配置，恢复后告警自动消除。
+              30 分钟内 judge_unavailable 失败累计 ≥ 3 次（事件计数阈值）并持续 15 分钟
+              （§11.2 judge 健康）。judge 是异步外部依赖，需有超时预算、有限重试与熔断/隔离；
+              核对 LLM provider 可用性、限额与配置，恢复后告警自动消除。
             dashboard_url: https://stratum.grafana/d/evaluation
             runbook_url: /docs/operations/alerts/stratum-evaluation.md#stratum-eval-judge-degraded
         - alert: StratumEvalQueueBacklogHigh
+          # 只告警评测观测消费队列（observation），排除同指标下其它语义的队列。
           expr: |
-            eval_queue_backlog > 1000
+            eval_queue_backlog{queue="observation"} > 1000
           for: 15m
           labels:
             severity: warning
@@ -738,7 +741,7 @@ spec:
           annotations:
             summary: 评测观测队列积压超过阈值（当前 {{ $value }}）
             description: >-
-              评测观测消费队列积压持续 > 1000 达 15 分钟（queue 维度见 labels）。消费
+              评测观测消费队列（queue=observation）积压持续 > 1000 达 15 分钟。消费
               停滞将延迟观测落库与采样覆盖统计，检查 observation consumer 健康状况。
             dashboard_url: https://stratum.grafana/d/evaluation
             runbook_url: /docs/operations/alerts/stratum-evaluation.md#stratum-eval-queue-backlog-high

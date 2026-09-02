@@ -1,4 +1,4 @@
-// HealthTrendChart 渲染单序列健康分（通过率）随运行时间的 SVG 折线图。
+// HealthTrendChart 渲染单序列通过率随运行时间的 SVG 折线图。
 // 原生 SVG 实现：单序列无需图例框，标题即标识；通过/未通过不以颜色单独编码，
 // 同时使用实心圆点（通过）与红色叉号（未通过）做形态区分，满足 CVD 可读性。
 // x 轴按运行序号等距排布，刻度标签最多展示 6 个避免碰撞。
@@ -7,7 +7,7 @@ export type HealthTrendPoint = {
   id: string;
   timeLabel: string;
   fullLabel: string;
-  /** 健康分 [0,1]；无有效分母时为 null（不参与连线，但仍展示状态标记）。 */
+  /** 通过率 [0,1]；无有效分母时为 null（不参与连线，但仍展示状态标记）。 */
   passRate: number | null;
   passed: boolean;
 };
@@ -60,7 +60,7 @@ export const HealthTrendChart = ({ points }: { points: HealthTrendPoint[] }) => 
 
   return (
     <div data-testid="health-trend-chart">
-      <svg width={WIDTH} height={HEIGHT} viewBox={`0 0 ${WIDTH} ${HEIGHT}`} role="img" aria-label="运行健康分趋势折线图"
+      <svg width={WIDTH} height={HEIGHT} viewBox={`0 0 ${WIDTH} ${HEIGHT}`} role="img" aria-label="评测运行通过率趋势折线图"
         style={{ width: '100%', height: 'auto', display: 'block' }}>
         {gridLines.map((ratio) => (
           <g key={ratio}>
