@@ -5,8 +5,7 @@ import { memoryUserApi } from '../api/memory-user.api';
 import type { MemoryEntity } from '../model/memory';
 
 import { usePagination } from '@/shared/hooks';
-
-interface RequestError { response?: { data?: { error?: string } } }
+import { extractErrorMessage } from '@/shared/lib';
 
 export const useEntitiesTab = () => {
   const [entities, setEntities] = useState<MemoryEntity[]>([]);
@@ -25,7 +24,7 @@ export const useEntitiesTab = () => {
       setTotal(data.total);
     } catch (err) {
       if (seq !== requestSeqRef.current) return;
-      message.error({ content: (err as RequestError).response?.data?.error || '加载实体失败', duration: 3 });
+      message.error({ content: extractErrorMessage(err, '加载实体失败'), duration: 3 });
     } finally {
       if (seq === requestSeqRef.current) setLoading(false);
     }
@@ -42,7 +41,7 @@ export const useEntitiesTab = () => {
       message.success({ content: '实体已删除', duration: 2 });
       await load();
     } catch (err) {
-      message.error({ content: (err as RequestError).response?.data?.error || '删除实体失败', duration: 3 });
+      message.error({ content: extractErrorMessage(err, '删除实体失败'), duration: 3 });
     } finally {
       setDeleteLoading(false);
     }

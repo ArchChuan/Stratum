@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { memoryUserApi } from '../api/memory-user.api';
 import type { MemoryStats } from '../model/memory';
 
-interface RequestError { response?: { data?: { error?: string } } }
+import { extractErrorMessage } from '@/shared/lib';
 
 export const useMyMemoriesPage = () => {
   const [stats, setStats] = useState<MemoryStats | null>(null);
@@ -19,7 +19,7 @@ export const useMyMemoriesPage = () => {
       const next = await memoryUserApi.getStats();
       setStats(next);
     } catch (err) {
-      message.error({ content: (err as RequestError).response?.data?.error || '加载记忆统计失败', duration: 3 });
+      message.error({ content: extractErrorMessage(err, '加载记忆统计失败'), duration: 3 });
     } finally {
       setStatsLoading(false);
     }
@@ -37,7 +37,7 @@ export const useMyMemoriesPage = () => {
       setReloadKey((k) => k + 1); // 各 Tab 监听 reloadKey 重新加载
       await loadStats();
     } catch (err) {
-      message.error({ content: (err as RequestError).response?.data?.error || '清空记忆失败', duration: 3 });
+      message.error({ content: extractErrorMessage(err, '清空记忆失败'), duration: 3 });
     } finally {
       setClearLoading(false);
     }
