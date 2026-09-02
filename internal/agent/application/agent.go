@@ -606,6 +606,25 @@ func tunableConfigVersion(cfg *ExecutionConfig, maxContextTokens int) string {
 	return contentVersion(string(paramsJSON))
 }
 
+// evalSpanAttrs 把评测观测信号投影为 span 属性（spec §12 埋点），双挂 execSpan 与
+// requestSpan：评测数据以 opik.metadata.stratum.eval_* 属性挂回原 trace，不复制证据。
+// ruleSignals 来自 ctx 累积器；behavior 由执行结果推导。eval_emitted=true 标记该执行
+// 已进入评测采集面（区分「未采集」与「采集但无信号」）。
+func evalSpanAttrs(result *AgentResult, ruleSignals []port.RuleSignalPayload) []attribute.KeyValue {
+	attrs := []attribute.KeyValue{
+		attribute.Int64("opik.metadata.stratum.eval_rule_hits", int64(len(ruleSignals))),
+		attribute.Bool("opik.metadata.stratum.eval_emitted", true),
+	}
+	if b := behaviorFromResult(result); b != nil {
+		attrs = append(attrs,
+			attribute.Bool("opik.metadata.stratum.eval_behavior_retry", b.Retry),
+			attribute.Bool("opik.metadata.stratum.eval_behavior_escalation", b.Escalation),
+			attribute.Bool("opik.metadata.stratum.eval_behavior_abandonment", b.Abandonment),
+		)
+	}
+	return attrs
+}
+
 func (a *BaseAgent) Execute(ctx context.Context, input string, options ...ExecutionOption) (*AgentResult, error) {
 	startTime := time.Now()
 
@@ -710,12 +729,12 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	if execErr != nil {
 		status = domain.ExecStatusError
 	}
-	completionAttrs := []attribute.KeyValue{
+	completionAttrs := append([]attribute.KeyValue{
 		attribute.String("opik.metadata.stratum.status", status),
 		attribute.Int64("opik.metadata.stratum.duration_ms", result.Duration.Milliseconds()),
 		attribute.Int64("opik.metadata.stratum.total_tokens", int64(result.TokensUsed)),
 		attribute.Float64("opik.metadata.stratum.cost_usd", result.CostUSD),
-	}
+	}, evalSpanAttrs(result, ruleSignalsFromBlocks(ctx))...)
 	execSpan.SetAttributes(completionAttrs...)
 	requestSpan.SetAttributes(completionAttrs...)
 	snap.metrics.IncAgentExecution(snap.agentID, string(snap.agentType), status)
