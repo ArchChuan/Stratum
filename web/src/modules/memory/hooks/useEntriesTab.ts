@@ -5,8 +5,7 @@ import { memoryUserApi } from '../api/memory-user.api';
 import type { MemoryEntryItem } from '../model/memory';
 
 import { usePagination } from '@/shared/hooks';
-
-interface RequestError { response?: { data?: { error?: string } } }
+import { extractErrorMessage } from '@/shared/lib';
 
 export const useEntriesTab = () => {
   const [entries, setEntries] = useState<MemoryEntryItem[]>([]);
@@ -26,7 +25,7 @@ export const useEntriesTab = () => {
       setTotal(data.total);
     } catch (err) {
       if (seq !== requestSeqRef.current) return;
-      message.error({ content: (err as RequestError).response?.data?.error || '加载条目失败', duration: 3 });
+      message.error({ content: extractErrorMessage(err, '加载条目失败'), duration: 3 });
     } finally {
       if (seq === requestSeqRef.current) setLoading(false);
     }
@@ -43,7 +42,7 @@ export const useEntriesTab = () => {
       message.success({ content: '条目已删除', duration: 2 });
       await load();
     } catch (err) {
-      message.error({ content: (err as RequestError).response?.data?.error || '删除条目失败', duration: 3 });
+      message.error({ content: extractErrorMessage(err, '删除条目失败'), duration: 3 });
     } finally {
       setDeleteLoading(false);
     }

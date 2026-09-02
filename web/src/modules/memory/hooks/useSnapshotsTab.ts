@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { memoryUserApi } from '../api/memory-user.api';
 import type { MemorySnapshot } from '../model/memory';
 
-interface RequestError { response?: { data?: { error?: string } } }
+import { extractErrorMessage } from '@/shared/lib';
 
 export const useSnapshotsTab = () => {
   const [snapshots, setSnapshots] = useState<MemorySnapshot[]>([]);
@@ -22,7 +22,7 @@ export const useSnapshotsTab = () => {
       setSnapshots(data.snapshots);
     } catch (err) {
       if (seq !== requestSeqRef.current) return;
-      message.error({ content: (err as RequestError).response?.data?.error || '加载快照失败', duration: 3 });
+      message.error({ content: extractErrorMessage(err, '加载快照失败'), duration: 3 });
     } finally {
       if (seq === requestSeqRef.current) setLoading(false);
     }
@@ -39,7 +39,7 @@ export const useSnapshotsTab = () => {
       message.success({ content: '快照已更新', duration: 2 });
       await load();
     } catch (err) {
-      message.error({ content: (err as RequestError).response?.data?.error || '更新快照失败', duration: 3 });
+      message.error({ content: extractErrorMessage(err, '更新快照失败'), duration: 3 });
       // 向上传播失败：调用方（SnapshotPanel.handleSave）据此保持编辑 Modal 打开、草稿不丢。
       throw err;
     } finally {
@@ -54,7 +54,7 @@ export const useSnapshotsTab = () => {
       message.success({ content: '快照已清空', duration: 2 });
       await load();
     } catch (err) {
-      message.error({ content: (err as RequestError).response?.data?.error || '清空快照失败', duration: 3 });
+      message.error({ content: extractErrorMessage(err, '清空快照失败'), duration: 3 });
     } finally {
       setDeleteLoading(false);
     }

@@ -8,8 +8,9 @@ import { WorkflowReadonlyCanvas } from '../components/WorkflowReadonlyCanvas';
 import { useWorkflowResources } from '../hooks/useWorkflowResources';
 import type { WorkflowVersion } from '../model/workflow';
 
+import { extractErrorMessage } from '@/shared/lib';
+
 const { Paragraph, Title } = Typography;
-interface RequestError { response?: { data?: { error?: string } } }
 
 export const WorkflowVersionPage = () => {
   const { id = '', versionId = '' } = useParams();
@@ -25,7 +26,7 @@ export const WorkflowVersionPage = () => {
     workflowApi.getWorkflowVersion(id, versionId).then((next) => {
       if (!cancelled) setVersion(next);
     }).catch((error: unknown) => {
-      if (!cancelled) message.error({ content: (error as RequestError).response?.data?.error || '操作失败', duration: 3 });
+      if (!cancelled) message.error({ content: extractErrorMessage(error, '操作失败'), duration: 3 });
     }).finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [id, versionId]);

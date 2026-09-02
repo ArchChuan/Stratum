@@ -37,7 +37,8 @@ describe('useAuditListPage', () => {
   });
 
   it('reports a persistent error when the list fails', async () => {
-    listEvents.mockRejectedValue(new Error('failed'));
+    // axios 响应形态：提取链取 response.data.error（FE 冻结 {error} 契约）。
+    listEvents.mockRejectedValue({ response: { data: { error: '加载审计记录失败' } } });
     const { result } = renderHook(() => useAuditListPage());
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(message.error).toHaveBeenCalledWith({ content: '加载审计记录失败', duration: 3 });
