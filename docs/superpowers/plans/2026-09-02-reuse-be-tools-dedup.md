@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - **canonical stub 集与容器语义 = `api/http/contract_test.go`**（逐方法迁移，test 绿为行为标尺）。
-- 所有 golden 文件**零改动**；PR 不携带任何 `api/http/testdata/contracts/*.golden.json` diff。
+- 除 Task 5b（经用户裁决扩 scope）外，golden 文件**零改动**；Task 5b 仅提交 recorder 对齐后能绿回放的对账 golden。
 - recorder 独有路由逻辑、test 独有回放逻辑原地保留（spec「非去重」节）。
 - commit message 以 `Co-Authored-By: Claude <noreply@anthropic.com>` 结尾；PR body 以 `🤖 Generated with [Claude Code](https://claude.com/claude-code)` 结尾。
 - git mutating 一律单行 `cd /home/yang/go-projects/stratum-be-tools-dedup && git ...`（primary-checkout hook 按 cwd 判定，换行后独立段会误判）。
@@ -465,6 +465,69 @@ EOF
 
 ---
 
+### Task 5b: recorder 鉴权对齐 verifier + golden 对账提交（经用户裁决扩 scope）
+
+> **背景（用户裁决，2026-09-02）**：Task 5 的 guard「已跟踪 golden 零 diff」因**既有** recorder↔提交态漂移无法达成（11 内容 + 6 换行 + 21 未跟踪，改动前即存在，已对照旧 recorder 产物实证）；spec「golden 零改动」与「tracked-dirty:0」互斥。用户选择**扩 scope**：修 recorder 鉴权 → 重录使 11 个内容分歧归零 → 提交 6 换行 + 21 新增 goldens → regen guard 真正归零。verifier（`api/http/contract_test.go`）是 canonical truth，**不得改动**。
+
+**Files:**
+
+- Modify: `scripts/record-contracts.go` 的 `isDDDAuthOverride`
+- Regenerate: `make record-contracts`
+- Test: `make contract-test`、`go vet ./...`、`go build -tags=contracts ./scripts/record-contracts.go`
+
+**Root cause（controller 已实证）**：recorder 与 verifier 对同一批 `/admin/*` 路由签发不同的 JWT claims：
+
+| 前缀 | recorder（现） | verifier（truth） |
+|---|---|---|
+| `/admin/providers`、`/admin/models` | `{Role:"admin"}` → router 读 global_role → 403 | `{Role:"admin", GlobalRole:"global_admin", TenantID}` → 200/400 |
+| `/admin/users` | `{GlobalRole:"global_admin"}`（缺 TenantID/Role） | 同上全量 |
+| `/admin/tenants`、`/admin/admins` | `{GlobalRole:"global_admin"}` | 同上全量 |
+| 其余 DDD 前缀（`/tenant/`、`/workflows` 等） | `{Role:"admin", TenantID}` | `{Role:"admin", TenantID}`（一致） |
+
+11 个内容分歧 = 8 个 `/admin/providers|models` + 2 个 `/admin/users`(tenant_members) 写路由（recorder 403/缺字段 vs committed 200）+ `delete_workflows__id`（独立成因，须诊断）。
+
+- [ ] **Step 1: 对齐 `isDDDAuthOverride` 至 verifier claims**
+
+```go
+func isDDDAuthOverride(routePath string) (bool, iamport.TokenClaims) {
+	adminFull := iamport.TokenClaims{Sub: "contract-admin", TenantID: "contract-tenant", Role: "admin", GlobalRole: "global_admin"}
+	adminClaims := iamport.TokenClaims{Sub: "contract-admin", TenantID: "contract-tenant", Role: "admin"}
+	switch {
+	case strings.HasPrefix(routePath, "/admin/tenants"),
+		strings.HasPrefix(routePath, "/admin/providers"),
+		strings.HasPrefix(routePath, "/admin/models"),
+		strings.HasPrefix(routePath, "/admin/admins"),
+		strings.HasPrefix(routePath, "/admin/users"):
+		return true, adminFull
+	case strings.HasPrefix(routePath, "/tenant/"), strings.HasPrefix(routePath, "/workflows"),
+		strings.HasPrefix(routePath, "/workflow-runs"), strings.HasPrefix(routePath, "/workflow-approvals"),
+		strings.HasPrefix(routePath, "/operation-proposals"), strings.HasPrefix(routePath, "/scheduled-tasks"),
+		strings.HasPrefix(routePath, "/audit"):
+		return true, adminClaims
+	default:
+		return false, iamport.TokenClaims{}
+	}
+}
+```
+
+> 对照 verifier：admin 集合 = {`/admin/tenants`,`/admin/providers`,`/admin/models`,`/admin/admins`,`/admin/users`} → 全量 claims；其余 useDDD → adminClaims。verifier 不把 `/admin/*` 之外的任何 route 签成 global_admin，本函数同理。
+
+- [ ] **Step 2: 重录 + 分类剩余 diff**
+
+Run: `cd /home/yang/go-projects/stratum-be-tools-dedup && make record-contracts && git status --short`
+Expected：8 provider/model + 2 user 内容分歧**归零**（recorder 现与 committed 逐字节一致）；若有残余停下诊断。仍剩 tracked diff：`delete_workflows__id` + 6 个仅缺尾 `\n` 文件；21 个未跟踪新 golden 出现。
+
+诊断 `delete_workflows__id`：对照 recorder 产物与 committed 内容，判断差异成因（命名 / recorder 顺序状态副作用 / 鉴权）。若 recorder 产物是顺序副作用造成、在 fresh container 回放不一致，则**不采纳 recorder 产物**，保留 committed 内容并说明；若 recorder 产物语义正确且回放绿，则采纳随本次提交。
+
+- [ ] **Step 3: 实证 gate —— 全量产物下 contract-test 必须绿**
+
+Run: `cd /home/yang/go-projects/stratum-be-tools-dedup && go build -tags=contracts ./scripts/record-contracts.go && make contract-test`
+Expected: PASS。注意 21 个新 golden 现在在 testdata 目录内，contract_test glob 会**实际回放**它们。凡不能绿回放的新 golden（路径不在 `dddPrefixes` 会走 legacy router 而红，或鉴权不匹配），**不得提交**：从 testdata 删除该文件使其回归「预存缺口」状态，并在报告逐条列出被排除者与原因。已跟踪 content 改动同理必须绿。
+
+- [ ] **Step 4: 提交可绿集合并再次验证确定性**
+
+提交 6 个补尾换行的 tracked golden + 通过 Step 3 的未跟踪新 golden（不含被排除者）。commit 如实说明，不伪绿。提交后再次 `make record-contracts && git status --short`：预期 tracked **零 diff**，被排除者之外无未跟踪残留（被排除者每次 regen 重现，属预存缺口）。
+
 ### Task 6: 收尾门禁 + 回归
 
 - [ ] **Step 1: 全量快速验证**
@@ -480,7 +543,7 @@ Expected: 无新增超限（新函数为 stub 空实现 / 单行 helper，天然
 - [ ] **Step 3: 复核 PR 变更集边界**
 
 Run: `cd /home/yang/go-projects/stratum-be-tools-dedup && git log --oneline origin/main..HEAD && git diff --stat origin/main...HEAD`
-Expected: 6 commits（Task1-5 + spec/plan 文档），改动仅限 `pkg/reporoot/`、`api/http/contracttest/`、`api/http/contract_test.go`、`scripts/record-contracts.go`、`cmd/coverage-gap/main.go`、`cmd/coverage-gap-db/main.go`、`internal/.../officialdocs/generate/main.go`、`docs/superpowers/`——**无任何 `*.golden.json`**。
+Expected: commits（Task1-5 + Task5b + spec/plan 文档），改动仅限 `pkg/reporoot/`、`api/http/contracttest/`、`api/http/contract_test.go`、`scripts/record-contracts.go`、`cmd/coverage-gap/main.go`、`cmd/coverage-gap-db/main.go`、`internal/.../officialdocs/generate/main.go`、`api/http/testdata/contracts/`（Task 5b 对账提交的 golden，经用户裁决）、`docs/superpowers/`。
 
 - [ ] **Step 4: push + PR（等待 CI 期间查 base 落后）**
 
@@ -488,9 +551,9 @@ Expected: 6 commits（Task1-5 + spec/plan 文档），改动仅限 `pkg/reporoot
 cd /home/yang/go-projects/stratum-be-tools-dedup
 git push -u origin feat/reuse-be-tools-dedup
 gh pr create --base main --title "refactor(reuse): 收编 contract harness 分叉 + findRepoRoot 合一" --body "…
-What: record-contracts.go ↔ contract_test.go 约千行 stub/容器双写收编到 api/http/contracttest；findRepoRoot 3 处合一。
-Why: 消除人工双写的漂移源（已现 ObservationService/21 缺口类差异）；录制器补换行使 regen 确定性。
-HowToTest: make contract-test 绿；make record-contracts 后已跟踪 golden 零 diff；go build -tags=contracts ./scripts/record-contracts.go 通过。
+What: record-contracts.go ↔ contract_test.go 约千行 stub/容器双写收编到 api/http/contracttest；findRepoRoot 3 处合一；recorder 鉴权对齐 verifier（isDDDAuthOverride → global_admin）+ golden 对账提交（Task 5b，经裁决）。
+Why: 消除人工双写的漂移源（已现 ObservationService/21 缺口类差异）；录制器补换行 + 对齐鉴权使 regen 与提交态逐字节一致，已跟踪 golden 零 diff。
+HowToTest: make contract-test 绿；make record-contracts 后 git status 对已跟踪 golden 零 diff；go build -tags=contracts ./scripts/record-contracts.go 通过。
 🤖 Generated with [Claude Code](https://claude.com/claude-code)"
 ```
 
