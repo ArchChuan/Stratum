@@ -647,9 +647,14 @@ type judgeAdapter struct {
 	params    *parametersapp.Service
 }
 
-// Enabled reports the evaluation.judge.enabled platform parameter. Fail
+// Enabled reports the evaluation.judge.enabled platform parameter, preferring
+// the run-scoped evaluation snapshot (D2/D6: 全链路版本快照) when present. Fail
 // closed when the parameters service is unavailable.
 func (j judgeAdapter) Enabled(ctx context.Context) bool {
+	if snap := evaldomain.EvalSnapshotFromCtx(ctx); snap != nil {
+		enabled, _ := snap.Evaluation.Values["evaluation.judge.enabled"].(bool)
+		return enabled
+	}
 	if j.params == nil {
 		return false
 	}
@@ -665,6 +670,10 @@ func (j judgeAdapter) judgeModel(ctx context.Context, requested string) string {
 	if requested != "" {
 		return requested
 	}
+	if snap := evaldomain.EvalSnapshotFromCtx(ctx); snap != nil {
+		model, _ := snap.Evaluation.Values["evaluation.judge.model"].(string)
+		return model
+	}
 	if j.params == nil {
 		return ""
 	}
@@ -679,6 +688,12 @@ func (j judgeAdapter) judgeModel(ctx context.Context, requested string) string {
 }
 
 func (j judgeAdapter) judgeTemperature(ctx context.Context) float32 {
+	if snap := evaldomain.EvalSnapshotFromCtx(ctx); snap != nil {
+		if temperature, ok := snap.Evaluation.Values["evaluation.judge.temperature"].(float64); ok {
+			return float32(temperature)
+		}
+		return 0
+	}
 	if j.params == nil {
 		return 0
 	}
@@ -1356,9 +1371,13 @@ func (c *Container) applySkillEvaluationReader(experimentRepo evalport.Experimen
 	}
 }
 
-// observationEnabled 读取平台参数 evaluation.observe.enabled。默认关闭
-// （fail closed：参数服务不可用时禁用观测链路）。
+// observationEnabled 读取平台参数 evaluation.observe.enabled，快照优先（评测
+// run 创建时点固化的参数值）。默认关闭（fail closed：参数服务不可用时禁用观测链路）。
 func observationEnabled(ctx context.Context, params *parametersapp.Service) bool {
+	if snap := evaldomain.EvalSnapshotFromCtx(ctx); snap != nil {
+		enabled, _ := snap.Evaluation.Values["evaluation.observe.enabled"].(bool)
+		return enabled
+	}
 	if params == nil {
 		return false
 	}
@@ -1370,9 +1389,15 @@ func observationEnabled(ctx context.Context, params *parametersapp.Service) bool
 	return enabled
 }
 
-// observationSampleRate 读取平台参数 evaluation.observe.sample_rate，
+// observationSampleRate 读取平台参数 evaluation.observe.sample_rate，快照优先；
 // 未配置或非法时回退常量默认采样率。
 func observationSampleRate(ctx context.Context, params *parametersapp.Service) float64 {
+	if snap := evaldomain.EvalSnapshotFromCtx(ctx); snap != nil {
+		if rate, ok := snap.Evaluation.Values["evaluation.observe.sample_rate"].(float64); ok && rate >= 0 && rate <= 1 {
+			return rate
+		}
+		return constants.ObservationSampleRateDefault
+	}
 	if params == nil {
 		return constants.ObservationSampleRateDefault
 	}
@@ -1387,11 +1412,15 @@ func observationSampleRate(ctx context.Context, params *parametersapp.Service) f
 }
 
 // observationPlatformVersion 解析 evaluation 配置组当前生效版本序号（Phase 2
-// §4.3 版本锚点）。参数服务未装配 / 无已发布版本时返回 (0,false) fail-open：观测
-// 版本锚点标记 unknown，不阻断落库；DB 读取失败原样返回错误（service 层降级为
-// unknown + warn）。IsCurrent 由 platform_config_labels 生产 label 服务端推导，
-// 过滤即得当前生效版本。
+// §4.3 版本锚点），快照优先：快照已有创建时点固化的 VersionSeq，直接返回（比运行时
+// IsCurrent 更准确地锚定 run 创建时点）。参数服务未装配 / 无已发布版本时返回
+// (0,false) fail-open：观测版本锚点标记 unknown，不阻断落库；DB 读取失败原样返回
+// 错误（service 层降级为 unknown + warn）。IsCurrent 由 platform_config_labels
+// 生产 label 服务端推导，过滤即得当前生效版本。
 func observationPlatformVersion(ctx context.Context, params *parametersapp.Service) (int64, bool, error) {
+	if snap := evaldomain.EvalSnapshotFromCtx(ctx); snap != nil {
+		return snap.Evaluation.VersionSeq, snap.Evaluation.VersionSeq > 0, nil
+	}
 	if params == nil {
 		return 0, false, nil
 	}
