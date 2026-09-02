@@ -89,6 +89,9 @@ export const EVALUATION_MAX_CALLS_LIMIT = 50;
 // 评测运行通过率趋势面板拉取最近运行的分页条数（listRuns limit）。仅展示最近 N 次，
 // 后端返回 next_cursor 时前端显式标注「存在更早记录」，不滚动加载暗示全量。
 export const EVALUATION_TREND_RUN_LIMIT = 100;
+// 失败归因报告「系统性模式」的批次数阈值：失败 case 数 ≥ 该值才标「系统性」。
+// §9 服务端落地后改由服务端 systematic 信号替代。
+export const EVALUATION_ATTRIBUTION_SYSTEMATIC_MIN_CASES = 2;
 
 export const MEMORY_SEARCH_LIMIT = 20;
 // 记忆事实分类白名单（与后端 internal/memory/domain/fact.go factCategoryAllowSet 一致）。
