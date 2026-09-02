@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/byteBuilderX/stratum/internal/memory/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
 // 本文件把 memory 异步离线管道变成可评测对象（spec §6.4，卡 B：§6.4 离线链路
@@ -38,9 +39,25 @@ func (s OfflineStage) validate() error {
 	}
 }
 
-// offlineEvalDefaultTopK 是检索评测 case 未显式给 TopK 时的窗口默认值。评测集
-// 作者应显式给 TopK；此处兜底避免 case 因缺省被拒（与生产 recall 窗口解耦）。
+// offlineEvalDefaultTopK 是检索评测 case 未显式给 TopK（0/负）时的窗口默认值。
+// 数值与生产召回兜底常量 constants.MemoryRecallTopK（=5）保持一致：评测默认窗
+// 口即生产默认召回窗口。若生产侧调整兜底值，须同步评估此处，防止静默漂移。
+// 评测集作者仍应显式给 TopK，此处仅兜底避免 case 因缺省被拒。
 const offlineEvalDefaultTopK = 5
+
+// normalizeRetrievalTopK 把检索评测窗口归一化到
+// [constants.MemoryRecallMinTopK, constants.MemoryRecallMaxTopK]（镜像生产召回
+// clamp）：0/负回退默认，超上界截断。防止未来 recaller adapter 镜像 2*topK
+// 候选拉取时随评测集无界放大。
+func normalizeRetrievalTopK(requested int) int {
+	if requested <= 0 {
+		requested = offlineEvalDefaultTopK
+	}
+	if requested > constants.MemoryRecallMaxTopK {
+		requested = constants.MemoryRecallMaxTopK
+	}
+	return requested
+}
 
 // --- 提取阶段 ---
 
@@ -51,8 +68,9 @@ type ExtractedArtifactFact struct {
 }
 
 // ExtractionCase 是一条提取阶段离线评测 case（§6.4）：会话文本 → 期望提取的
-// 实体/事实。ExpectedEntities / ExpectedFacts 可空；空维度不参与 Passed 判定
-// （只保留对应指标 0，供面板参考）。
+// 实体/事实。ExpectedEntities / ExpectedFacts 至少一个非空（fail-closed：两维
+// 皆空视为未配置断言，validate 拒绝，与检索侧 RetrievalCase.validate 拒绝空期
+// 望对齐）；单维为空时该维不参与 Passed 判定（只保留对应指标 0，供面板参考）。
 type ExtractionCase struct {
 	// Session 是会话文本（管道与在线路径同构：role + ": " + content 逐条渲染）。
 	Session          []port.MessageDTO
@@ -68,6 +86,9 @@ func (c ExtractionCase) validate() error {
 	}
 	if len(c.Session) == 0 || strings.TrimSpace(renderSessionText(c.Session)) == "" {
 		return errors.New("offline extraction case: session text required")
+	}
+	if len(c.ExpectedEntities) == 0 && len(c.ExpectedFacts) == 0 {
+		return errors.New("offline extraction case: at least one of expected entities or facts required")
 	}
 	return nil
 }
@@ -219,7 +240,8 @@ type RetrievalCase struct {
 	Query   string
 	UserID  string
 	AgentID string
-	// TopK 是评测窗口（recall@k 的 k）。0 时回退 offlineEvalDefaultTopK。
+	// TopK 是评测窗口（recall@k 的 k）。运行时经 normalizeRetrievalTopK 归一化到
+	// [MemoryRecallMinTopK, MemoryRecallMaxTopK]：0/负回退默认，超上限截断。
 	TopK              int
 	ExpectedMemoryIDs []string
 }
@@ -272,10 +294,7 @@ func (e *RetrievalEvaluator) Evaluate(
 	if strings.TrimSpace(tenantID) == "" {
 		return RetrievalEvaluation{}, errors.New("offline retrieval case: tenant ID required")
 	}
-	topK := tc.TopK
-	if topK <= 0 {
-		topK = offlineEvalDefaultTopK
-	}
+	topK := normalizeRetrievalTopK(tc.TopK)
 	result, err := e.recaller.Recall(ctx, tenantID, RecallEvaluationRequest{
 		Query: tc.Query, UserID: tc.UserID, AgentID: tc.AgentID, TopK: topK,
 	})

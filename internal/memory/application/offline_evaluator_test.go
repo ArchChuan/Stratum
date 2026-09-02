@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/byteBuilderX/stratum/internal/memory/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/stretchr/testify/require"
 )
 
@@ -157,19 +158,37 @@ func TestExtractionEvaluatorFactContainmentIsCaseInsensitive(t *testing.T) {
 	require.Equal(t, 1.0, evaluation.FactRecall)
 }
 
-func TestExtractionEvaluatorSkipsUnconfiguredDimensions(t *testing.T) {
-	fake := &fakeExtractor{facts: []*port.ExtractedFact{
-		offlineFact("User prefers Go", "Go"),
-	}}
+func TestExtractionEvaluatorRejectsCaseWithNoExpectations(t *testing.T) {
+	// fail-closed：与检索侧 RetrievalCase.validate 拒绝空期望对齐——两维皆空 =
+	// 未配置断言，静默绿灯会掩盖「忘填期望」的评测集错误。
+	fake := &fakeExtractor{facts: []*port.ExtractedFact{offlineFact("User prefers Go", "Go")}}
 	evaluator := NewExtractionEvaluator(fake)
 	tc := ExtractionCase{
 		Session: []port.MessageDTO{session("user", "I prefer Go.")},
 		UserID:  "user-1",
 	}
 
+	_, err := evaluator.Evaluate(context.Background(), tc)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "expected entities or facts")
+}
+
+func TestExtractionEvaluatorSingleDimensionEmptyOnlyJudgesOther(t *testing.T) {
+	// 单维空仍可评测：事实维度未配置，Passed 只由期望实体决定（fail-closed 只挡
+	// 两维皆空，不挡单维评测）；未配置维度指标保留 0 供面板参考。
+	fake := &fakeExtractor{facts: []*port.ExtractedFact{offlineFact("User prefers Go", "Go")}}
+	evaluator := NewExtractionEvaluator(fake)
+	tc := ExtractionCase{
+		Session:          []port.MessageDTO{session("user", "I prefer Go.")},
+		UserID:           "user-1",
+		ExpectedEntities: []string{"Go"},
+	}
+
 	evaluation, err := evaluator.Evaluate(context.Background(), tc)
 	require.NoError(t, err)
 	require.True(t, evaluation.Passed)
+	require.Equal(t, 1.0, evaluation.EntityRecall)
+	require.Zero(t, evaluation.FactRecall)
 }
 
 func TestExtractionEvaluatorFailClosedWithoutExtractor(t *testing.T) {
@@ -195,6 +214,7 @@ func TestExtractionEvaluatorValidation(t *testing.T) {
 		failing := &fakeExtractor{err: errors.New("llm boom")}
 		_, err := NewExtractionEvaluator(failing).Evaluate(context.Background(), ExtractionCase{
 			Session: []port.MessageDTO{session("user", "hi")}, UserID: "user-1",
+			ExpectedEntities: []string{"Go"},
 		})
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "llm boom")
@@ -286,6 +306,39 @@ func TestRetrievalEvaluatorTruncatesToTopKWindow(t *testing.T) {
 	require.Equal(t, 1.0, evaluation.RecallAtK)
 	require.InEpsilon(t, 0.5, evaluation.PrecisionAtK, 0.0001)
 	require.Equal(t, 2, fake.got.TopK)
+}
+
+func TestRetrievalEvaluatorClampsTopKWindow(t *testing.T) {
+	// M-1：评测窗口归一化到 [MemoryRecallMinTopK, MemoryRecallMaxTopK]（镜像生产
+	// 召回 clamp），防止未来 recaller adapter 按 2*topK 拉候选时随评测集无界放大。
+	t.Run("zero falls back to default", func(t *testing.T) {
+		fake := &fakeRecaller{result: RecallEvaluationResult{}}
+		evaluator := NewRetrievalEvaluator(fake)
+		_, err := evaluator.Evaluate(context.Background(), "tenant-1", RetrievalCase{
+			Query: "x", UserID: "u", ExpectedMemoryIDs: []string{"a"},
+		})
+		require.NoError(t, err)
+		require.Equal(t, offlineEvalDefaultTopK, fake.got.TopK)
+	})
+	t.Run("exceeds max clamps to MemoryRecallMaxTopK", func(t *testing.T) {
+		fake := &fakeRecaller{result: RecallEvaluationResult{}}
+		evaluator := NewRetrievalEvaluator(fake)
+		_, err := evaluator.Evaluate(context.Background(), "tenant-1", RetrievalCase{
+			Query: "x", UserID: "u", TopK: constants.MemoryRecallMaxTopK + 100,
+			ExpectedMemoryIDs: []string{"a"},
+		})
+		require.NoError(t, err)
+		require.Equal(t, constants.MemoryRecallMaxTopK, fake.got.TopK)
+	})
+	t.Run("within range passes through", func(t *testing.T) {
+		fake := &fakeRecaller{result: RecallEvaluationResult{}}
+		evaluator := NewRetrievalEvaluator(fake)
+		_, err := evaluator.Evaluate(context.Background(), "tenant-1", RetrievalCase{
+			Query: "x", UserID: "u", TopK: 3, ExpectedMemoryIDs: []string{"a"},
+		})
+		require.NoError(t, err)
+		require.Equal(t, 3, fake.got.TopK)
+	})
 }
 
 func TestRetrievalEvaluatorDeduplicatesDuplicateHits(t *testing.T) {
