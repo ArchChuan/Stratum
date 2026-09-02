@@ -21,6 +21,7 @@ import (
 	iampersistence "github.com/byteBuilderX/stratum/internal/iam/infrastructure/persistence"
 	knowledgeapp "github.com/byteBuilderX/stratum/internal/knowledge/application"
 	llmgatewaydomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
+	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
 	pipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
 	parametersapp "github.com/byteBuilderX/stratum/internal/parameters/application"
@@ -646,9 +647,14 @@ type judgeAdapter struct {
 	params    *parametersapp.Service
 }
 
-// Enabled reports the evaluation.judge.enabled platform parameter. Fail
+// Enabled reports the evaluation.judge.enabled platform parameter, preferring
+// the run-scoped evaluation snapshot (D2/D6: 全链路版本快照) when present. Fail
 // closed when the parameters service is unavailable.
 func (j judgeAdapter) Enabled(ctx context.Context) bool {
+	if snap := evaldomain.EvalSnapshotFromCtx(ctx); snap != nil {
+		enabled, _ := snap.Evaluation.Values["evaluation.judge.enabled"].(bool)
+		return enabled
+	}
 	if j.params == nil {
 		return false
 	}
@@ -664,6 +670,10 @@ func (j judgeAdapter) judgeModel(ctx context.Context, requested string) string {
 	if requested != "" {
 		return requested
 	}
+	if snap := evaldomain.EvalSnapshotFromCtx(ctx); snap != nil {
+		model, _ := snap.Evaluation.Values["evaluation.judge.model"].(string)
+		return model
+	}
 	if j.params == nil {
 		return ""
 	}
@@ -678,6 +688,12 @@ func (j judgeAdapter) judgeModel(ctx context.Context, requested string) string {
 }
 
 func (j judgeAdapter) judgeTemperature(ctx context.Context) float32 {
+	if snap := evaldomain.EvalSnapshotFromCtx(ctx); snap != nil {
+		if temperature, ok := snap.Evaluation.Values["evaluation.judge.temperature"].(float64); ok {
+			return float32(temperature)
+		}
+		return 0
+	}
 	if j.params == nil {
 		return 0
 	}
@@ -967,6 +983,7 @@ type evaluationTenantLister struct {
 
 type agentScenarioEvaluationAdapter struct {
 	agents    *agentapp.AgentService
+	revisions agentRevisionService
 	skills    agentport.SkillActivationResolver
 	bindings  agentport.AgentSkillBinding
 	resources skillCandidateManager
@@ -999,39 +1016,36 @@ func (a agentScenarioEvaluationAdapter) ExecuteRevision(
 	if err := a.validateSkillRef(ref); err != nil {
 		return evalport.ExecutionResult{}, err
 	}
-	// Inject tenant context so the agent-context binding port (whose execTenant
-	// reads it) routes to the right schema; the raw agent_skill_links read now
-	// lives behind agentport.AgentSkillBinding, not here.
+	if a.revisions == nil {
+		return evalport.ExecutionResult{}, errors.New("agent scenario evaluation: revision service unavailable")
+	}
+	// D7：执行时用 run 创建时锁定的承载 agent revision，不读 Registry 当前生产
+	// 配置，可重放。快照缺失/pin 缺失 → fail-closed，提示 recreate run。
+	snap := evaldomain.EvalSnapshotFromCtx(ctx)
+	if snap == nil {
+		return evalport.ExecutionResult{}, errors.New("agent scenario evaluation: evaluation context snapshot required")
+	}
+	// 评测后台 worker 路径 ctx 本无 tenant：一次性包裹并贯穿 bindings /
+	// ResolveSkills / ExecuteSkillScenarioRevision 调用（publishedSkillActivationResolver
+	// 与 skill repo 只从 ctx 读 tenant，缺失即 fail-closed）。resolvePinnedAgent 内的
+	// 局部包裹是幂等双保险，两处重复无害。
 	ctx = postgres.WithTenant(ctx, &postgres.TenantContext{
 		TenantID: tenantID, UserID: requestedBy, Role: postgres.RoleTenantAdmin,
 	})
-	agentID, found, err := a.bindings.FindAgentBySkill(ctx, ref.ResourceID)
-	if err != nil {
-		return evalport.ExecutionResult{}, fmt.Errorf("agent scenario evaluation: resolve agent for Skill %s: %w", ref.ResourceID, err)
-	}
-	if !found {
-		return evalport.ExecutionResult{}, fmt.Errorf("agent scenario evaluation requires an Agent bound to Skill %s", ref.ResourceID)
-	}
-	catalog, err := a.skills.ResolveSkills(ctx, tenantID, []agentport.SkillRevisionRef{{SkillID: ref.ResourceID, RevisionID: ref.RevisionID}})
+	agentRev, agentID, err := a.resolvePinnedAgent(ctx, tenantID, requestedBy, snap, ref)
 	if err != nil {
 		return evalport.ExecutionResult{}, err
 	}
-	activation, ok := catalog[ref.ResourceID]
-	if !ok {
-		return evalport.ExecutionResult{}, fmt.Errorf("Skill revision %s is not available", ref.RevisionID)
-	}
-	queryBytes, err := json.Marshal(testCase.Input)
+	activation, err := a.resolveSkillActivation(ctx, tenantID, ref)
 	if err != nil {
 		return evalport.ExecutionResult{}, err
 	}
-	query := string(queryBytes)
-	if text, ok := testCase.Input.(string); ok {
-		query = text
+	query, err := evaluationCaseQuery(testCase.Input)
+	if err != nil {
+		return evalport.ExecutionResult{}, err
 	}
 	traceID := uuid.Must(uuid.NewV7()).String()
-	result, duration, err := a.agents.ExecuteSkillScenario(
-		ctx,
-		agentID,
+	result, duration, err := a.agents.ExecuteSkillScenarioRevision(ctx, agentRev,
 		agentapp.ExecRequest{Query: query, UserID: requestedBy},
 		agentapp.ExecMeta{
 			TenantID: tenantID,
@@ -1040,6 +1054,8 @@ func (a agentScenarioEvaluationAdapter) ExecuteRevision(
 				Evaluation: true,
 				ResourceManifest: map[string]string{
 					"skill:" + ref.ResourceID: ref.RevisionID,
+					// resolvePinnedAgent 已 fail-closed 保证 pin 非空。
+					"agent:" + agentID: snap.PinnedAssignments.SkillAgentRevision[ref.ResourceID],
 				},
 			},
 		},
@@ -1050,6 +1066,59 @@ func (a agentScenarioEvaluationAdapter) ExecuteRevision(
 	}
 	return evalport.ExecutionResult{Output: result.Output, TraceID: traceID, Tokens: result.TokensUsed,
 		CostUSD: result.CostUSD, DurationMs: duration, Tools: mapToolObservations(result.ToolObservations)}, nil
+}
+
+// resolvePinnedAgent 加载并解码 run 快照锁定的承载 agent revision（D7）：
+// pin 缺失 → fail-closed；FindAgentBySkill 解析承载 agent；revisions.Get 读锁定
+// revision payload 并解码为被测 agent。执行绝不落到 Registry 当前生产配置。
+func (a agentScenarioEvaluationAdapter) resolvePinnedAgent(
+	ctx context.Context, tenantID, requestedBy string, snap *evaldomain.EvaluationContextSnapshot, ref evaldomain.ResourceRef,
+) (agentdomain.AgentRevision, string, error) {
+	pinnedID := snap.PinnedAssignments.SkillAgentRevision[ref.ResourceID]
+	if pinnedID == "" {
+		return agentdomain.AgentRevision{}, "", fmt.Errorf("agent scenario evaluation: no pinned agent revision for Skill %s; recreate the run", ref.ResourceID)
+	}
+	// ExecuteRevision 顶层已包裹 tenant；此处局部包裹为幂等双保险（WithTenant 覆盖
+	// 同值 TenantContext），保证本 helper 单独被调用时 bindings/revisions 仍带租户。
+	ctx = postgres.WithTenant(ctx, &postgres.TenantContext{
+		TenantID: tenantID, UserID: requestedBy, Role: postgres.RoleTenantAdmin,
+	})
+	agentID, found, err := a.bindings.FindAgentBySkill(ctx, ref.ResourceID)
+	if err != nil {
+		return agentdomain.AgentRevision{}, "", fmt.Errorf("agent scenario evaluation: resolve agent for Skill %s: %w", ref.ResourceID, err)
+	}
+	if !found {
+		return agentdomain.AgentRevision{}, "", fmt.Errorf("agent scenario evaluation requires an Agent bound to Skill %s", ref.ResourceID)
+	}
+	_, payload, found, err := a.revisions.Get(ctx, tenantID, evaldomain.ResourceRef{
+		Kind: evaldomain.ResourceKindAgent, ResourceID: agentID, RevisionID: pinnedID,
+	})
+	if err != nil {
+		return agentdomain.AgentRevision{}, "", fmt.Errorf("agent scenario evaluation: load pinned agent revision %s: %w", pinnedID, err)
+	}
+	if !found {
+		return agentdomain.AgentRevision{}, "", fmt.Errorf("agent scenario evaluation: pinned agent revision %s not found; recreate the run", pinnedID)
+	}
+	var agentRev agentdomain.AgentRevision
+	if err := json.Unmarshal(payload, &agentRev); err != nil {
+		return agentdomain.AgentRevision{}, "", fmt.Errorf("agent scenario evaluation: decode pinned agent revision: %w", err)
+	}
+	return agentRev, agentID, nil
+}
+
+// resolveSkillActivation 解析被测 skill revision 的激活信息：缺失 → 报不可用。
+func (a agentScenarioEvaluationAdapter) resolveSkillActivation(
+	ctx context.Context, tenantID string, ref evaldomain.ResourceRef,
+) (agentport.SkillActivation, error) {
+	catalog, err := a.skills.ResolveSkills(ctx, tenantID, []agentport.SkillRevisionRef{{SkillID: ref.ResourceID, RevisionID: ref.RevisionID}})
+	if err != nil {
+		return agentport.SkillActivation{}, err
+	}
+	activation, ok := catalog[ref.ResourceID]
+	if !ok {
+		return agentport.SkillActivation{}, fmt.Errorf("Skill revision %s is not available", ref.RevisionID)
+	}
+	return activation, nil
 }
 
 func (l evaluationTenantLister) ListTenantIDs(ctx context.Context) ([]string, error) {
@@ -1141,8 +1210,16 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	activationResolver := publishedSkillActivationResolver{versions: c.Skill.VersionService}
 	revisionRepo := evalpersist.NewPgRevisionRepository(db)
 	manager := skillCandidateManager{versions: c.Skill.VersionService, revisions: revisionRepo}
+	var sharedRevisionService *evalapp.RevisionService
+	if c.RevisionObjectStore != nil {
+		sharedRevisionService = evalapp.NewRevisionService(
+			evalpersist.RevisionObjectStoreAdapter{Store: c.RevisionObjectStore},
+			revisionRepo,
+		)
+	}
 	skillAdapter := agentScenarioEvaluationAdapter{
 		agents:    c.Agent.Service,
+		revisions: sharedRevisionService,
 		skills:    activationResolver,
 		bindings:  agentpersist.NewPgAgentRepo(db),
 		resources: manager,
@@ -1159,13 +1236,6 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	var runtimeMCPAdapter *mcpEvaluationAdapter
 	var knowledgeProvider evalport.ResourceRevisionProvider
 	var runtimeKnowledgeAdapter *knowledgeEvaluationAdapter
-	var sharedRevisionService *evalapp.RevisionService
-	if c.RevisionObjectStore != nil {
-		sharedRevisionService = evalapp.NewRevisionService(
-			evalpersist.RevisionObjectStoreAdapter{Store: c.RevisionObjectStore},
-			revisionRepo,
-		)
-	}
 	if c.Agent != nil && sharedRevisionService != nil {
 		agentAdapter := agentEvaluationAdapter{
 			revisions: sharedRevisionService, agents: c.Agent.Service, modelValidator: tenantModelValidator(c.Agent.TenantResolver),
@@ -1205,11 +1275,14 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	service, reviewSvc := newEvaluationServiceWithReview(
 		c, db, evaluationResourceRouter{adapters: resourceAdapters}, runRepo, traceReader, judge, suiteRepo,
 	)
-	jobService := evalapp.NewJobService(jobRepo, service)
+	experimentService := evalapp.NewExperimentService(experimentRepo)
+	jobService := evalapp.NewJobService(jobRepo, service, c.buildSnapshotCapturer(
+		experimentService, runtimeMCPAdapter, runtimeKnowledgeAdapter, sharedRevisionService,
+		agentpersist.NewPgAgentRepo(db), runtimeAgentAdapter,
+	))
 	optimizationService := evalapp.NewOptimizationService(
 		evaluationCandidateRouter{creators: candidateCreators}, buildEvaluationPromptRewriter(c), optimizationRepo,
 	)
-	experimentService := evalapp.NewExperimentService(experimentRepo)
 	observationSvc := buildObservationService(c, db, traceReader, judge, reviewSvc)
 	feedbackService := buildEvaluationFeedbackService(c, feedbackRepo, experimentService, observationSvc)
 	worker := c.newEvaluationWorker(ctx, db, jobService, experimentService, experimentRepo, feedbackRepo)
@@ -1242,6 +1315,40 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	c.applySkillEvaluationReader(experimentRepo)
 	c.buildApprovalActionExecutor()
 	return nil
+}
+
+// buildSnapshotCapturer 装配创建时快照捕获器：从既有 wiring 组件取 parameters、
+// revision 读取、窗口解析与 MCP/Knowledge 分流 resolver。revision 服务或
+// parameters/agent 组件缺失时返回 nil（EnqueueRun fail-closed：capturer 未配置
+// 即拒绝创建）。bindings/baselines 供 skill 场景锁承载 agent pin（D7）。
+func (c *Container) buildSnapshotCapturer(
+	experimentService *evalapp.ExperimentService,
+	runtimeMCPAdapter *mcpEvaluationAdapter,
+	runtimeKnowledgeAdapter *knowledgeEvaluationAdapter,
+	revisions agentRevisionService,
+	bindings agentport.AgentSkillBinding,
+	baselines *agentEvaluationAdapter,
+) evalport.SnapshotCapturer {
+	if c.Parameters == nil || c.Parameters.Service == nil || c.Agent == nil {
+		return nil
+	}
+	capturer := &snapshotCapturer{
+		params:    c.Parameters.Service,
+		revisions: revisions,
+		bindings:  bindings,
+		baselines: baselines,
+		modelCtx:  modelContextProvider(c.Agent.TenantResolver),
+		details:   tenantModelDetailsProvider(c.Agent.TenantResolver),
+		vendor:    llmgateway.LookupModelSpec,
+		logger:    c.Logger,
+	}
+	if runtimeMCPAdapter != nil && c.MCP != nil && c.MCP.Manager != nil {
+		capturer.mcpResolver = experimentMCPRevisionResolver{service: experimentService, adapter: *runtimeMCPAdapter}
+	}
+	if runtimeKnowledgeAdapter != nil {
+		capturer.knowRes = experimentKnowledgeRevisionResolver{service: experimentService, adapter: *runtimeKnowledgeAdapter}
+	}
+	return capturer
 }
 
 // buildEvaluationDeleteService 装配删除服务：owner-or-creator 门禁（fail-closed）。
@@ -1323,9 +1430,13 @@ func (c *Container) applySkillEvaluationReader(experimentRepo evalport.Experimen
 	}
 }
 
-// observationEnabled 读取平台参数 evaluation.observe.enabled。默认关闭
-// （fail closed：参数服务不可用时禁用观测链路）。
+// observationEnabled 读取平台参数 evaluation.observe.enabled，快照优先（评测
+// run 创建时点固化的参数值）。默认关闭（fail closed：参数服务不可用时禁用观测链路）。
 func observationEnabled(ctx context.Context, params *parametersapp.Service) bool {
+	if snap := evaldomain.EvalSnapshotFromCtx(ctx); snap != nil {
+		enabled, _ := snap.Evaluation.Values["evaluation.observe.enabled"].(bool)
+		return enabled
+	}
 	if params == nil {
 		return false
 	}
@@ -1337,9 +1448,15 @@ func observationEnabled(ctx context.Context, params *parametersapp.Service) bool
 	return enabled
 }
 
-// observationSampleRate 读取平台参数 evaluation.observe.sample_rate，
+// observationSampleRate 读取平台参数 evaluation.observe.sample_rate，快照优先；
 // 未配置或非法时回退常量默认采样率。
 func observationSampleRate(ctx context.Context, params *parametersapp.Service) float64 {
+	if snap := evaldomain.EvalSnapshotFromCtx(ctx); snap != nil {
+		if rate, ok := snap.Evaluation.Values["evaluation.observe.sample_rate"].(float64); ok && rate >= 0 && rate <= 1 {
+			return rate
+		}
+		return constants.ObservationSampleRateDefault
+	}
 	if params == nil {
 		return constants.ObservationSampleRateDefault
 	}
@@ -1354,11 +1471,15 @@ func observationSampleRate(ctx context.Context, params *parametersapp.Service) f
 }
 
 // observationPlatformVersion 解析 evaluation 配置组当前生效版本序号（Phase 2
-// §4.3 版本锚点）。参数服务未装配 / 无已发布版本时返回 (0,false) fail-open：观测
-// 版本锚点标记 unknown，不阻断落库；DB 读取失败原样返回错误（service 层降级为
-// unknown + warn）。IsCurrent 由 platform_config_labels 生产 label 服务端推导，
-// 过滤即得当前生效版本。
+// §4.3 版本锚点），快照优先：快照已有创建时点固化的 VersionSeq，直接返回（比运行时
+// IsCurrent 更准确地锚定 run 创建时点）。参数服务未装配 / 无已发布版本时返回
+// (0,false) fail-open：观测版本锚点标记 unknown，不阻断落库；DB 读取失败原样返回
+// 错误（service 层降级为 unknown + warn）。IsCurrent 由 platform_config_labels
+// 生产 label 服务端推导，过滤即得当前生效版本。
 func observationPlatformVersion(ctx context.Context, params *parametersapp.Service) (int64, bool, error) {
+	if snap := evaldomain.EvalSnapshotFromCtx(ctx); snap != nil {
+		return snap.Evaluation.VersionSeq, snap.Evaluation.VersionSeq > 0, nil
+	}
 	if params == nil {
 		return 0, false, nil
 	}

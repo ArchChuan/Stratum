@@ -112,7 +112,12 @@ func (s *Service) RunStored(
 	tenantID, requestedBy string,
 	resource domain.ResourceRef,
 	suiteRevisionID string,
+	snapshot *domain.EvaluationContextSnapshot,
 ) (domain.EvalRun, error) {
+	if snapshot == nil {
+		return domain.EvalRun{}, errors.New("evaluation run: context snapshot missing; recreate the run")
+	}
+	ctx = domain.WithEvalSnapshot(ctx, snapshot)
 	if s.suites == nil {
 		return domain.EvalRun{}, errors.New("evaluation suite repository not configured")
 	}
@@ -141,15 +146,21 @@ func (s *Service) GetRun(ctx context.Context, tenantID, runID string) (domain.Ev
 }
 
 func (s *Service) Run(ctx context.Context, input RunInput) (domain.EvalRun, error) {
+	if domain.EvalSnapshotFromCtx(ctx) == nil {
+		return domain.EvalRun{}, errors.New("evaluation run: context snapshot missing; recreate the run")
+	}
 	if err := input.Resource.Validate(); err != nil {
 		return domain.EvalRun{}, err
 	}
+	// ContextSnapshot 取注入 ctx 的创建时快照（上方已 fail-closed 确保非 nil），
+	// 随 SaveRun 落库 eval_runs.context_snapshot（spec §7 版本快照持久化）。
 	run := domain.EvalRun{
 		ID:              uuid.Must(uuid.NewV7()).String(),
 		Resource:        input.Resource,
 		SuiteRevisionID: input.Suite.ID,
 		Passed:          true,
 		Results:         make([]domain.EvalCaseResult, 0, len(input.Suite.Cases)),
+		ContextSnapshot: domain.EvalSnapshotFromCtx(ctx),
 		CreatedAt:       time.Now().UTC(),
 	}
 	for _, testCase := range input.Suite.Cases {
@@ -165,27 +176,33 @@ func (s *Service) Run(ctx context.Context, input RunInput) (domain.EvalRun, erro
 		}
 		run.Results = append(run.Results, result)
 	}
-	seq := int64(0)
-	if s.platformVersion != nil {
-		seqVal, ok, err := s.platformVersion(ctx)
-		if err != nil {
-			// fail-open：版本锚点 unknown（记 0），不阻断落库；但必须留痕便于诊断。
-			if s.logger != nil {
-				s.logger.Warn("evaluation run: platform version", zap.Error(err))
-			}
-		} else if ok {
-			seq = seqVal
-		}
-	}
 	run.Metrics = aggregateRunMetrics(run, runVersionAnchor{
 		SuiteRevisionID: run.SuiteRevisionID,
-		PlatformSeq:     seq,
+		PlatformSeq:     s.resolvePlatformSeq(ctx, input.TenantID),
 		ResourceVersion: run.Resource.RevisionID,
 	})
 	if err := s.repo.SaveRun(ctx, input.TenantID, run); err != nil {
 		return domain.EvalRun{}, err
 	}
 	return run, nil
+}
+
+// resolvePlatformSeq 解析平台版本锚点；失败 fail-open（记 0）不阻断落库，但留痕便于诊断。
+func (s *Service) resolvePlatformSeq(ctx context.Context, tenantID string) int64 {
+	if s.platformVersion == nil {
+		return 0
+	}
+	seqVal, ok, err := s.platformVersion(ctx)
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Warn("evaluation run: platform version", zap.Error(err))
+		}
+		return 0
+	}
+	if ok {
+		return seqVal
+	}
+	return 0
 }
 
 func (s *Service) runCase(

@@ -20,7 +20,9 @@ import (
 // JSON 字符串，模拟 public.platform_settings。
 type fakePlatformStore struct {
 	values map[string]string
-	err    error
+	// versions 按 group key 注入版本历史；nil 组返回空历史（未发布）。
+	versions map[string][]port.PlatformVersion
+	err      error
 }
 
 func (s *fakePlatformStore) GetValue(_ context.Context, key string) (json.RawMessage, bool, error) {
@@ -67,7 +69,13 @@ func (s *fakePlatformStore) Rollback(_ context.Context, _ string, _ int64, _ str
 	return nil
 }
 
-func (s *fakePlatformStore) ListVersions(_ context.Context, _ string) ([]port.PlatformVersion, error) {
+func (s *fakePlatformStore) ListVersions(_ context.Context, groupKey string) ([]port.PlatformVersion, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	if versions, ok := s.versions[groupKey]; ok {
+		return versions, nil
+	}
 	return []port.PlatformVersion{}, nil
 }
 

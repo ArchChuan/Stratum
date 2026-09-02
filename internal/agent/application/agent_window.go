@@ -6,6 +6,7 @@ import (
 	"context"
 
 	agentgraph "github.com/byteBuilderX/stratum/internal/agent/application/graph"
+	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"go.uber.org/zap"
 )
@@ -15,6 +16,11 @@ func (s *AgentService) resolveExecutionWindow(
 	tenantID, model string,
 	explicit int,
 ) (int, agentgraph.WindowSource) {
+	// 评测执行：执行窗口取评测 run 创建时点固化的快照值（D4），跳过运行时
+	// 来源链，保证被测执行与创建时捕获的参数一致。
+	if es := port.ExecutionSnapshotFromCtx(ctx); es != nil && es.ContextWindowTokens > 0 {
+		return es.ContextWindowTokens, agentgraph.WindowSnapshot
+	}
 	modelWin, src := agentgraph.ResolveModelWindow(
 		ctx, model, s.deps.ModelContextProvider, s.deps.VendorWindowLookup,
 	)
@@ -41,6 +47,10 @@ func (s *AgentService) resolveExecutionWindow(
 func (s *AgentService) resolveOutputReserve(
 	ctx context.Context, tenantID, model string, explicitMaxTokens int,
 ) int {
+	// 评测执行：输出预留取评测 run 创建时点固化的快照值（D4），与窗口同源。
+	if es := port.ExecutionSnapshotFromCtx(ctx); es != nil && es.OutputReserveTokens > 0 {
+		return es.OutputReserveTokens
+	}
 	if explicitMaxTokens > 0 {
 		return explicitMaxTokens
 	}

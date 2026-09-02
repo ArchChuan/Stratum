@@ -123,7 +123,20 @@ func TestEvaluationProcessAssertionMustNotCallEscalatesToReviewPool(t *testing.T
 	require.NotNil(t, published.Cases[0].ToolSpec, "tool_spec must survive publish round-trip")
 
 	ref := domain.ResourceRef{Kind: domain.ResourceKindAgent, ResourceID: "agent-e2e", RevisionID: revisionID}
-	run, err := service.Run(ctx, application.RunInput{
+	// 评测执行入口不变量（spec §7）：Run/RunStored 需要创建时上下文快照，否则
+	// fail-closed 拒绝执行（快照是版本锚点，缺失不允许静默重跑）。生产由
+	// JobService.EnqueueRun 捕获后经 RunStored 注入；此处直接调 Service.Run，故
+	// 显式注入最小合法快照 fixture（本场景只走规则 + tool_spec 过程断言，不消费
+	// 快照的评测器/执行内容）。
+	runCtx := domain.WithEvalSnapshot(ctx, &domain.EvaluationContextSnapshot{
+		SchemaVersion: domain.SnapshotSchemaVersion,
+		Evaluation:    domain.GroupSnapshot{GroupKey: domain.GroupEvaluation},
+		Execution: []domain.GroupSnapshot{
+			{GroupKey: domain.GroupAgent},
+			{GroupKey: domain.GroupTrace},
+		},
+	})
+	run, err := service.Run(runCtx, application.RunInput{
 		TenantID: tenantID, RequestedBy: userID, Resource: ref, Suite: published,
 	})
 	require.NoError(t, err)

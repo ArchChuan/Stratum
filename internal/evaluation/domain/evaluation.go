@@ -358,10 +358,13 @@ type EvalRun struct {
 	// Metrics aggregates run-level signals (pass rate, latency percentiles,
 	// token/cost totals) computed after the case loop; persisted to
 	// eval_runs.metrics JSONB.
-	Metrics   map[string]any   `json:"metrics,omitempty"`
-	Results   []EvalCaseResult `json:"results"`
-	CreatedBy string           `json:"created_by,omitempty"`
-	CreatedAt time.Time        `json:"created_at"`
+	Metrics map[string]any `json:"metrics,omitempty"`
+	// ContextSnapshot 是 run 创建时捕获的全链路执行上下文快照（spec §7 版本绑定），
+	// 落库 eval_runs.context_snapshot JSONB；nil = 旧 run / 未捕获。
+	ContextSnapshot *EvaluationContextSnapshot `json:"context_snapshot,omitempty"`
+	Results         []EvalCaseResult           `json:"results"`
+	CreatedBy       string                     `json:"created_by,omitempty"`
+	CreatedAt       time.Time                  `json:"created_at"`
 }
 
 type JobStatus string
@@ -380,6 +383,9 @@ type EvalRunJobPayload struct {
 	Resource        ResourceRef `json:"resource"`
 	SuiteRevisionID string      `json:"suite_revision_id"`
 	RequestedBy     string      `json:"requested_by"`
+	// Snapshot 是 run 创建时捕获的全链路版本快照（Task 3 创建时 fail-closed
+	// 集成）。旧 job（无快照）由 RunOnce → RunStored → Run fail-closed 拒绝执行。
+	Snapshot *EvaluationContextSnapshot `json:"snapshot,omitempty"`
 }
 
 type EvaluationJob struct {

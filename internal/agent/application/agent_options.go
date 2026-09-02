@@ -129,7 +129,7 @@ func (s *AgentService) assembleOptions(
 			if _, resolved := mcpAssignments[tool.ServerID]; resolved {
 				continue
 			}
-			assignment, found, err := s.deps.MCPRevisionResolver.ResolveMCPRevision(
+			assignment, found, err := s.resolveMCPRevisionAssignment(
 				ctx, meta.TenantID, tool.ServerID, subjectID,
 			)
 			if err != nil {
@@ -273,6 +273,22 @@ func (s *AgentService) assembleOptions(
 	options = append(options, s.assistantExecutionOptions(ctx, meta, req, roleClass, authorization,
 		domain.CurrentExecutionArtifactProfileVersion, a.GetConfig().ID)...)
 	return ctx, s.resolveEffectiveParameters(ctx, a, options), nil
+}
+
+// resolveMCPRevisionAssignment 解析单个 MCP server 的实验版本分流。评测执行
+// （执行快照在 ctx）时取 pin 固定 revision（D4），不实时分流；无 pin 返回未命中。
+// 非评测执行走 MCPRevisionResolver 实时分流。
+func (s *AgentService) resolveMCPRevisionAssignment(
+	ctx context.Context, tenantID, serverID, subjectID string,
+) (port.MCPRevisionAssignment, bool, error) {
+	if es := port.ExecutionSnapshotFromCtx(ctx); es != nil {
+		pin, pinned := es.PinnedMCP[serverID]
+		if !pinned {
+			return port.MCPRevisionAssignment{}, false, nil
+		}
+		return port.MCPRevisionAssignment(pin), true, nil
+	}
+	return s.deps.MCPRevisionResolver.ResolveMCPRevision(ctx, tenantID, serverID, subjectID)
 }
 
 // applyFactCheckOption 透传幻觉校验 option（fail-closed：nil/disabled 不注入）。
@@ -551,6 +567,16 @@ func appendStringOption(opts []ExecutionOption, effective map[string]any, key st
 // execution gate).
 
 func captureParametersOption(ctx context.Context, provider port.ParametersProvider) ExecutionOption {
+	// 评测执行：trace.capture_parameters 从快照 TraceParameters 读取（D4），
+	// 不触碰 provider（可能为 nil，避免 panic）；快照无此键或非 true → 关闭。
+	if es := port.ExecutionSnapshotFromCtx(ctx); es != nil {
+		if v, ok := es.TraceParameters["trace.capture_parameters"]; ok {
+			if enabled, isBool := v.(bool); isBool && enabled {
+				return WithCaptureParameters(true)
+			}
+		}
+		return nil
+	}
 	v, ok, err := provider.Resolve(ctx, "trace.capture_parameters", nil)
 	if err != nil || !ok {
 		return nil

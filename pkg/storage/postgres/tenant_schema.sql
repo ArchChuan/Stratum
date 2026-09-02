@@ -496,6 +496,7 @@ CREATE TABLE IF NOT EXISTS eval_runs (
     total_cases       INT NOT NULL DEFAULT 0,
     passed_cases      INT NOT NULL DEFAULT 0,
     metrics           JSONB NOT NULL DEFAULT '{}',
+    context_snapshot  JSONB NOT NULL DEFAULT '{}',
     error_message     TEXT NOT NULL DEFAULT '',
     idempotency_key   TEXT NOT NULL DEFAULT '',
     created_by        TEXT NOT NULL DEFAULT '',
@@ -503,6 +504,8 @@ CREATE TABLE IF NOT EXISTS eval_runs (
     started_at        TIMESTAMPTZ,
     completed_at      TIMESTAMPTZ
 );
+-- 升级存量租户：评测上下文快照列（'{}' = 旧 run 未捕获，GetRun 读回 nil）。
+ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS context_snapshot JSONB NOT NULL DEFAULT '{}';
 -- 升级存量租户：评测删除门禁的创建者列（'' 表示存量行仅租户 owner 可删）。
 ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS idx_eval_runs_resource

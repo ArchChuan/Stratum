@@ -11,6 +11,24 @@ import (
 	"github.com/byteBuilderX/stratum/pkg/observability"
 )
 
+// snapFixture 是评测上下文快照的最小合法 fixture（创建时捕获集成后的
+// Run/RunStored 入口需要 ctx 携带快照，否则 fail-closed 拒绝执行）。
+func snapFixture() *domain.EvaluationContextSnapshot {
+	return &domain.EvaluationContextSnapshot{
+		SchemaVersion: domain.SnapshotSchemaVersion,
+		Evaluation:    domain.GroupSnapshot{GroupKey: domain.GroupEvaluation},
+		Execution: []domain.GroupSnapshot{
+			{GroupKey: domain.GroupAgent},
+			{GroupKey: domain.GroupTrace},
+		},
+	}
+}
+
+// snapshotCtx 返回注入 snapFixture 的 context，模拟 RunStored 已注入快照的执行入口。
+func snapshotCtx() context.Context {
+	return domain.WithEvalSnapshot(context.Background(), snapFixture())
+}
+
 func TestServiceRunEvaluatesEnabledCasesAndPersistsResults(t *testing.T) {
 	adapter := &fakeAdapter{outputs: map[string]any{
 		"case-1": "订单已经发货",
@@ -19,7 +37,7 @@ func TestServiceRunEvaluatesEnabledCasesAndPersistsResults(t *testing.T) {
 	repo := &fakeRunRepo{}
 	svc := NewService(adapter, repo, nil, nil)
 
-	run, err := svc.Run(context.Background(), RunInput{
+	run, err := svc.Run(snapshotCtx(), RunInput{
 		TenantID: "tenant-1",
 		Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "version-2"},
 		Suite: domain.EvalSuiteRevision{
@@ -48,12 +66,46 @@ func TestServiceRunEvaluatesEnabledCasesAndPersistsResults(t *testing.T) {
 	}
 }
 
+// TestServiceRunPersistsContextSnapshotOnRun 覆盖 spec §7 落库接线：Service.Run
+// 把注入 ctx 的创建时快照挂到 EvalRun.ContextSnapshot，随 SaveRun 持久化到
+// eval_runs.context_snapshot（fake repo 记录断言）。
+func TestServiceRunPersistsContextSnapshotOnRun(t *testing.T) {
+	adapter := &fakeAdapter{outputs: map[string]any{"case-1": "ok"}}
+	repo := &fakeRunRepo{}
+	svc := NewService(adapter, repo, nil, nil)
+	snap := snapFixture()
+
+	run, err := svc.Run(domain.WithEvalSnapshot(context.Background(), snap), RunInput{
+		TenantID: "tenant-1",
+		Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "v1"},
+		Suite: domain.EvalSuiteRevision{ID: "sv-1", Cases: []domain.EvalCase{
+			{ID: "case-1", Input: "物流状态", ExpectedOutput: "发货", AssertionMode: domain.AssertionContains, Enabled: true},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if run.ContextSnapshot == nil {
+		t.Fatal("returned run must carry the context snapshot")
+	}
+	if repo.saved.ID != run.ID {
+		t.Fatal("run was not persisted")
+	}
+	// 传入的是注入 ctx 的同一个快照指针（Run 直接透传，未复制/改写）。
+	if repo.saved.ContextSnapshot == nil {
+		t.Fatal("persisted run must carry a non-nil context snapshot")
+	}
+	if repo.saved.ContextSnapshot != snap {
+		t.Fatalf("persisted snapshot %+v does not match injected snapshot %+v", repo.saved.ContextSnapshot, snap)
+	}
+}
+
 func TestServiceRunPersistsExecutionErrorsAsFailedCases(t *testing.T) {
 	adapter := &fakeAdapter{errCase: "case-1"}
 	repo := &fakeRunRepo{}
 	svc := NewService(adapter, repo, nil, nil)
 
-	run, err := svc.Run(context.Background(), RunInput{
+	run, err := svc.Run(snapshotCtx(), RunInput{
 		TenantID: "tenant-1",
 		Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "version-2"},
 		Suite: domain.EvalSuiteRevision{ID: "suite-version-1", Cases: []domain.EvalCase{
@@ -83,12 +135,48 @@ func TestServiceRunStoredLoadsPublishedSuiteRevision(t *testing.T) {
 
 	run, err := svc.RunStored(context.Background(), "tenant-1", "user-1", domain.ResourceRef{
 		Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "version-2",
-	}, "suite-revision-1")
+	}, "suite-revision-1", snapFixture())
 	if err != nil {
 		t.Fatalf("RunStored returned error: %v", err)
 	}
 	if !run.Passed || run.SuiteRevisionID != "suite-revision-1" {
 		t.Fatalf("unexpected run: %+v", run)
+	}
+}
+
+// TestServiceRunFailsClosedWhenContextSnapshotMissing 覆盖 Run 入口的无快照
+// fail-closed（brief 要求：Run 无快照 → 拒绝执行）。ctx 未注入评测快照时
+// Run 必须返回错误，不得静默继续。
+func TestServiceRunFailsClosedWhenContextSnapshotMissing(t *testing.T) {
+	adapter := &fakeAdapter{}
+	repo := &fakeRunRepo{}
+	svc := NewService(adapter, repo, nil, nil)
+
+	_, err := svc.Run(context.Background(), RunInput{
+		TenantID: "tenant-1",
+		Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "version-2"},
+		Suite: domain.EvalSuiteRevision{ID: "suite-version-1", Cases: []domain.EvalCase{
+			{ID: "case-1", Input: "x", ExpectedOutput: "y", AssertionMode: domain.AssertionExact, Enabled: true},
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "context snapshot missing") {
+		t.Fatalf("Run without context snapshot must fail closed, got err=%v", err)
+	}
+}
+
+// TestServiceRunStoredFailsClosedWhenSnapshotNil 覆盖 RunStored 入口的 nil 快照
+// fail-closed（brief 要求：RunStored 无快照 → 拒绝执行）。snapshot 参数为 nil
+// 时 RunStored 必须返回错误，不得静默回退。
+func TestServiceRunStoredFailsClosedWhenSnapshotNil(t *testing.T) {
+	adapter := &fakeAdapter{}
+	repo := &fakeRunRepo{}
+	svc := NewService(adapter, repo, nil, nil)
+
+	_, err := svc.RunStored(context.Background(), "tenant-1", "user-1", domain.ResourceRef{
+		Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "version-2",
+	}, "suite-revision-1", nil)
+	if err == nil || !strings.Contains(err.Error(), "context snapshot missing") {
+		t.Fatalf("RunStored with nil snapshot must fail closed, got err=%v", err)
 	}
 }
 
@@ -168,7 +256,7 @@ func TestServiceRunCaseResolvesTraceEvidence(t *testing.T) {
 	}
 	svc := NewService(adapter, repo, traceReader, nil)
 
-	run, err := svc.Run(context.Background(), RunInput{
+	run, err := svc.Run(snapshotCtx(), RunInput{
 		TenantID: "tenant-1",
 		Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "v1"},
 		Suite: domain.EvalSuiteRevision{ID: "sv-1", Cases: []domain.EvalCase{
@@ -193,7 +281,7 @@ func TestServiceRunCaseGracefullyHandlesTraceReaderError(t *testing.T) {
 	traceReader := &fakeFailingTraceEvidenceReader{}
 	svc := NewService(adapter, repo, traceReader, nil)
 
-	run, err := svc.Run(context.Background(), RunInput{
+	run, err := svc.Run(snapshotCtx(), RunInput{
 		TenantID: "tenant-1",
 		Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "v1"},
 		Suite: domain.EvalSuiteRevision{ID: "sv-1", Cases: []domain.EvalCase{
@@ -217,7 +305,7 @@ func TestServiceRunCaseSkipsTraceEvidenceWhenReaderNil(t *testing.T) {
 	repo := &fakeRunRepo{}
 	svc := NewService(adapter, repo, nil, nil) // no trace reader configured
 
-	run, err := svc.Run(context.Background(), RunInput{
+	run, err := svc.Run(snapshotCtx(), RunInput{
 		TenantID: "tenant-1",
 		Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "v1"},
 		Suite: domain.EvalSuiteRevision{ID: "sv-1", Cases: []domain.EvalCase{
@@ -272,7 +360,7 @@ func TestServiceJudgeAssertionDispatchesToJudge(t *testing.T) {
 	judge := &fakeLLMJudge{enabled: true, result: domain.AssertionResult{Passed: true, Message: "符合要求"}}
 	svc := NewService(adapter, repo, nil, judge)
 
-	run, err := svc.Run(context.Background(), RunInput{
+	run, err := svc.Run(snapshotCtx(), RunInput{
 		TenantID: "tenant-1",
 		Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "version-2"},
 		Suite: domain.EvalSuiteRevision{
@@ -308,7 +396,7 @@ func TestServiceJudgeAssertionFailClosedWhenDisabled(t *testing.T) {
 	repo := &fakeRunRepo{}
 	svc := NewService(adapter, repo, nil, nil) // no judge configured
 
-	run, err := svc.Run(context.Background(), RunInput{
+	run, err := svc.Run(snapshotCtx(), RunInput{
 		TenantID: "tenant-1",
 		Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "version-2"},
 		Suite: domain.EvalSuiteRevision{
@@ -334,7 +422,7 @@ func TestServiceJudgeAssertionDisabledJudgeFailsClosed(t *testing.T) {
 	repo := &fakeRunRepo{}
 	svc := NewService(adapter, repo, nil, &fakeLLMJudge{enabled: false})
 
-	run, err := svc.Run(context.Background(), RunInput{
+	run, err := svc.Run(snapshotCtx(), RunInput{
 		TenantID: "tenant-1",
 		Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "version-2"},
 		Suite: domain.EvalSuiteRevision{
@@ -361,7 +449,7 @@ func TestServiceJudgeAssertionPropagatesJudgeError(t *testing.T) {
 	judge := &fakeLLMJudge{enabled: true, err: errors.New("completer timeout")}
 	svc := NewService(adapter, repo, nil, judge)
 
-	run, err := svc.Run(context.Background(), RunInput{
+	run, err := svc.Run(snapshotCtx(), RunInput{
 		TenantID: "tenant-1",
 		Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "version-2"},
 		Suite: domain.EvalSuiteRevision{
@@ -418,7 +506,7 @@ func TestServiceJudgeCaseMarshalErrorsSetExecutionFailureReason(t *testing.T) {
 			repo := &fakeRunRepo{}
 			svc := NewService(adapter, repo, nil, &fakeLLMJudge{enabled: true})
 
-			run, err := svc.Run(context.Background(), RunInput{
+			run, err := svc.Run(snapshotCtx(), RunInput{
 				TenantID: "tenant-1",
 				Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "v1"},
 				Suite: domain.EvalSuiteRevision{ID: "sv-1", Cases: []domain.EvalCase{
@@ -448,7 +536,7 @@ func TestServiceRuleAssertionDoesNotTouchJudge(t *testing.T) {
 	judge := &fakeLLMJudge{enabled: true}
 	svc := NewService(adapter, repo, nil, judge)
 
-	_, err := svc.Run(context.Background(), RunInput{
+	_, err := svc.Run(snapshotCtx(), RunInput{
 		TenantID: "tenant-1",
 		Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "version-2"},
 		Suite: domain.EvalSuiteRevision{
@@ -560,7 +648,7 @@ func TestRunCaseRuleBranchEscalatesProcessConflict(t *testing.T) {
 	svc := NewService(adapter, repo, nil, nil)
 	svc.SetReviewEscalator(esc, domain.ReviewConfig{LowConfidenceThreshold: 0.6})
 
-	run, err := svc.Run(context.Background(), RunInput{
+	run, err := svc.Run(snapshotCtx(), RunInput{
 		TenantID: "tenant-1",
 		Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "v1"},
 		Suite: domain.EvalSuiteRevision{ID: "sv-1", Cases: []domain.EvalCase{
@@ -594,7 +682,7 @@ func TestRunJudgeCasePopulatesDimensionsAndFailureReason(t *testing.T) {
 	}}
 	svc := NewService(adapter, repo, nil, judge)
 
-	run, err := svc.Run(context.Background(), RunInput{
+	run, err := svc.Run(snapshotCtx(), RunInput{
 		TenantID: "tenant-1",
 		Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "v1"},
 		Suite: domain.EvalSuiteRevision{ID: "sv-1", Cases: []domain.EvalCase{
@@ -621,7 +709,7 @@ func TestRunRuleAssertionSetsAssertFailureReason(t *testing.T) {
 	repo := &fakeRunRepo{}
 	svc := NewService(adapter, repo, nil, nil) // 规则断言不走 judge
 
-	run, err := svc.Run(context.Background(), RunInput{
+	run, err := svc.Run(snapshotCtx(), RunInput{
 		TenantID: "tenant-1",
 		Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "v1"},
 		Suite: domain.EvalSuiteRevision{ID: "sv-1", Cases: []domain.EvalCase{
@@ -648,7 +736,7 @@ func TestRunExecutionErrorSetsExecutionFailureReason(t *testing.T) {
 	repo := &fakeRunRepo{}
 	svc := NewService(adapter, repo, nil, nil)
 
-	run, err := svc.Run(context.Background(), RunInput{
+	run, err := svc.Run(snapshotCtx(), RunInput{
 		TenantID: "tenant-1",
 		Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "v1"},
 		Suite: domain.EvalSuiteRevision{ID: "sv-1", Cases: []domain.EvalCase{
@@ -679,7 +767,7 @@ func TestRunCaseToolSpecMustNotCallFailsProcessKeepsOutputAttribution(t *testing
 	repo := &fakeRunRepo{}
 	svc := NewService(adapter, repo, nil, nil)
 
-	run, err := svc.Run(context.Background(), RunInput{
+	run, err := svc.Run(snapshotCtx(), RunInput{
 		TenantID: "tenant-1",
 		Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "v1"},
 		Suite: domain.EvalSuiteRevision{ID: "sv-1", Cases: []domain.EvalCase{
@@ -720,7 +808,7 @@ func TestRunCaseStepJudgePassMergesDimensionsAndPasses(t *testing.T) {
 	}}
 	svc := NewService(adapter, repo, nil, judge)
 
-	run, err := svc.Run(context.Background(), RunInput{
+	run, err := svc.Run(snapshotCtx(), RunInput{
 		TenantID: "tenant-1",
 		Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "v1"},
 		Suite: domain.EvalSuiteRevision{ID: "sv-1", Cases: []domain.EvalCase{
@@ -763,7 +851,7 @@ func TestRunCaseStepJudgeDisabledFailsClosed(t *testing.T) {
 	repo := &fakeRunRepo{}
 	svc := NewService(adapter, repo, nil, nil) // no judge configured
 
-	run, err := svc.Run(context.Background(), RunInput{
+	run, err := svc.Run(snapshotCtx(), RunInput{
 		TenantID: "tenant-1",
 		Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "v1"},
 		Suite: domain.EvalSuiteRevision{ID: "sv-1", Cases: []domain.EvalCase{
@@ -811,7 +899,7 @@ func TestRunCaseStepJudgeJudgeErrorFailsClosed(t *testing.T) {
 			judge := &fakeLLMJudge{enabled: true, err: tc.err}
 			svc := NewService(adapter, repo, nil, judge)
 
-			run, err := svc.Run(context.Background(), RunInput{
+			run, err := svc.Run(snapshotCtx(), RunInput{
 				TenantID: "tenant-1",
 				Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "v1"},
 				Suite: domain.EvalSuiteRevision{ID: "sv-1", Cases: []domain.EvalCase{
@@ -847,7 +935,7 @@ func TestRunCaseNoProcessAssertionDefaultsProcessPassTrue(t *testing.T) {
 	repo := &fakeRunRepo{}
 	svc := NewService(adapter, repo, nil, nil)
 
-	run, err := svc.Run(context.Background(), RunInput{
+	run, err := svc.Run(snapshotCtx(), RunInput{
 		TenantID: "tenant-1",
 		Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "v1"},
 		Suite: domain.EvalSuiteRevision{ID: "sv-1", Cases: []domain.EvalCase{
@@ -878,7 +966,7 @@ func TestRunCaseJudgeBranchFoldsProcessPass(t *testing.T) {
 	judge := &fakeLLMJudge{enabled: true, result: domain.AssertionResult{Passed: true, Message: "输出符合要求"}}
 	svc := NewService(adapter, repo, nil, judge)
 
-	run, err := svc.Run(context.Background(), RunInput{
+	run, err := svc.Run(snapshotCtx(), RunInput{
 		TenantID: "tenant-1",
 		Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "v1"},
 		Suite: domain.EvalSuiteRevision{ID: "sv-1", Cases: []domain.EvalCase{
@@ -924,7 +1012,7 @@ func TestRunCaseJudgeAndStepJudgeMergeDimensions(t *testing.T) {
 	}
 	svc := NewService(adapter, repo, nil, judge)
 
-	run, err := svc.Run(context.Background(), RunInput{
+	run, err := svc.Run(snapshotCtx(), RunInput{
 		TenantID: "tenant-1",
 		Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "v1"},
 		Suite: domain.EvalSuiteRevision{ID: "sv-1", Cases: []domain.EvalCase{
