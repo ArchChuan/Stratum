@@ -5,8 +5,7 @@ import { operationProposalApi } from '../api/operationProposal.api';
 import type { OperationProposal } from '../model/operationProposal';
 
 import { usePagination } from '@/shared/hooks';
-
-interface RequestError { response?: { data?: { error?: string } } }
+import { extractErrorMessage } from '@/shared/lib';
 
 export type OperationProposalTab = 'pending' | 'history';
 
@@ -51,7 +50,7 @@ export const useOperationProposals = (readonly: boolean) => {
       setPending(rows);
     } catch (err) {
       if (seq !== pendingSeqRef.current) return;
-      message.error({ content: (err as RequestError).response?.data?.error || '加载待审批列表失败', duration: 3 });
+      message.error({ content: extractErrorMessage(err, '加载待审批列表失败'), duration: 3 });
     } finally {
       if (seq === pendingSeqRef.current) setPendingLoading(false);
     }
@@ -67,7 +66,7 @@ export const useOperationProposals = (readonly: boolean) => {
       setTotal(data.total);
     } catch (err) {
       if (seq !== historySeqRef.current) return;
-      message.error({ content: (err as RequestError).response?.data?.error || '加载审批历史失败', duration: 3 });
+      message.error({ content: extractErrorMessage(err, '加载审批历史失败'), duration: 3 });
     } finally {
       if (seq === historySeqRef.current) setHistoryLoading(false);
     }
@@ -106,7 +105,7 @@ export const useOperationProposals = (readonly: boolean) => {
       setNote('');
       setDetailOpen(true);
     } catch (err) {
-      message.error({ content: (err as RequestError).response?.data?.error || '加载操作详情失败', duration: 3 });
+      message.error({ content: extractErrorMessage(err, '加载操作详情失败'), duration: 3 });
     }
   }, [readonly]);
 
@@ -124,7 +123,7 @@ export const useOperationProposals = (readonly: boolean) => {
       await loadPending();
       await openDetail(detail);
     } catch (err) {
-      message.error({ content: (err as RequestError).response?.data?.error || '开始审批失败', duration: 3 });
+      message.error({ content: extractErrorMessage(err, '开始审批失败'), duration: 3 });
     } finally {
       setReviewing(false);
     }
@@ -139,7 +138,7 @@ export const useOperationProposals = (readonly: boolean) => {
       setDetailOpen(false);
       await loadPending();
     } catch (err) {
-      message.error({ content: (err as RequestError).response?.data?.error || '批准失败', duration: 3 });
+      message.error({ content: extractErrorMessage(err, '批准失败'), duration: 3 });
     } finally {
       setApproving(false);
     }
@@ -154,7 +153,7 @@ export const useOperationProposals = (readonly: boolean) => {
       setDetailOpen(false);
       await loadPending();
     } catch (err) {
-      message.error({ content: (err as RequestError).response?.data?.error || '拒绝失败', duration: 3 });
+      message.error({ content: extractErrorMessage(err, '拒绝失败'), duration: 3 });
     } finally {
       setRejecting(false);
     }
@@ -169,7 +168,7 @@ export const useOperationProposals = (readonly: boolean) => {
       setDetailOpen(false);
       await loadPending();
     } catch (err) {
-      message.error({ content: (err as RequestError).response?.data?.error || '取消失败', duration: 3 });
+      message.error({ content: extractErrorMessage(err, '取消失败'), duration: 3 });
     } finally {
       setCancelling(false);
     }
