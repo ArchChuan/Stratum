@@ -1,8 +1,8 @@
 [
   {
     "name": "default-unauth",
-    "method": "PUT",
-    "path": "/agents/tool-approvals/:approvalID/assignee",
+    "method": "DELETE",
+    "path": "/memory/entries/:id",
     "body": {
       "error": "missing bearer token"
     },
