@@ -14,6 +14,7 @@ import { ExperimentDrawer } from '../components/ExperimentDrawer';
 import { ResourceTable } from '../components/ResourceTable';
 import ReviewPoolPanel from '../components/ReviewPoolPanel';
 import { RunDrawer } from '../components/RunDrawer';
+import { RuntimeHealthTrendPanel } from '../components/RuntimeHealthTrendPanel';
 import { SuiteDrawer } from '../components/SuiteDrawer';
 import { SuitesPanel } from '../components/SuitesPanel';
 import { TimelineDrawer } from '../components/TimelineDrawer';
@@ -135,6 +136,8 @@ export const EvaluationCenterPage = () => {
         loading={center.loading} canManage={center.canManageEvaluation} onOpen={(row) => setSuiteId(row.id)}
         onCreate={() => setSuiteCreateOpen(true)} canDelete={(row) => center.canDeleteEntity(row.created_by)}
         onDelete={(row) => confirmDelete(`删除套件「${row.name}」？`, () => center.deleteSuite(row.id))} /> },
+      { key: 'health', label: '运行态健康', children: <RuntimeHealthTrendPanel key={`health-${kind ?? 'all'}-${filterResourceId ?? 'none'}`}
+        defaultKind={kind} defaultResourceId={filterResourceId} /> },
       { key: 'review', label: '人工评审池', children: <ReviewPoolPanel canDelete={(item) => center.canDeleteEntity(item.created_by)} /> },
     ]} />
     <Drawer title="资源详情" open={!!resource} onClose={() => setResourceId('')} width={drawerWidth(isMobile)} destroyOnHidden>

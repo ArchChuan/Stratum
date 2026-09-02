@@ -51,6 +51,39 @@ groups:
             T4 红线级：按 runbook 立即人工确认并处置。
           dashboard_url: https://stratum.grafana/d/evaluation
           runbook_url: /docs/operations/alerts/stratum-evaluation.md#stratum-eval-rule-blocked
+      - alert: StratumEvalJudgeDegraded
+        expr: |
+          rate(eval_judge_failure_total{reason="judge_unavailable"}[15m]) > 0
+        for: 15m
+        labels:
+          severity: warning
+          service: evaluation
+          component: judge
+          environment: remote-test
+        annotations:
+          summary: judge 外部依赖持续不可用
+          description: >-
+            judge 调用持续 15 分钟因 judge_unavailable 失败（§11.2 judge 健康）。
+            judge 是异步外部依赖，需有超时预算、有限重试与熔断/隔离；核对 LLM provider
+            可用性、限额与配置，恢复后告警自动消除。
+          dashboard_url: https://stratum.grafana/d/evaluation
+          runbook_url: /docs/operations/alerts/stratum-evaluation.md#stratum-eval-judge-degraded
+      - alert: StratumEvalQueueBacklogHigh
+        expr: |
+          eval_queue_backlog > 1000
+        for: 15m
+        labels:
+          severity: warning
+          service: evaluation
+          component: observation-consumer
+          environment: remote-test
+        annotations:
+          summary: 评测观测队列积压超过阈值（当前 {{ $value }}）
+          description: >-
+            评测观测消费队列积压持续 > 1000 达 15 分钟（queue 维度见 labels）。消费
+            停滞将延迟观测落库与采样覆盖统计，检查 observation consumer 健康状况。
+          dashboard_url: https://stratum.grafana/d/evaluation
+          runbook_url: /docs/operations/alerts/stratum-evaluation.md#stratum-eval-queue-backlog-high
       - alert: StratumEvalReviewBacklogHigh
         expr: |
           eval_review_backlog > 50

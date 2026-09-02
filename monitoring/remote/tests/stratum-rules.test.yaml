@@ -1333,3 +1333,79 @@ tests:
       - eval_time: 20m
         alertname: StratumEvalReviewBacklogHigh
         exp_alerts: []
+
+  - name: evaluation judge degraded alert fires after its for duration
+    interval: 1m
+    input_series:
+      - series: 'eval_judge_failure_total{reason="judge_unavailable"}'
+        values: '0+60x30'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: StratumEvalJudgeDegraded
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: StratumEvalJudgeDegraded
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: StratumEvalJudgeDegraded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: evaluation
+              component: judge
+              environment: remote-test
+              reason: judge_unavailable
+            exp_annotations:
+              summary: judge 外部依赖持续不可用
+              description: "judge 调用持续 15 分钟因 judge_unavailable 失败（§11.2 judge 健康）。 judge 是异步外部依赖，需有超时预算、有限重试与熔断/隔离；核对 LLM provider 可用性、限额与配置，恢复后告警自动消除。"
+              dashboard_url: https://stratum.grafana/d/evaluation
+              runbook_url: /docs/operations/alerts/stratum-evaluation.md#stratum-eval-judge-degraded
+
+  - name: evaluation judge degraded does not fire without judge_unavailable
+    interval: 1m
+    input_series:
+      - series: 'eval_judge_failure_total{reason="judge_unavailable"}'
+        values: '0x30'
+      - series: 'eval_judge_failure_total{reason="save_failed"}'
+        values: '0+60x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: StratumEvalJudgeDegraded
+        exp_alerts: []
+
+  - name: evaluation queue backlog alert fires after its for duration
+    interval: 1m
+    input_series:
+      - series: 'eval_queue_backlog{queue="observation"}'
+        values: '1200x30'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: StratumEvalQueueBacklogHigh
+        exp_alerts: []
+      - eval_time: 14m
+        alertname: StratumEvalQueueBacklogHigh
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: StratumEvalQueueBacklogHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: evaluation
+              component: observation-consumer
+              environment: remote-test
+              queue: observation
+            exp_annotations:
+              summary: 评测观测队列积压超过阈值（当前 1200）
+              description: "评测观测消费队列积压持续 > 1000 达 15 分钟（queue 维度见 labels）。消费 停滞将延迟观测落库与采样覆盖统计，检查 observation consumer 健康状况。"
+              dashboard_url: https://stratum.grafana/d/evaluation
+              runbook_url: /docs/operations/alerts/stratum-evaluation.md#stratum-eval-queue-backlog-high
+
+  - name: evaluation queue backlog does not fire below threshold
+    interval: 1m
+    input_series:
+      - series: 'eval_queue_backlog{queue="observation"}'
+        values: '1000x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: StratumEvalQueueBacklogHigh
+        exp_alerts: []
