@@ -29,7 +29,8 @@ describe('useMyMemoriesPage', () => {
   });
 
   it('reports an error when stats fail', async () => {
-    getStats.mockRejectedValue(new Error('failed'));
+    // axios 响应形态：提取链取 response.data.error（FE 冻结 {error} 契约）。
+    getStats.mockRejectedValue({ response: { data: { error: '加载记忆统计失败' } } });
     const { result } = renderHook(() => useMyMemoriesPage());
     await waitFor(() => expect(result.current.statsLoading).toBe(false));
     expect(message.error).toHaveBeenCalledWith({ content: '加载记忆统计失败', duration: 3 });
@@ -53,7 +54,8 @@ describe('useMyMemoriesPage', () => {
   it('reports an error when clearing fails', async () => {
     const { result } = renderHook(() => useMyMemoriesPage());
     await waitFor(() => expect(result.current.statsLoading).toBe(false));
-    clearMyMemories.mockRejectedValue(new Error('failed'));
+    // axios 响应形态：提取链取 response.data.error（FE 冻结 {error} 契约）。
+    clearMyMemories.mockRejectedValue({ response: { data: { error: '清空记忆失败' } } });
 
     await act(async () => {
       await result.current.handleClearAll();

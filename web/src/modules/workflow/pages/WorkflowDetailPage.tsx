@@ -9,10 +9,10 @@ import { useWorkflowResources } from '../hooks/useWorkflowResources';
 import type { WorkflowDefinition, WorkflowVersion, WorkflowVersionSummary } from '../model/workflow';
 
 import { useTenantRole } from '@/modules/iam';
+import { extractErrorMessage } from '@/shared/lib';
 import { VersionHistory, type VersionRow } from '@/shared/ui';
 
 const { Paragraph, Title } = Typography;
-interface RequestError { response?: { data?: { error?: string } } }
 
 // WorkflowDetailPage 是普通成员与管理员共用的工作流只读详情页：
 // 展示当前生效版本的画布、版本历史；管理员额外获得回退入口。
@@ -41,7 +41,7 @@ export const WorkflowDetailPage = () => {
   useEffect(() => {
     let cancelled = false;
     load().catch((error: unknown) => {
-      if (!cancelled) message.error({ content: (error as RequestError).response?.data?.error || '操作失败', duration: 3 });
+      if (!cancelled) message.error({ content: extractErrorMessage(error, '操作失败'), duration: 3 });
     }).finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [load]);

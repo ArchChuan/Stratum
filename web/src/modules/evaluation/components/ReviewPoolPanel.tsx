@@ -5,6 +5,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { decideReviewItem, deleteReviewItem, listReviewItems } from '../services/review';
 import type { ReviewItem, ReviewItemDecisionRequest } from '../types/review';
 
+import { extractErrorMessage } from '@/shared/lib';
+
 const VERDICT_OPTIONS = [
   { value: 'pass', label: '通过' },
   { value: 'fail', label: '不通过' },
@@ -50,7 +52,7 @@ export default function ReviewPoolPanel({ canDelete }: {
       setItems(data.items ?? []);
       setTotal(data.total ?? 0);
     } catch (err: any) {
-      message.error({ content: err.response?.data?.error || '加载评审池失败', duration: 3 });
+      message.error({ content: extractErrorMessage(err, '加载评审池失败'), duration: 3 });
     } finally {
       setLoading(false);
     }
@@ -78,7 +80,7 @@ export default function ReviewPoolPanel({ canDelete }: {
           message.success({ content: '评审项已删除', duration: 2 });
           load();
         } catch (err: any) {
-          message.error({ content: err.response?.data?.error || '删除失败', duration: 3 });
+          message.error({ content: extractErrorMessage(err, '删除失败'), duration: 3 });
           throw err;
         }
       },
@@ -101,7 +103,7 @@ export default function ReviewPoolPanel({ canDelete }: {
       closeDecision();
       load();
     } catch (err: any) {
-      message.error({ content: err.response?.data?.error || '提交失败', duration: 3 });
+      message.error({ content: extractErrorMessage(err, '提交失败'), duration: 3 });
     } finally {
       setSubmitting(false);
     }
