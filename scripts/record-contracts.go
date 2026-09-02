@@ -44,8 +44,16 @@ type Case struct {
 	WantBodyRE string            `json:"want_body_regex,omitempty"`
 }
 
+// isDDDAuthOverride decides which auth claims each DDD route is recorded
+// under. It MUST mirror the claims switch in api/http/contract_test.go
+// TestContracts prefix-for-prefix: the admin five prefixes get
+// Role+GlobalRole+TenantID, every other DDD prefix gets Role+TenantID, and
+// nothing outside /admin/* is ever signed as global_admin. Keeping these two
+// in lockstep is what makes re-recorded goldens byte-identical to committed.
 func isDDDAuthOverride(routePath string) (bool, iamport.TokenClaims) {
-	adminFull := iamport.TokenClaims{Sub: "contract-admin", TenantID: "contract-tenant", Role: "admin", GlobalRole: "global_admin"}
+	adminFull := iamport.TokenClaims{
+		Sub: "contract-admin", TenantID: "contract-tenant", Role: "admin", GlobalRole: "global_admin",
+	}
 	adminClaims := iamport.TokenClaims{Sub: "contract-admin", TenantID: "contract-tenant", Role: "admin"}
 	switch {
 	case strings.HasPrefix(routePath, "/admin/tenants"),
