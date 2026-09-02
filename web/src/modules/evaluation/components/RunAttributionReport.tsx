@@ -4,6 +4,10 @@ import { useMemo } from 'react';
 
 import type { EvaluationRun } from '../model/evaluation';
 
+import { isFailedAttributionCase, reasonOf } from './attribution';
+
+import { EVALUATION_ATTRIBUTION_SYSTEMATIC_MIN_CASES } from '@/constants';
+
 type RunResult = EvaluationRun['results'][number];
 
 export type ReportRow = {
@@ -16,16 +20,6 @@ export type ReportRow = {
   hasProcessFailure: boolean;
   hasTraceFailure: boolean;
 };
-
-// 失败 case 是否进入归因报告：与失败聚类同一套口径——输出断言失败
-// （failure_reason）或过程断言失败（process_pass=false）都算可归因失败。
-const isFailedAttributionCase = (r: RunResult): boolean =>
-  !r.passed && (Boolean(r.failure_reason) || r.process_pass === false);
-
-// reasonOf 复用失败聚类的归因键：输出断言失败取 failure_reason，过程失败取
-// process_failure，过程失败但无具体值时给兜底标签。
-const reasonOf = (r: RunResult): string =>
-  r.failure_reason || (r.process_pass === false ? (r.process_failure || 'process:failed') : '');
 
 // failingDimensions 只消费后端已有证据，不做归因推断：优先取维度打分里
 // passed=false 的维度名；无打分维度时回退解析 failure_reason 的 dimension:
@@ -81,7 +75,8 @@ export const buildReportRows = (results: EvaluationRun['results']): ReportRow[] 
         avgScore: scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : null,
         reasons: [...new Set(items.map(reasonOf))].filter(Boolean).sort(),
         caseIds: [...new Set(items.map((r) => r.case_id))].sort(),
-        systematic: items.length >= 2,
+        // §9 服务端落地后改由服务端 systematic 信号替代。
+        systematic: items.length >= EVALUATION_ATTRIBUTION_SYSTEMATIC_MIN_CASES,
         hasProcessFailure: items.some((r) => r.process_pass === false),
         hasTraceFailure: items.some(isTraceEvidenceFailure),
       };
@@ -94,9 +89,11 @@ export const buildReportRows = (results: EvaluationRun['results']): ReportRow[] 
 export const rootCausePlaceholder = '待 §9 归因服务';
 
 export const hypothesisFor = (row: ReportRow): string =>
+  // 中性表述：不编造「失分」因果——系统性桶可能是过程断言失败聚合（无维度失分语义），
+  // 这里只描述证据模式；系统性/孤立区分由 UI「模式」列 Tag 表达。
   row.systematic
-    ? `系统性批量失分：${row.count} 个失败 case 同维度；根因假设${rootCausePlaceholder}`
-    : `单 case 失分；根因假设${rootCausePlaceholder}`;
+    ? `${row.count} 个失败 case 共享该归因维度；根因假设${rootCausePlaceholder}`
+    : `单 case 归因该维度；根因假设${rootCausePlaceholder}`;
 
 // suggestionsFor 只产出数据可触发的确定性动作，映射既有能力而非编造：trace 证据
 // 失败→下钻工具/错误序列；过程断言失败→评审池（§6.6）；任何失败都给受控对比方向

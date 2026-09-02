@@ -66,9 +66,11 @@ describe('hypothesisFor / suggestionsFor', () => {
   const isolated = buildReportRows(results).find((row) => row.dimension === '过程断言')!;
 
   it('marks the root-cause slot as pending §9 and never invents a cause', () => {
-    expect(hypothesisFor(systematic)).toContain('系统性批量失分');
+    // 中性表述：不编造「失分」因果（过程断言桶聚合多个 case 时无维度失分语义），
+    // 只描述「失败 case 共享该归因维度」的证据模式（系统性/孤立由 UI 模式列 Tag 表达）。
+    expect(hypothesisFor(systematic)).toContain('共享该归因维度');
     expect(hypothesisFor(systematic)).toContain(rootCausePlaceholder);
-    expect(hypothesisFor(isolated)).toContain('单 case 失分');
+    expect(hypothesisFor(isolated)).toContain('单 case 归因该维度');
     expect(hypothesisFor(isolated)).toContain(rootCausePlaceholder);
   });
 
@@ -121,5 +123,79 @@ describe('RunAttributionPanel integration', () => {
     // 报告内点击 case id 走既有 CaseDrillDown。
     fireEvent.click(report.getByText('c1'));
     expect(screen.getByText('输出未通过')).toBeInTheDocument();
+  });
+});
+
+describe('buildReportRows core invariants', () => {
+  type RunResult = EvaluationRun['results'][number];
+
+  // 局部 fixture helper：显式带 schema 必填字段（passed/process_pass/tokens/cost/duration），
+  // 只覆写用例相关字段，避免污染文件级共享 results fixture。
+  const failed = (over: { case_id: string } & Partial<RunResult>): RunResult => ({
+    passed: false,
+    process_pass: true,
+    tokens: 0,
+    cost_usd: 0,
+    duration_ms: 0,
+    ...over,
+  });
+
+  it('counts a multi-failed-dimension case once per failing dimension with its own score', () => {
+    const rows = buildReportRows([
+      failed({
+        case_id: 'm1',
+        failure_reason: 'dimension:faithfulness',
+        dimensions: [
+          { name: 'faithfulness', score: 0.2, passed: false },
+          { name: 'relevance', score: 0.9, passed: false },
+        ],
+      }),
+      failed({
+        case_id: 'f1',
+        failure_reason: 'dimension:faithfulness',
+        dimensions: [{ name: 'faithfulness', score: 0.5, passed: false }],
+      }),
+    ]);
+
+    // 一个 case 命中两个失败维度 → 各维度行各计入一次。
+    expect(rows).toHaveLength(2);
+    const faith = rows.find((row) => row.dimension === 'faithfulness');
+    const relevance = rows.find((row) => row.dimension === 'relevance');
+    expect(faith).toBeDefined();
+    expect(relevance).toBeDefined();
+    expect(faith).toMatchObject({ count: 2, caseIds: ['f1', 'm1'] });
+    expect(faith?.avgScore).toBeCloseTo(0.35, 5); // (0.2 + 0.5) / 2
+    expect(relevance).toMatchObject({ count: 1, caseIds: ['m1'] });
+    expect(relevance?.avgScore).toBeCloseTo(0.9, 5);
+  });
+
+  it.each([
+    {
+      name: 'parses the dimension: prefix from failure_reason when no dimension scores exist',
+      input: failed({ case_id: 'b1', failure_reason: 'dimension:faithfulness | assert:regex' }),
+      expectDimension: 'faithfulness',
+      expectReasons: ['dimension:faithfulness | assert:regex'],
+    },
+    {
+      name: 'buckets un-prefixed failures into the 未标注 fallback dimension',
+      input: failed({ case_id: 't1', failure_reason: 'timeout' }),
+      expectDimension: '未标注',
+      expectReasons: ['timeout'],
+    },
+    {
+      name: 'falls back to the process:failed key when process_pass=false without a specific process_failure',
+      input: failed({ case_id: 'p1', process_pass: false }),
+      expectDimension: '过程断言',
+      expectReasons: ['process:failed'],
+      expectProcessFailure: true,
+    },
+  ])('$name', ({ input, expectDimension, expectReasons, expectProcessFailure }) => {
+    const rows = buildReportRows([input]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].dimension).toBe(expectDimension);
+    expect(rows[0].reasons).toEqual(expectReasons);
+    if (expectProcessFailure !== undefined) {
+      expect(rows[0].hasProcessFailure).toBe(expectProcessFailure);
+    }
   });
 });
