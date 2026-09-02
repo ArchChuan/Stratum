@@ -16,8 +16,9 @@ const (
 // 永不 import llmgateway（DDD：跨 context 接口定义在消费方，照抄
 // agent/factcheck.Judge 模式）。实现方必须 fail-closed：任何错误向上
 // 返回，由应用层降级为"未判定"，绝不默认放行。
+// instructions 是 workspace 级评分指令附加段（空 = 用内置评分 prompt）。
 type SufficiencyJudge interface {
-	JudgeSufficiency(ctx context.Context, query, evidence string) (SufficiencyVerdict, error)
+	JudgeSufficiency(ctx context.Context, query, evidence, instructions string) (SufficiencyVerdict, error)
 }
 
 // FaithfulnessVerdict 是生成后 claim 级支撑判定（P3 评估层消费）。

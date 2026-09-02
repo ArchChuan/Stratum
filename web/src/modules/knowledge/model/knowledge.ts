@@ -11,6 +11,10 @@ export const workspaceConfigSchema = z
     reranking: z.string().optional(),
     rerank_model: z.string().optional(),
     judge_model: z.string().optional(),
+    // 评分指令附加段（空 = 后端用内置评分 prompt；与 pkg/constants
+    // MaxRerankScoringInstructionsRunes / MaxJudgeScoringInstructionsRunes 同步）。
+    rerank_scoring_instructions: z.string().optional(),
+    judge_scoring_instructions: z.string().optional(),
     score_threshold: z.number().optional(),
     rerank_top_k: z.number().optional(),
   })

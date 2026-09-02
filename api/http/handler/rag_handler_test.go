@@ -278,27 +278,34 @@ func TestUpdateWorkspaceRejectsBuiltinWithoutRerankModel(t *testing.T) {
 	}
 }
 
-// TestDTOConfigRoundTripRerankModels 守护 RerankModel/JudgeModel 经
+// TestDTOConfigRoundTripRerankModels 守护 RerankModel/JudgeModel/评分指令经
 // toDTOConfig/fromDTOConfig 双向映射不丢失。
 func TestDTOConfigRoundTripRerankModels(t *testing.T) {
 	in := domain.WorkspaceConfig{
 		EmbeddingModel: "text-embedding-v3", QueryMode: "hybrid", Reranking: "builtin-score-v1",
 		RerankModel: "qwen-turbo", JudgeModel: "qwen-plus",
+		RerankScoringInstructions: "重排指令", JudgeScoringInstructions: "判断指令",
 	}
 	got := fromDTOConfig(toDTOConfig(in))
 	if got.RerankModel != "qwen-turbo" || got.JudgeModel != "qwen-plus" {
 		t.Fatalf("round-trip lost models: RerankModel=%q JudgeModel=%q", got.RerankModel, got.JudgeModel)
+	}
+	if got.RerankScoringInstructions != "重排指令" || got.JudgeScoringInstructions != "判断指令" {
+		t.Fatalf("round-trip lost instructions: RerankScoring=%q JudgeScoring=%q",
+			got.RerankScoringInstructions, got.JudgeScoringInstructions)
 	}
 }
 
 // TestEncodeResetSentinels 守护 PATCH 显式空字符串字段编码为 NUL 前缀 sentinel
 // （与 ScoreThresholdResetSentinel 同构），且产物仍是合法 JSON。
 func TestEncodeResetSentinels(t *testing.T) {
-	raw := []byte(`{"reranking":"","rerank_model":"","judge_model":""}`)
+	raw := []byte(`{"reranking":"","rerank_model":"","judge_model":"","rerank_scoring_instructions":"","judge_scoring_instructions":""}`)
 	got := string(encodeResetSentinels(raw))
 	if !strings.Contains(got, `"reranking":"\u0000rerank_reset"`) ||
 		!strings.Contains(got, `"rerank_model":"\u0000rerank_model_reset"`) ||
-		!strings.Contains(got, `"judge_model":"\u0000judge_model_reset"`) {
+		!strings.Contains(got, `"judge_model":"\u0000judge_model_reset"`) ||
+		!strings.Contains(got, `"rerank_scoring_instructions":"\u0000rerank_scoring_instructions_reset"`) ||
+		!strings.Contains(got, `"judge_scoring_instructions":"\u0000judge_scoring_instructions_reset"`) {
 		t.Fatalf("sentinel encoding wrong: %s", got)
 	}
 	if !json.Valid([]byte(got)) {

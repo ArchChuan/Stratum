@@ -26,6 +26,12 @@ message WorkspaceConfig {
   // judge_model: 证据充分性判断模型；空 = judge 门关闭。
   string rerank_model = 10;
   string judge_model = 11;
+  // 评分指令附加段：rerank_scoring_instructions 供内置重排（builtin-score-v1）、
+  // judge_scoring_instructions 供证据充分性 judge 使用。空 = 使用代码内置评分
+  // prompt；JSON 输出结构固定不可编辑。长度上限由后端 domain Validate 校验，
+  // 不加 binding。
+  string rerank_scoring_instructions = 12;
+  string judge_scoring_instructions = 13;
 }
 
 message QueryRequest {

@@ -100,6 +100,13 @@ const (
 	// RerankLLMMaxDocRunes 截断喂给重排模型的候选正文（token 成本控制；只影响
 	// 相关性打分上下文，不影响检索正文）。
 	RerankLLMMaxDocRunes = 500
+	// MaxRerankScoringInstructionsRunes / MaxJudgeScoringInstructionsRunes 是
+	// workspace 评分指令附加段（rerank/judge scoring instructions）的 rune 上限。
+	// 指令是可选的用户偏好段（空 = 用内置评分 prompt），上限防止用户文本打爆
+	// LLM 上下文；前端 TextArea 同步展示该值
+	// （web/src/constants KNOWLEDGE_MAX_SCORING_INSTRUCTIONS_RUNES，后端为权威）。
+	MaxRerankScoringInstructionsRunes = 2000
+	MaxJudgeScoringInstructionsRunes  = 2000
 )
 
 var milvusUnsafe = regexp.MustCompile(`[^a-zA-Z0-9_]`)

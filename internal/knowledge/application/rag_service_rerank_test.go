@@ -596,3 +596,55 @@ func TestRAGQueryClampsTopKToMax(t *testing.T) {
 		})
 	}
 }
+
+// TestNewRAGSearchFnBuiltinRerankFromWorkspaceConfig 守护核心修复：普通查询
+// （agent 检索 fan-out searchWorkspace）把 workspace config 的重排策略/模型/
+// 评分指令/TopK 透传给语义重排器——而非仅评测链路生效。config 是触发与指令的
+// 单一事实源：Reranking=builtin-score-v1 使普通查询真正调用语义重排器，
+// RerankScoringInstructions 随之进入 RerankRequest。
+func TestNewRAGSearchFnBuiltinRerankFromWorkspaceConfig(t *testing.T) {
+	vectors := NewMockVectorStore()
+	vectors.SetSearchResults([]knowledgeport.VectorSearchResult{
+		{ID: "chunk-a", SourceDocument: "doc-a", Content: "a", Score: 0.9},
+		{ID: "chunk-b", SourceDocument: "doc-b", Content: "b", Score: 0.1},
+		{ID: "chunk-c", SourceDocument: "doc-c", Content: "c", Score: 0.5},
+	})
+	reranker := &fakeReranker{results: []knowledgeport.RerankResult{
+		{Index: 2, Score: 0.9}, {Index: 0, Score: 0.5}, {Index: 1, Score: 0.2},
+	}}
+	service := vectorRAGService(vectors)
+	service.SetSemanticReranker(reranker, 10)
+	service.SetWorkspaceRepo(&recordingWorkspaceRepo{workspace: &domain.Workspace{
+		ID:   "019047ac-0000-7000-9000-000000000099",
+		Name: "个人知识库",
+		Config: domain.WorkspaceConfig{
+			EmbeddingModel:            "text-embedding-v3",
+			QueryMode:                 "vector",
+			TopK:                      3,
+			Reranking:                 "builtin-score-v1",
+			RerankModel:               "qwen-turbo",
+			RerankTopK:                2,
+			RerankScoringInstructions: "分数须有区分度，避免全部同分",
+		},
+	}})
+	service.SetTenantRoleResolver(stubRoleResolver{role: "owner"})
+	service.SetDocRepo(stubDocRepo{})
+
+	fn := NewRAGSearchFn(service, "tenant-1", "viewer-1")
+	content, err := fn(context.Background(), []string{"个人知识库"}, "query", 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if content == "" {
+		t.Fatal("search must return content")
+	}
+	if reranker.calls != 1 {
+		t.Fatalf("semantic rerank calls=%d, want 1 (普通查询必须触发 workspace 配置的重排)", reranker.calls)
+	}
+	if reranker.lastReq.Model != "qwen-turbo" {
+		t.Fatalf("rerank model = %q, want qwen-turbo (from workspace config)", reranker.lastReq.Model)
+	}
+	if reranker.lastReq.ScoringInstructions != "分数须有区分度，避免全部同分" {
+		t.Fatalf("scoring instructions lost: got %q", reranker.lastReq.ScoringInstructions)
+	}
+}

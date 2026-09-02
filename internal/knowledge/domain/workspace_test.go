@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -30,21 +31,31 @@ func TestNewWorkspaceAppliesDefaults(t *testing.T) {
 	if cfg.ChunkingStrategy != DefaultChunkingStrategy {
 		t.Errorf("expected default chunking %q, got %q", DefaultChunkingStrategy, cfg.ChunkingStrategy)
 	}
+	// 新建 workspace 预填默认评分指令（Q3：前端详情页回填即显示可编辑推荐文本）。
+	if cfg.RerankScoringInstructions != DefaultRerankScoringInstructions {
+		t.Errorf("expected rerank scoring instructions prefilled, got %q", cfg.RerankScoringInstructions)
+	}
+	if cfg.JudgeScoringInstructions != DefaultJudgeScoringInstructions {
+		t.Errorf("expected judge scoring instructions prefilled, got %q", cfg.JudgeScoringInstructions)
+	}
 }
 
 func TestNewWorkspaceKeepsProvidedValues(t *testing.T) {
 	cfg := WorkspaceConfig{
-		EmbeddingModel:   "embedding-3",
-		ChunkSize:        256,
-		ChunkOverlap:     32,
-		QueryMode:        "vector",
-		TopK:             3,
-		ChunkingStrategy: ChunkingStrategySemantic,
+		EmbeddingModel:            "embedding-3",
+		ChunkSize:                 256,
+		ChunkOverlap:              32,
+		QueryMode:                 "vector",
+		TopK:                      3,
+		ChunkingStrategy:          ChunkingStrategySemantic,
+		RerankScoringInstructions: "自定义重排指令",
+		JudgeScoringInstructions:  "自定义判断指令",
 	}
 	ws, err := NewWorkspace("kb", "", cfg, 1024, 10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	// 显式提供的指令值必须原样保留（不被 applyDefaults 的默认文本覆盖）。
 	if ws.Config != cfg {
 		t.Errorf("expected provided config preserved, got %+v", ws.Config)
 	}
@@ -98,6 +109,10 @@ func TestWorkspaceConfigValidate(t *testing.T) {
 		{"topk zero rejected", func(c *WorkspaceConfig) { c.TopK = 0 }, ErrInvalidTopK},
 		{"rerank topk above range", func(c *WorkspaceConfig) { c.RerankTopK = 21 }, ErrInvalidRerankTopK},
 		{"rerank topk negative", func(c *WorkspaceConfig) { c.RerankTopK = -1 }, ErrInvalidRerankTopK},
+		// 评分指令超上限（2001 > Max*ScoringInstructionsRunes=2000）拒绝；空串合法
+		// （存量 JSONB 无键读回空 → 运行时回落内置 prompt）。
+		{"rerank instructions over max", func(c *WorkspaceConfig) { c.RerankScoringInstructions = strings.Repeat("长", 2001) }, ErrInvalidScoringInstructions},
+		{"judge instructions over max", func(c *WorkspaceConfig) { c.JudgeScoringInstructions = strings.Repeat("长", 2001) }, ErrInvalidScoringInstructions},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := valid
@@ -110,15 +125,22 @@ func TestWorkspaceConfigValidate(t *testing.T) {
 }
 
 func TestApplyDefaultsBoundaries(t *testing.T) {
+	// 除边界回填外，applyDefaults 固定预填两条默认评分指令；预填语义由
+	// TestNewWorkspaceAppliesDefaults 专项守护，此处补上以免比较失败遮蔽边界断言。
+	withDefaultInstructions := func(c WorkspaceConfig) WorkspaceConfig {
+		c.RerankScoringInstructions = DefaultRerankScoringInstructions
+		c.JudgeScoringInstructions = DefaultJudgeScoringInstructions
+		return c
+	}
 	cases := []struct {
 		name string
 		in   WorkspaceConfig
 		want WorkspaceConfig
 	}{
 		// 嵌入模型无静态兜底：applyDefaults 对空模型原样留空，由 Validate 拒绝。
-		{"zero chunk size defaults", WorkspaceConfig{ChunkSize: 0, ChunkOverlap: 0, TopK: 0}, WorkspaceConfig{QueryMode: DefaultQueryMode, ChunkSize: 777, ChunkOverlap: DefaultChunkOverlap, TopK: 9, ChunkingStrategy: DefaultChunkingStrategy}},
-		{"negative chunk size defaults", WorkspaceConfig{ChunkSize: -1, ChunkOverlap: -5, TopK: -2}, WorkspaceConfig{QueryMode: DefaultQueryMode, ChunkSize: 777, ChunkOverlap: DefaultChunkOverlap, TopK: 9, ChunkingStrategy: DefaultChunkingStrategy}},
-		{"one chunk size defaults", WorkspaceConfig{ChunkSize: 1, ChunkOverlap: 1, TopK: 1}, WorkspaceConfig{QueryMode: DefaultQueryMode, ChunkSize: 1, ChunkOverlap: 1, TopK: 1, ChunkingStrategy: DefaultChunkingStrategy}},
+		{"zero chunk size defaults", WorkspaceConfig{ChunkSize: 0, ChunkOverlap: 0, TopK: 0}, withDefaultInstructions(WorkspaceConfig{QueryMode: DefaultQueryMode, ChunkSize: 777, ChunkOverlap: DefaultChunkOverlap, TopK: 9, ChunkingStrategy: DefaultChunkingStrategy})},
+		{"negative chunk size defaults", WorkspaceConfig{ChunkSize: -1, ChunkOverlap: -5, TopK: -2}, withDefaultInstructions(WorkspaceConfig{QueryMode: DefaultQueryMode, ChunkSize: 777, ChunkOverlap: DefaultChunkOverlap, TopK: 9, ChunkingStrategy: DefaultChunkingStrategy})},
+		{"one chunk size defaults", WorkspaceConfig{ChunkSize: 1, ChunkOverlap: 1, TopK: 1}, withDefaultInstructions(WorkspaceConfig{QueryMode: DefaultQueryMode, ChunkSize: 1, ChunkOverlap: 1, TopK: 1, ChunkingStrategy: DefaultChunkingStrategy})},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -335,6 +357,60 @@ func TestMergeUpdateRerankModelSentinels(t *testing.T) {
 		}
 		if got.Reranking != "" {
 			t.Fatalf("Reranking = %q, want cleared", got.Reranking)
+		}
+	})
+}
+
+// TestMergeUpdateScoringInstructionsSentinels 守护两条评分指令的 partial 合并语义：
+// 零值=未传保留 / 非空覆盖 / 哨兵显式清空（TextArea 清空 → handler 编码 NUL 哨兵）/
+// 超限 fail-closed（Update 路径不经过 Validate，merge 内做长度校验）。
+func TestMergeUpdateScoringInstructionsSentinels(t *testing.T) {
+	base := WorkspaceConfig{
+		EmbeddingModel:            "text-embedding-v3",
+		QueryMode:                 "hybrid",
+		ChunkingStrategy:          "recursive",
+		RerankScoringInstructions: "现有重排指令",
+		JudgeScoringInstructions:  "现有判断指令",
+	}
+	t.Run("零值不覆盖（partial 语义）", func(t *testing.T) {
+		got, err := base.MergeUpdate(WorkspaceConfig{})
+		if err != nil {
+			t.Fatalf("MergeUpdate() error = %v", err)
+		}
+		if got.RerankScoringInstructions != "现有重排指令" || got.JudgeScoringInstructions != "现有判断指令" {
+			t.Fatalf("zero partial must preserve base, got %+v", got)
+		}
+	})
+	t.Run("非空覆盖", func(t *testing.T) {
+		got, err := base.MergeUpdate(WorkspaceConfig{RerankScoringInstructions: "新重排", JudgeScoringInstructions: "新判断"})
+		if err != nil {
+			t.Fatalf("MergeUpdate() error = %v", err)
+		}
+		if got.RerankScoringInstructions != "新重排" || got.JudgeScoringInstructions != "新判断" {
+			t.Fatalf("non-empty partial must override, got %+v", got)
+		}
+	})
+	t.Run("哨兵显式清空", func(t *testing.T) {
+		got, err := base.MergeUpdate(WorkspaceConfig{
+			RerankScoringInstructions: RerankScoringInstructionsResetSentinel,
+			JudgeScoringInstructions:  JudgeScoringInstructionsResetSentinel,
+		})
+		if err != nil {
+			t.Fatalf("MergeUpdate() error = %v", err)
+		}
+		if got.RerankScoringInstructions != "" || got.JudgeScoringInstructions != "" {
+			t.Fatalf("sentinels must clear both, got %+v", got)
+		}
+	})
+	t.Run("超限拒绝", func(t *testing.T) {
+		over := strings.Repeat("长", 2001)
+		_, err := base.MergeUpdate(WorkspaceConfig{RerankScoringInstructions: over})
+		if !errors.Is(err, ErrInvalidScoringInstructions) {
+			t.Fatalf("over-max rerank instructions must be rejected, got %v", err)
+		}
+		_, err = base.MergeUpdate(WorkspaceConfig{JudgeScoringInstructions: over})
+		if !errors.Is(err, ErrInvalidScoringInstructions) {
+			t.Fatalf("over-max judge instructions must be rejected, got %v", err)
 		}
 	})
 }

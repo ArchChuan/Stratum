@@ -56,25 +56,29 @@ func toDTOConfig(c domain.WorkspaceConfig) gen.WorkspaceConfig {
 		Reranking:      c.Reranking,
 		ScoreThreshold: c.ScoreThreshold,
 		//nolint:gosec // 同 ChunkSize
-		RerankTopK:  int32(c.RerankTopK),
-		RerankModel: c.RerankModel,
-		JudgeModel:  c.JudgeModel,
+		RerankTopK:                int32(c.RerankTopK),
+		RerankModel:               c.RerankModel,
+		JudgeModel:                c.JudgeModel,
+		RerankScoringInstructions: c.RerankScoringInstructions,
+		JudgeScoringInstructions:  c.JudgeScoringInstructions,
 	}
 }
 
 func fromDTOConfig(c gen.WorkspaceConfig) domain.WorkspaceConfig {
 	return domain.WorkspaceConfig{
-		EmbeddingModel:   c.EmbeddingModel,
-		ChunkingStrategy: c.ChunkingStrategy,
-		ChunkSize:        int(c.ChunkSize),
-		ChunkOverlap:     int(c.ChunkOverlap),
-		QueryMode:        c.QueryMode,
-		TopK:             int(c.TopK),
-		Reranking:        c.Reranking,
-		ScoreThreshold:   c.ScoreThreshold,
-		RerankTopK:       int(c.RerankTopK),
-		RerankModel:      c.RerankModel,
-		JudgeModel:       c.JudgeModel,
+		EmbeddingModel:            c.EmbeddingModel,
+		ChunkingStrategy:          c.ChunkingStrategy,
+		ChunkSize:                 int(c.ChunkSize),
+		ChunkOverlap:              int(c.ChunkOverlap),
+		QueryMode:                 c.QueryMode,
+		TopK:                      int(c.TopK),
+		Reranking:                 c.Reranking,
+		ScoreThreshold:            c.ScoreThreshold,
+		RerankTopK:                int(c.RerankTopK),
+		RerankModel:               c.RerankModel,
+		JudgeModel:                c.JudgeModel,
+		RerankScoringInstructions: c.RerankScoringInstructions,
+		JudgeScoringInstructions:  c.JudgeScoringInstructions,
 	}
 }
 
@@ -156,6 +160,9 @@ func (h *RAGHandler) Query(c *gin.Context) {
 
 	var embedModel, workspaceID string
 	var threshold float32
+	var reranking, rerankModel string
+	var rerankTopK int
+	var rerankScoringInstructions string
 	if h.wsService != nil {
 		if ws, err := h.wsService.GetWorkspace(c.Request.Context(), tenantID, req.Workspace); err == nil {
 			embedModel = ws.Config.EmbeddingModel
@@ -163,6 +170,12 @@ func (h *RAGHandler) Query(c *gin.Context) {
 			// workspace config 单一事实源：API 查询面板不传阈值，config 缺省
 			// 兜底（0=不过滤），保证配置保存后查询即生效。
 			threshold = ws.Config.ScoreThreshold
+			// 重排策略/模型/TopK/评分指令同样来自 config：面板查询据此触发
+			// workspace 配置的重排（与 agent/evidence 检索路径 searchWorkspace 一致）。
+			reranking = ws.Config.Reranking
+			rerankModel = ws.Config.RerankModel
+			rerankTopK = ws.Config.RerankTopK
+			rerankScoringInstructions = ws.Config.RerankScoringInstructions
 		}
 	}
 
@@ -173,10 +186,14 @@ func (h *RAGHandler) Query(c *gin.Context) {
 		TenantID:    tenantID,
 		Mode:        req.Mode,
 		//nolint:gosec // TopK 已受 binding max=20 约束,不可能溢出 int(proto 契约)
-		TopK:           int(req.TopK),
-		EmbeddingModel: embedModel,
-		ScoreThreshold: threshold,
-		ViewerID:       actorID,
+		TopK:                      int(req.TopK),
+		EmbeddingModel:            embedModel,
+		ScoreThreshold:            threshold,
+		Reranking:                 reranking,
+		RerankModel:               rerankModel,
+		RerankTopK:                rerankTopK,
+		RerankScoringInstructions: rerankScoringInstructions,
+		ViewerID:                  actorID,
 	})
 	if err != nil {
 		_ = c.Error(err)
@@ -305,7 +322,8 @@ func (h *RAGHandler) UpdateWorkspace(c *gin.Context) {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
-	// 显式空字符串字段（"reranking":"" / "rerank_model":"" / "judge_model":""）
+	// 显式空字符串字段（"reranking":"" / "rerank_model":"" / "judge_model":"" /
+	// "rerank_scoring_instructions":"" / "judge_scoring_instructions":""）
 	// 是合法"关闭/清空"值，但 MergeUpdate 的 partial 合并以零值=未传，编码为
 	// NUL 前缀 sentinel 区分显式清空（与 ScoreThresholdResetSentinel 同构）。
 	c.Request.Body = io.NopCloser(bytes.NewReader(encodeResetSentinels(body)))
@@ -663,6 +681,8 @@ func encodeResetSentinels(raw []byte) []byte {
 	raw = resetReplace(raw, `"reranking":""`, `"reranking":`, domain.RerankingResetSentinel)
 	raw = resetReplace(raw, `"rerank_model":""`, `"rerank_model":`, domain.RerankModelResetSentinel)
 	raw = resetReplace(raw, `"judge_model":""`, `"judge_model":`, domain.JudgeModelResetSentinel)
+	raw = resetReplace(raw, `"rerank_scoring_instructions":""`, `"rerank_scoring_instructions":`, domain.RerankScoringInstructionsResetSentinel)
+	raw = resetReplace(raw, `"judge_scoring_instructions":""`, `"judge_scoring_instructions":`, domain.JudgeScoringInstructionsResetSentinel)
 	return raw
 }
 

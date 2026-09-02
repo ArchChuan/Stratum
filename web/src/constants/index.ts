@@ -116,6 +116,10 @@ export const KNOWLEDGE_MIN_RERANK_TOP_K = 0;
 export const KNOWLEDGE_MAX_RERANK_TOP_K = 20;
 export const KNOWLEDGE_MIN_SCORE_THRESHOLD = 0;
 export const KNOWLEDGE_MAX_SCORE_THRESHOLD = 1;
+// 评分指令附加段 rune 上限（TextArea maxLength；与 pkg/constants
+// MaxRerankScoringInstructionsRunes / MaxJudgeScoringInstructionsRunes 同步，
+// 修改须两处一致；rune 数 ≤ UTF-16 单元数，同值安全）。
+export const KNOWLEDGE_MAX_SCORING_INSTRUCTIONS_RUNES = 2000;
 export const KNOWLEDGE_MAX_UPLOAD_SIZE_BYTES = 10 * 1024 * 1024; // 10MB，与 UI 提示一致（后端上限 100MB）
 export const AVATAR_MAX_UPLOAD_SIZE_BYTES = 2 * 1024 * 1024; // 2MB，与 UI 提示一致
 

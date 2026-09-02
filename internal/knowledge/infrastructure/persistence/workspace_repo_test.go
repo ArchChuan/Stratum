@@ -94,3 +94,40 @@ func TestJSONBEmptyModelsWriteEmptyKeys(t *testing.T) {
 		t.Fatalf("empty models must serialize explicit empty keys, got: %s", got)
 	}
 }
+
+func TestJSONBRoundTripScoringInstructions(t *testing.T) {
+	// 非空评分指令必须 round-trip 完整，且落 JSON 键。
+	in := domain.WorkspaceConfig{
+		EmbeddingModel:            "text-embedding-v3",
+		ChunkSize:                 512,
+		ChunkOverlap:              64,
+		QueryMode:                 "hybrid",
+		TopK:                      5,
+		ChunkingStrategy:          "recursive",
+		RerankScoringInstructions: "按相关性打分，需有区分度",
+		JudgeScoringInstructions:  "证据不足判 insufficient",
+	}
+	var jc jsonbConfig
+	_ = json.Unmarshal([]byte(toJSONB(in)), &jc)
+	out := fromJSONB(jc)
+	if out.RerankScoringInstructions != "按相关性打分，需有区分度" || out.JudgeScoringInstructions != "证据不足判 insufficient" {
+		t.Fatalf("round-trip lost instructions: Rerank=%q Judge=%q",
+			out.RerankScoringInstructions, out.JudgeScoringInstructions)
+	}
+	if raw := toJSONB(in); !strings.Contains(raw, `"rerank_scoring_instructions"`) || !strings.Contains(raw, `"judge_scoring_instructions"`) {
+		t.Fatalf("non-empty instructions must serialize keys, got: %s", raw)
+	}
+}
+
+func TestJSONBEmptyInstructionsOmitKeys(t *testing.T) {
+	// 空指令带 omitempty 不落键：存量 workspace JSONB 无指令键读回零值 = 内置
+	// prompt，无需迁移。空键不得如 rerank_model 般显式写 ""。
+	cfg := domain.WorkspaceConfig{EmbeddingModel: "text-embedding-v3"}
+	raw := toJSONB(cfg)
+	if strings.Contains(raw, "rerank_scoring_instructions") || strings.Contains(raw, "judge_scoring_instructions") {
+		t.Fatalf("empty instructions must omit keys, got: %s", raw)
+	}
+	if got := fromJSONB(jsonbConfig{}).RerankScoringInstructions; got != "" {
+		t.Fatalf("missing keys must read back empty (builtin prompt), got %q", got)
+	}
+}
