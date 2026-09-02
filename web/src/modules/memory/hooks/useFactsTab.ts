@@ -5,8 +5,7 @@ import { memoryUserApi } from '../api/memory-user.api';
 import type { MemoryFact } from '../model/memory';
 
 import { usePagination } from '@/shared/hooks';
-
-interface RequestError { response?: { data?: { error?: string } } }
+import { extractErrorMessage } from '@/shared/lib';
 
 export interface FactFilters {
   q?: string;
@@ -41,7 +40,7 @@ export const useFactsTab = () => {
       setTotal(data.total);
     } catch (err) {
       if (seq !== requestSeqRef.current) return;
-      message.error({ content: (err as RequestError).response?.data?.error || '加载事实失败', duration: 3 });
+      message.error({ content: extractErrorMessage(err, '加载事实失败'), duration: 3 });
     } finally {
       if (seq === requestSeqRef.current) setLoading(false);
     }
@@ -64,7 +63,7 @@ export const useFactsTab = () => {
       message.success({ content: '事实已删除', duration: 2 });
       await load();
     } catch (err) {
-      message.error({ content: (err as RequestError).response?.data?.error || '删除事实失败', duration: 3 });
+      message.error({ content: extractErrorMessage(err, '删除事实失败'), duration: 3 });
     } finally {
       setDeleteLoading(false);
     }
@@ -82,7 +81,7 @@ export const useFactsTab = () => {
       await load();
       return res.fact;
     } catch (err) {
-      message.error({ content: (err as RequestError).response?.data?.error || '更新事实失败', duration: 3 });
+      message.error({ content: extractErrorMessage(err, '更新事实失败'), duration: 3 });
       throw err;
     }
   }, [load]);

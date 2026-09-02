@@ -125,7 +125,8 @@ describe('useApprovalsPage', () => {
   });
 
   it('reports a persistent error and returns false when decide fails', async () => {
-    decide.mockRejectedValue(new Error('failed'));
+    // axios 响应形态：提取链取 response.data.error（FE 冻结 {error} 契约）。
+    decide.mockRejectedValue({ response: { data: { error: '操作失败' } } });
     const { result } = renderHook(() => useApprovalsPage());
     await waitFor(() => expect(result.current.pendingLoading).toBe(false));
 
