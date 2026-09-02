@@ -1,8 +1,10 @@
-import { Descriptions, Space, Table, Tag, Typography } from 'antd';
+import { Button, Descriptions, Space, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useMemo, useState } from 'react';
 
 import type { DimensionScore, EvaluationRun, ToolObservation } from '../model/evaluation';
+
+import { RunAttributionReport } from './RunAttributionReport';
 
 type ClusterRow = { key: string; reason: string; count: number; failedCaseIds: string[] };
 
@@ -28,6 +30,9 @@ const ToolSequenceTable = ({ tools }: { tools: ToolObservation[] }) => (
 // drill-down showing dimension scores, trace id and actual output.
 export const RunAttributionPanel = ({ results }: { results: EvaluationRun['results'] }) => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // 归因报告默认收起：保留既有失败聚类 + drill-down 为主路径，报告需显式展开
+  // （spec §6.3 ④ 输出报告，与 ② 聚类展示是不同信息密度）。
+  const [showReport, setShowReport] = useState(false);
 
   const clusters = useMemo<ClusterRow[]>(() => {
     const map = new Map<string, { count: number; ids: string[] }>();
@@ -59,7 +64,12 @@ export const RunAttributionPanel = ({ results }: { results: EvaluationRun['resul
 
   return (
     <div data-testid="run-attribution-panel">
-      <Typography.Title level={5}>失败聚类</Typography.Title>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <Typography.Title level={5} style={{ marginBottom: 0 }}>失败聚类</Typography.Title>
+        <Button type="link" size="small" onClick={() => setShowReport((v) => !v)}>
+          {showReport ? '收起失败归因报告' : '查看失败归因报告'}
+        </Button>
+      </div>
       <Table<ClusterRow>
         rowKey="key"
         size="small"
@@ -78,6 +88,7 @@ export const RunAttributionPanel = ({ results }: { results: EvaluationRun['resul
         }}
         locale={{ emptyText: '没有失败用例' }}
       />
+      {showReport && <RunAttributionReport results={results} onSelectCase={setSelectedId} />}
       {selected && <CaseDrillDown result={selected} />}
     </div>
   );
