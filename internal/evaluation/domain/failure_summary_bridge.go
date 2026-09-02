@@ -16,6 +16,12 @@ import (
 // attribution. The Description aggregates every per-case attribution key —
 // FailureReason, ProcessFailure, Error, Message — so the rule-based Diagnoser
 // can classify the failure into a tunable category without extra plumbing.
+//
+// Expected is always empty: EvalCaseResult's data model does not persist an
+// expected-output field (expected values belong to the suite side; the case
+// result stores only actual/message). Consistency/difference attribution based
+// on expected output needs suite-expected backfill — tracked in the §9 backlog,
+// not synthesized here.
 func FailedCaseSummaries(run EvalRun) []FailureSummary {
 	out := make([]FailureSummary, 0, len(run.Results))
 	for _, cr := range run.Results {
