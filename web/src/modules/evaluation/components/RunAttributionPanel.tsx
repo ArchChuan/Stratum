@@ -1,8 +1,11 @@
-import { Descriptions, Space, Table, Tag, Typography } from 'antd';
+import { Button, Descriptions, Space, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useMemo, useState } from 'react';
 
 import type { DimensionScore, EvaluationRun, ToolObservation } from '../model/evaluation';
+
+import { RunAttributionReport } from './RunAttributionReport';
+import { isFailedAttributionCase, reasonOf } from './attribution';
 
 type ClusterRow = { key: string; reason: string; count: number; failedCaseIds: string[] };
 
@@ -28,18 +31,19 @@ const ToolSequenceTable = ({ tools }: { tools: ToolObservation[] }) => (
 // drill-down showing dimension scores, trace id and actual output.
 export const RunAttributionPanel = ({ results }: { results: EvaluationRun['results'] }) => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // 归因报告默认收起：保留既有失败聚类 + drill-down 为主路径，报告需显式展开
+  // （spec §6.3 ④ 输出报告，与 ② 聚类展示是不同信息密度）。
+  const [showReport, setShowReport] = useState(false);
 
   const clusters = useMemo<ClusterRow[]>(() => {
     const map = new Map<string, { count: number; ids: string[] }>();
     for (const r of results) {
-      // 失败聚类同时纳入过程失败 case（passed=false 且无输出 failure_reason，但
-      // process_pass===false）：过程归因单独在 ProcessFailure（spec §6.5），否则
-      // 工具序列 drill-down 永远不可达。
-      if (r.passed || (!r.failure_reason && r.process_pass !== false)) {
+      // 过程失败 case（passed=false 且无 failure_reason，但 process_pass===false）同样纳入，
+      // 否则工具序列 drill-down 不可达（spec §6.5）。纳入口径与归因报告共享 attribution.ts。
+      if (!isFailedAttributionCase(r)) {
         continue;
       }
-      const reason = r.failure_reason
-        || (r.process_pass === false ? (r.process_failure || 'process:failed') : '');
+      const reason = reasonOf(r);
       const entry = map.get(reason) ?? { count: 0, ids: [] };
       entry.count += 1;
       entry.ids.push(r.case_id);
@@ -59,7 +63,12 @@ export const RunAttributionPanel = ({ results }: { results: EvaluationRun['resul
 
   return (
     <div data-testid="run-attribution-panel">
-      <Typography.Title level={5}>失败聚类</Typography.Title>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <Typography.Title level={5} style={{ marginBottom: 0 }}>失败聚类</Typography.Title>
+        <Button type="link" size="small" onClick={() => setShowReport((v) => !v)}>
+          {showReport ? '收起失败归因报告' : '查看失败归因报告'}
+        </Button>
+      </div>
       <Table<ClusterRow>
         rowKey="key"
         size="small"
@@ -78,6 +87,7 @@ export const RunAttributionPanel = ({ results }: { results: EvaluationRun['resul
         }}
         locale={{ emptyText: '没有失败用例' }}
       />
+      {showReport && <RunAttributionReport results={results} onSelectCase={setSelectedId} />}
       {selected && <CaseDrillDown result={selected} />}
     </div>
   );
