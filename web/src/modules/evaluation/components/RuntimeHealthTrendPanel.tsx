@@ -50,6 +50,8 @@ export const RuntimeHealthTrendPanel = ({ defaultKind, defaultResourceId }: {
   const [runsLoading, setRunsLoading] = useState(Boolean(defaultKind && defaultResourceId));
   const [resourcesError, setResourcesError] = useState('');
   const [runsError, setRunsError] = useState('');
+  // 资源候选按 EVALUATION_TREND_RUN_LIMIT 截断；next_cursor 存在说明仍有更早资源，展示时标注。
+  const [resourcesTruncated, setResourcesTruncated] = useState(false);
   // next_cursor 存在说明该资源运行记录超过本窗口条数，展示时标注截断。
   const [hasMore, setHasMore] = useState(false);
   // 重试计数：失败 Alert 的「重试」按钮递增以重新触发对应 effect。
@@ -62,9 +64,10 @@ export const RuntimeHealthTrendPanel = ({ defaultKind, defaultResourceId }: {
     setResourcesLoading(true);
     setResourcesError('');
     setResources([]);
+    setResourcesTruncated(false);
     evaluationApi.listResources(kind ? { resource_kind: kind, limit: EVALUATION_TREND_RUN_LIMIT }
       : { limit: EVALUATION_TREND_RUN_LIMIT })
-      .then((page) => { if (!cancelled) setResources(page.items); })
+      .then((page) => { if (!cancelled) { setResources(page.items); setResourcesTruncated(Boolean(page.next_cursor)); } })
       .catch((err) => { if (!cancelled) setResourcesError(extractErrorMessage(err) || '加载资源列表失败'); })
       .finally(() => { if (!cancelled) setResourcesLoading(false); });
     return () => { cancelled = true; };
@@ -73,7 +76,7 @@ export const RuntimeHealthTrendPanel = ({ defaultKind, defaultResourceId }: {
   // 资源变化时拉取其 run 历史（按创建时间倒序，展示时升序）。effect 开头清空上一
   // 资源 runs，避免图表/表格错配当前选择；fetch 失败只渲染错误态而非「尚无记录」。
   useEffect(() => {
-    if (!kind || !resourceId) { setRuns([]); setRunsError(''); setRunsLoading(false); return; }
+    if (!kind || !resourceId) { setRuns([]); setHasMore(false); setRunsError(''); setRunsLoading(false); return; }
     let cancelled = false;
     setRuns([]);
     setHasMore(false);
@@ -125,6 +128,9 @@ export const RuntimeHealthTrendPanel = ({ defaultKind, defaultResourceId }: {
           value={resourceId || undefined} loading={resourcesLoading}
           onChange={(value: string) => setResourceId(value)} />
       </Space>
+      {resourcesTruncated && <Typography.Text type="warning" style={{ display: 'block', marginBottom: 12 }}>
+        仅显示前 {EVALUATION_TREND_RUN_LIMIT} 个资源（存在更早记录）
+      </Typography.Text>}
       {resourcesError && <Alert type="error" showIcon message={resourcesError} style={{ marginBottom: 12 }}
         action={<Button size="small" onClick={retryResources}>重试</Button>} />}
       {!resourceId

@@ -39,7 +39,7 @@ function tickSubset(n: number): number[] {
 
 export const HealthTrendChart = ({ points }: { points: HealthTrendPoint[] }) => {
   const n = points.length;
-  // lineSegments 只在相邻且均有健康分的点之间连线；无健康分点（如无有效分母）断开。
+  // lineSegments 只在相邻且均有通过率的点之间连线；无通过率点（如无有效分母）断开。
   const lineSegments: string[] = [];
   let pen: string | null = null;
   for (let i = 0; i < n; i += 1) {
@@ -103,11 +103,17 @@ export const HealthTrendChart = ({ points }: { points: HealthTrendPoint[] }) => 
           <svg width={10} height={10} style={{ verticalAlign: -1, marginRight: 4 }}><circle cx={5} cy={5} r={4} fill={passColor} /></svg>
           通过
         </span>
-        <span>
+        <span style={{ marginRight: 14 }}>
           <svg width={10} height={10} style={{ verticalAlign: 0, marginRight: 4 }}>
             <path d="M1 1 L9 9 M9 1 L1 9" stroke={failColor} strokeWidth={2} />
           </svg>
           未通过
+        </span>
+        <span>
+          <svg width={10} height={10} style={{ verticalAlign: -1, marginRight: 4 }}>
+            <rect x={3} y={3} width={4} height={4} fill={textColor} />
+          </svg>
+          无有效分母
         </span>
       </div>
     </div>

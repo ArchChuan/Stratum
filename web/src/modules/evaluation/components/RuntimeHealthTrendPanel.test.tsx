@@ -118,4 +118,32 @@ describe('RuntimeHealthTrendPanel', () => {
     expect(screen.queryByText('mock: 运行记录服务不可用')).toBeNull();
     expect(screen.getByTestId('health-trend-chart')).toBeInTheDocument();
   });
+
+  it('retries loading resources after a resourcesError and recovers to a selectable list', async () => {
+    // 镜像 runsError 重试路径：listResources 首次失败 → 错误态 → 点「重试」→ 成功后可继续选资源渲染。
+    mocks.listResources
+      .mockRejectedValueOnce(new Error('mock: 资源列表服务不可用'))
+      .mockResolvedValue({ items: [agentResource] });
+    mocks.listRuns.mockResolvedValue({ items: [run('run-1', '2026-08-01T02:00:00Z', true, 10, 10, 'rev-a')] });
+    render(<RuntimeHealthTrendPanel defaultKind="agent" />);
+
+    expect(await screen.findByText('mock: 资源列表服务不可用')).toBeInTheDocument();
+    expect(screen.getByText('选择资源类型与资源后展示其评测运行通过率趋势')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /重\s*试/ }));
+    await waitFor(() => expect(mocks.listResources).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByText('mock: 资源列表服务不可用')).toBeNull());
+
+    // 资源候选恢复：选中 agent-1 后 runs 正常加载渲染，说明重试后链路完整可用。
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: '资源' }));
+    const agentOption = await waitFor(() => {
+      const item = Array.from(document.querySelectorAll<HTMLElement>('.ant-select-item-option-content'))
+        .find((value) => value.textContent === 'agent-1');
+      expect(item).toBeDefined();
+      return item!;
+    });
+    fireEvent.click(agentOption);
+    expect(await screen.findByText(/本窗口\s*1\s*次/)).toBeInTheDocument();
+    expect(screen.queryByText('mock: 资源列表服务不可用')).toBeNull();
+  });
 });

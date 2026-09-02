@@ -136,7 +136,7 @@ export const EvaluationCenterPage = () => {
         loading={center.loading} canManage={center.canManageEvaluation} onOpen={(row) => setSuiteId(row.id)}
         onCreate={() => setSuiteCreateOpen(true)} canDelete={(row) => center.canDeleteEntity(row.created_by)}
         onDelete={(row) => confirmDelete(`删除套件「${row.name}」？`, () => center.deleteSuite(row.id))} /> },
-      { key: 'health', label: '运行态健康', children: <RuntimeHealthTrendPanel key={`health-${kind ?? 'all'}-${filterResourceId ?? 'none'}`}
+      { key: 'health', label: '运行通过率趋势', children: <RuntimeHealthTrendPanel key={`health-${kind ?? 'all'}-${filterResourceId ?? 'none'}`}
         defaultKind={kind} defaultResourceId={filterResourceId} /> },
       { key: 'review', label: '人工评审池', children: <ReviewPoolPanel canDelete={(item) => center.canDeleteEntity(item.created_by)} /> },
     ]} />
