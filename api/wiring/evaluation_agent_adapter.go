@@ -283,12 +283,17 @@ func (a agentEvaluationAdapter) ExecuteRevision(
 		return evalport.ExecutionResult{}, err
 	}
 	traceID := uuid.Must(uuid.NewV7()).String()
+	meta := agentapp.ExecMeta{
+		TenantID: tenantID, TraceID: traceID,
+		EvolutionTrace: agentapp.EvolutionTraceMetadata{Evaluation: true,
+			ResourceManifest: map[string]string{"agent:" + ref.ResourceID: ref.RevisionID}},
+	}
+	// 评测执行注入执行快照（D6）：ctx 中评测上下文快照存在时投影为 agent 消费侧
+	// ExecutionSnapshot 并固定 canary pin，供 assembleOptions / 窗口解析读取固化值；
+	// 快照缺失（非评测链路）保持现状。
+	ctx, meta = a.injectExecutionSnapshot(ctx, meta)
 	result, duration, err := a.agents.ExecuteRevision(ctx, snapshot,
-		agentapp.ExecRequest{Query: query, UserID: requestedBy}, agentapp.ExecMeta{
-			TenantID: tenantID, TraceID: traceID,
-			EvolutionTrace: agentapp.EvolutionTraceMetadata{Evaluation: true,
-				ResourceManifest: map[string]string{"agent:" + ref.ResourceID: ref.RevisionID}},
-		})
+		agentapp.ExecRequest{Query: query, UserID: requestedBy}, meta)
 	if err != nil {
 		return evalport.ExecutionResult{}, fmt.Errorf("evaluation Agent adapter: execute revision: %w", err)
 	}
@@ -297,6 +302,49 @@ func (a agentEvaluationAdapter) ExecuteRevision(
 	}
 	return evalport.ExecutionResult{Output: result.Output, TraceID: traceID, Tokens: result.TokensUsed,
 		CostUSD: result.CostUSD, DurationMs: duration, Tools: mapToolObservations(result.ToolObservations)}, nil
+}
+
+// injectExecutionSnapshot 把 ctx 中的评测上下文快照投影为 agent 消费侧
+// ExecutionSnapshot 注入 ctx，并设置 canary pin meta（D4）。快照缺失（非评测
+// 链路）时保持 ctx/meta 不变。
+func (a agentEvaluationAdapter) injectExecutionSnapshot(
+	ctx context.Context, meta agentapp.ExecMeta,
+) (context.Context, agentapp.ExecMeta) {
+	snap := evaldomain.EvalSnapshotFromCtx(ctx)
+	if snap == nil {
+		return ctx, meta
+	}
+	es := a.projectExecutionSnapshot(snap)
+	ctx = agentport.WithExecutionSnapshot(ctx, es)
+	// canary 隔离：评测执行固定 MCP/Knowledge 版本 pin，不实时分流（D4）。
+	meta.KnowledgeAssignmentsPinned = true
+	meta.PinnedKnowledgeRevisions = es.PinnedKnowledge
+	meta.PinnedMCPRevisions = es.PinnedMCP
+	return ctx, meta
+}
+
+// projectExecutionSnapshot 把 evaldomain 快照投影为 agent 消费侧 ExecutionSnapshot
+// （薄 ACL，D6）：trace 组 → TraceParameters；ResolvedExecution → 固化窗口/保留；
+// PinnedAssignments → MCP/Knowledge pin。
+func (a agentEvaluationAdapter) projectExecutionSnapshot(snap *evaldomain.EvaluationContextSnapshot) *agentport.ExecutionSnapshot {
+	es := &agentport.ExecutionSnapshot{
+		ContextWindowTokens: snap.ResolvedExecution.ContextWindow,
+		OutputReserveTokens: snap.ResolvedExecution.OutputReserve,
+		PinnedMCP:           make(map[string]agentport.MCPRevisionPin, len(snap.PinnedAssignments.MCPRevisions)),
+		PinnedKnowledge:     make(map[string]agentport.KnowledgeRevisionPin, len(snap.PinnedAssignments.KnowledgeRevisions)),
+	}
+	for serverID, revID := range snap.PinnedAssignments.MCPRevisions {
+		es.PinnedMCP[serverID] = agentport.MCPRevisionPin{RevisionID: revID}
+	}
+	for name, revID := range snap.PinnedAssignments.KnowledgeRevisions {
+		es.PinnedKnowledge[name] = agentport.KnowledgeRevisionPin{RevisionID: revID}
+	}
+	for _, g := range snap.Execution {
+		if g.GroupKey == evaldomain.GroupTrace {
+			es.TraceParameters = g.Values
+		}
+	}
+	return es
 }
 
 func (a agentEvaluationAdapter) loadPublished(

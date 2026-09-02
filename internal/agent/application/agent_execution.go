@@ -130,6 +130,7 @@ type ExecMeta struct {
 	EvolutionTrace             EvolutionTraceMetadata
 	KnowledgeAssignmentsPinned bool
 	PinnedKnowledgeRevisions   map[string]port.KnowledgeRevisionPin
+	PinnedMCPRevisions         map[string]port.MCPRevisionPin
 	// DelegateEventCb 在委托子 agent 进入/结束时回调（SSE delegate_status 帧
 	// 出口）。仅流式路径由 handler 注入；nil = 不推送委托进度。
 	DelegateEventCb func(agentgraph.DelegateEvent)

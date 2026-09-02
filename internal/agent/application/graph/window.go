@@ -15,6 +15,7 @@ const (
 	WindowRegistry    WindowSource = "registry"     // 模型 registry context_window
 	WindowVendorTable WindowSource = "vendor_table" // 内置厂商静态表
 	WindowFallback    WindowSource = "fallback"     // 保守默认 8000
+	WindowSnapshot    WindowSource = "snapshot"     // 评测 run 创建时点固化的执行窗口（D4）
 )
 
 // ResolveModelWindow 解析模型真实窗口（阶段 A）：
