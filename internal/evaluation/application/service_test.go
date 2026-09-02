@@ -110,6 +110,42 @@ func TestServiceRunStoredLoadsPublishedSuiteRevision(t *testing.T) {
 	}
 }
 
+// TestServiceRunFailsClosedWhenContextSnapshotMissing 覆盖 Run 入口的无快照
+// fail-closed（brief 要求：Run 无快照 → 拒绝执行）。ctx 未注入评测快照时
+// Run 必须返回错误，不得静默继续。
+func TestServiceRunFailsClosedWhenContextSnapshotMissing(t *testing.T) {
+	adapter := &fakeAdapter{}
+	repo := &fakeRunRepo{}
+	svc := NewService(adapter, repo, nil, nil)
+
+	_, err := svc.Run(context.Background(), RunInput{
+		TenantID: "tenant-1",
+		Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "version-2"},
+		Suite: domain.EvalSuiteRevision{ID: "suite-version-1", Cases: []domain.EvalCase{
+			{ID: "case-1", Input: "x", ExpectedOutput: "y", AssertionMode: domain.AssertionExact, Enabled: true},
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "context snapshot missing") {
+		t.Fatalf("Run without context snapshot must fail closed, got err=%v", err)
+	}
+}
+
+// TestServiceRunStoredFailsClosedWhenSnapshotNil 覆盖 RunStored 入口的 nil 快照
+// fail-closed（brief 要求：RunStored 无快照 → 拒绝执行）。snapshot 参数为 nil
+// 时 RunStored 必须返回错误，不得静默回退。
+func TestServiceRunStoredFailsClosedWhenSnapshotNil(t *testing.T) {
+	adapter := &fakeAdapter{}
+	repo := &fakeRunRepo{}
+	svc := NewService(adapter, repo, nil, nil)
+
+	_, err := svc.RunStored(context.Background(), "tenant-1", "user-1", domain.ResourceRef{
+		Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "version-2",
+	}, "suite-revision-1", nil)
+	if err == nil || !strings.Contains(err.Error(), "context snapshot missing") {
+		t.Fatalf("RunStored with nil snapshot must fail closed, got err=%v", err)
+	}
+}
+
 func TestServiceGetRunReturnsPersistedRun(t *testing.T) {
 	repo := &fakeRunRepo{saved: domain.EvalRun{ID: "run-1", Passed: true}}
 	svc := NewService(&fakeAdapter{}, repo, nil, nil)

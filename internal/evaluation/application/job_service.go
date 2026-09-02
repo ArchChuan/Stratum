@@ -60,6 +60,10 @@ func (s *JobService) EnqueueRun(ctx context.Context, tenantID string, input Enqu
 	if err != nil {
 		return domain.EvaluationJob{}, fmt.Errorf("evaluation job: capture context snapshot: %w", err)
 	}
+	// 纯防御：capturer 返回 (nil, nil) 会入队一个执行时必失败的任务，创建时即拒绝。
+	if snapshot == nil {
+		return domain.EvaluationJob{}, errors.New("evaluation job: capture context snapshot returned nil")
+	}
 	job := domain.EvaluationJob{
 		ID: uuid.Must(uuid.NewV7()).String(), Type: domain.JobTypeEvalRun, Status: domain.JobQueued,
 		Payload: domain.EvalRunJobPayload{

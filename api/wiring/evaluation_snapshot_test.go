@@ -197,7 +197,9 @@ func TestSnapshotCapturerCaptureFull(t *testing.T) {
 	require.Len(t, snap.Execution, 2)
 	require.Equal(t, evaldomain.GroupAgent, snap.Execution[0].GroupKey)
 	require.Equal(t, evaldomain.GroupTrace, snap.Execution[1].GroupKey)
-	// 窗口固化：modelCtx 32768 + 显式 8192 → clamp 到 8192；reserve 取显式 2048。
+	// 窗口固化：modelCtx 32768 未触发 MaxContextWindowTokens 上限，agent 显式
+	// MaxContextTokens=8192 → ResolveAgentWindow 比例 clamp（32768×0.85=27852）
+	// 内保留显式值 8192；reserve 取显式 2048。
 	require.Equal(t, evaldomain.ResolvedExecution{ContextWindow: 8192, OutputReserve: 2048}, snap.ResolvedExecution)
 	require.Equal(t, map[string]string{"mcp-1": "mcp-rev-9"}, snap.PinnedAssignments.MCPRevisions)
 	require.Equal(t, map[string]string{"kb-1": "kb-rev-2"}, snap.PinnedAssignments.KnowledgeRevisions)

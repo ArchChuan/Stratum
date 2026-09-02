@@ -1249,15 +1249,15 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 
 // buildSnapshotCapturer 装配创建时快照捕获器：从既有 wiring 组件取 parameters、
 // revision 读取、窗口解析与 MCP/Knowledge 分流 resolver。revision 服务或
-// parameters 组件缺失时返回 nil（EnqueueRun fail-closed：capturer 未配置即
-// 拒绝创建）。bindings/baselines 由 Task 6 skill 分支补。
+// parameters/agent 组件缺失时返回 nil（EnqueueRun fail-closed：capturer 未配置
+// 即拒绝创建）。bindings/baselines 由 Task 6 skill 分支补。
 func (c *Container) buildSnapshotCapturer(
 	experimentService *evalapp.ExperimentService,
 	runtimeMCPAdapter *mcpEvaluationAdapter,
 	runtimeKnowledgeAdapter *knowledgeEvaluationAdapter,
 	revisions agentRevisionService,
 ) evalport.SnapshotCapturer {
-	if c.Parameters == nil || c.Parameters.Service == nil {
+	if c.Parameters == nil || c.Parameters.Service == nil || c.Agent == nil {
 		return nil
 	}
 	capturer := &snapshotCapturer{

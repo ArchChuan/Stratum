@@ -33,6 +33,14 @@ type snapshotCapturer struct {
 	logger      *zap.Logger
 }
 
+// warn 记录快照捕获过程中的非阻断问题（resolver/DB 读取失败仍回退，不阻断创建）。
+// logger 未装配（nil）时静默跳过，保持既有 fail-open 语义且不 panic。
+func (c snapshotCapturer) warn(msg string, fields ...zap.Field) {
+	if c.logger != nil {
+		c.logger.Warn(msg, fields...)
+	}
+}
+
 func (c snapshotCapturer) Capture(ctx context.Context, tenantID string, input evalport.CaptureInput) (*evaldomain.EvaluationContextSnapshot, error) {
 	if c.params == nil {
 		return nil, errors.New("capture evaluation context: parameters service unavailable")
@@ -174,6 +182,8 @@ func (c snapshotCapturer) modelReserve(ctx context.Context, tenantID, model stri
 	}
 	details, err := c.details.ListTenantModelDetails(ctx, tenantID)
 	if err != nil {
+		c.warn("evaluation.capture.pin model reserve failed",
+			zap.Error(err), zap.String("tenant_id", tenantID), zap.String("model", model))
 		return 0
 	}
 	for _, d := range details {
@@ -227,7 +237,12 @@ func (c snapshotCapturer) pinMCP(ctx context.Context, tenantID, subjectID string
 		return
 	}
 	a, found, err := c.mcpResolver.ResolveMCPRevision(ctx, tenantID, b.ID, subjectID)
-	if err != nil || !found || a.RevisionID == "" {
+	if err != nil {
+		c.warn("evaluation.capture.pin mcp resolve failed",
+			zap.Error(err), zap.String("tenant_id", tenantID), zap.String("server_id", b.ID))
+		return
+	}
+	if !found || a.RevisionID == "" {
 		return
 	}
 	snap.PinnedAssignments.MCPRevisions[b.ID] = a.RevisionID
@@ -238,7 +253,12 @@ func (c snapshotCapturer) pinKnowledge(ctx context.Context, tenantID, subjectID 
 		return
 	}
 	a, found, err := c.knowRes.ResolveKnowledgeRevision(ctx, tenantID, b.Name, subjectID)
-	if err != nil || !found || a.Revision.RevisionID == "" {
+	if err != nil {
+		c.warn("evaluation.capture.pin knowledge resolve failed",
+			zap.Error(err), zap.String("tenant_id", tenantID), zap.String("workspace_name", b.Name))
+		return
+	}
+	if !found || a.Revision.RevisionID == "" {
 		return
 	}
 	snap.PinnedAssignments.KnowledgeRevisions[b.Name] = a.Revision.RevisionID
