@@ -45,15 +45,15 @@ type Case struct {
 }
 
 func isDDDAuthOverride(routePath string) (bool, iamport.TokenClaims) {
+	adminFull := iamport.TokenClaims{Sub: "contract-admin", TenantID: "contract-tenant", Role: "admin", GlobalRole: "global_admin"}
 	adminClaims := iamport.TokenClaims{Sub: "contract-admin", TenantID: "contract-tenant", Role: "admin"}
-	globalAdmin := iamport.TokenClaims{Sub: "contract-admin", GlobalRole: "global_admin"}
 	switch {
 	case strings.HasPrefix(routePath, "/admin/tenants"),
+		strings.HasPrefix(routePath, "/admin/providers"),
+		strings.HasPrefix(routePath, "/admin/models"),
 		strings.HasPrefix(routePath, "/admin/admins"),
 		strings.HasPrefix(routePath, "/admin/users"):
-		return true, globalAdmin
-	case strings.HasPrefix(routePath, "/admin/providers"), strings.HasPrefix(routePath, "/admin/models"):
-		return true, adminClaims
+		return true, adminFull
 	case strings.HasPrefix(routePath, "/tenant/"), strings.HasPrefix(routePath, "/workflows"),
 		strings.HasPrefix(routePath, "/workflow-runs"), strings.HasPrefix(routePath, "/workflow-approvals"),
 		strings.HasPrefix(routePath, "/operation-proposals"), strings.HasPrefix(routePath, "/scheduled-tasks"),

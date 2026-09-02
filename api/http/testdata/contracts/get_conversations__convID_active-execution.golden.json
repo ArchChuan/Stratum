@@ -1,8 +1,8 @@
 [
   {
     "name": "default-unauth",
-    "method": "PUT",
-    "path": "/agents/tool-approvals/:approvalID/assignee",
+    "method": "GET",
+    "path": "/conversations/:convID/active-execution",
     "body": {
       "error": "missing bearer token"
     },
