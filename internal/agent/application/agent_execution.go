@@ -655,6 +655,8 @@ func (s *AgentService) ResumeExecution(ctx context.Context, agentID string, req 
 	return s.Execute(ctx, agentID, req, meta)
 }
 
+// ExecuteSkillScenario 是普通生产路径的 skill 场景评测：经 Registry 读 agent 当前
+// 生产配置，activations 显式注入固定 skill revision（与 registry 漂移无关）。
 func (s *AgentService) ExecuteSkillScenario(ctx context.Context, agentID string, req ExecRequest, meta ExecMeta, activations []port.SkillActivation) (*AgentResult, int, error) {
 	a, ok, err := s.deps.Registry.Get(ctx, agentID)
 	if err != nil {
@@ -662,6 +664,36 @@ func (s *AgentService) ExecuteSkillScenario(ctx context.Context, agentID string,
 	}
 	if !ok {
 		return nil, 0, ErrNotFound
+	}
+	return s.executeSkillScenarioAgent(ctx, a, req, meta, activations)
+}
+
+// ExecuteSkillScenarioRevision 是评测 skill 场景的 revision 变体（D7）：用锁定
+// 的承载 agent revision 构建（buildRevisionAgent），不读 Registry 当前生产配置，
+// 可重放。activations 仍显式注入固定 skill revision（与 ExecuteSkillScenario 同
+// 语义），revision.Bindings 承载 skill/mcp/knowledge 绑定。
+func (s *AgentService) ExecuteSkillScenarioRevision(ctx context.Context, revision domain.AgentRevision, req ExecRequest, meta ExecMeta, activations []port.SkillActivation) (*AgentResult, int, error) {
+	if err := revision.Validate(); err != nil {
+		return nil, 0, fmt.Errorf("execute skill scenario revision: validate: %w", err)
+	}
+	a, err := s.buildRevisionAgent(revision)
+	if err != nil {
+		return nil, 0, fmt.Errorf("execute skill scenario revision: %w", err)
+	}
+	return s.executeSkillScenarioAgent(ctx, a, req, meta, activations)
+}
+
+// executeSkillScenarioAgent 是 skill 场景评测的共享执行体：挂载 metrics/ledger、
+// 组装执行选项（固定激活技能目录）并执行。Registry 生产路径与 revision 锁定
+// 路径共用，保证两种入口执行语义一致。
+func (s *AgentService) executeSkillScenarioAgent(ctx context.Context, a Agent, req ExecRequest, meta ExecMeta, activations []port.SkillActivation) (*AgentResult, int, error) {
+	if base, ok := a.(*BaseAgent); ok {
+		if s.deps.Metrics != nil {
+			a = base.WithMetrics(s.deps.Metrics)
+		}
+		if s.deps.Ledger != nil {
+			a = base.WithLedger(s.deps.Ledger)
+		}
 	}
 	executionID := uuid.Must(uuid.NewV7()).String()
 	_, options, err := s.assembleOptions(ctx, a, req, meta, executionID)

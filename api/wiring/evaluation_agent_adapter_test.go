@@ -385,6 +385,12 @@ func (e *tenantCaptureAgentExecutor) ExecuteRevision(
 	return &agentapp.AgentResult{Output: "ok"}, 1, nil
 }
 
+func (e *tenantCaptureAgentExecutor) ExecuteSkillScenarioRevision(
+	context.Context, agentdomain.AgentRevision, agentapp.ExecRequest, agentapp.ExecMeta, []agentport.SkillActivation,
+) (*agentapp.AgentResult, int, error) {
+	return &agentapp.AgentResult{Output: "ok"}, 1, nil
+}
+
 type validatingRevisionStore struct{ payloads map[string][]byte }
 
 func (s *validatingRevisionStore) Put(_ context.Context, payload evalport.RevisionPayload) (evalport.RevisionPayloadRef, error) {
@@ -463,6 +469,12 @@ func (f fakeAgentRevisionExecutor) ExecuteRevision(
 	return nil, 0, f.err
 }
 
+func (f fakeAgentRevisionExecutor) ExecuteSkillScenarioRevision(
+	context.Context, agentdomain.AgentRevision, agentapp.ExecRequest, agentapp.ExecMeta, []agentport.SkillActivation,
+) (*agentapp.AgentResult, int, error) {
+	return nil, 0, f.err
+}
+
 func (f *fakeAgentRevisionService) Get(_ context.Context, tenantID string, _ evaldomain.ResourceRef) (evaldomain.ResourceRevision, []byte, bool, error) {
 	f.tenantID = tenantID
 	return f.revision, f.payload, f.found, nil
@@ -537,6 +549,12 @@ func (e *toolObservationsAgentExecutor) SnapshotRevision(
 
 func (e *toolObservationsAgentExecutor) ExecuteRevision(
 	context.Context, agentdomain.AgentRevision, agentapp.ExecRequest, agentapp.ExecMeta,
+) (*agentapp.AgentResult, int, error) {
+	return e.result, 1, nil
+}
+
+func (e *toolObservationsAgentExecutor) ExecuteSkillScenarioRevision(
+	context.Context, agentdomain.AgentRevision, agentapp.ExecRequest, agentapp.ExecMeta, []agentport.SkillActivation,
 ) (*agentapp.AgentResult, int, error) {
 	return e.result, 1, nil
 }
@@ -622,5 +640,11 @@ func (e *snapshotCaptureAgentExecutor) ExecuteRevision(
 			e.mcpPins[serverID] = pin.RevisionID
 		}
 	}
+	return &agentapp.AgentResult{Output: "ok"}, 1, nil
+}
+
+func (e *snapshotCaptureAgentExecutor) ExecuteSkillScenarioRevision(
+	context.Context, agentdomain.AgentRevision, agentapp.ExecRequest, agentapp.ExecMeta, []agentport.SkillActivation,
+) (*agentapp.AgentResult, int, error) {
 	return &agentapp.AgentResult{Output: "ok"}, 1, nil
 }

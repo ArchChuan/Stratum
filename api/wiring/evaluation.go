@@ -983,6 +983,7 @@ type evaluationTenantLister struct {
 
 type agentScenarioEvaluationAdapter struct {
 	agents    *agentapp.AgentService
+	revisions agentRevisionService
 	skills    agentport.SkillActivationResolver
 	bindings  agentport.AgentSkillBinding
 	resources skillCandidateManager
@@ -1015,39 +1016,29 @@ func (a agentScenarioEvaluationAdapter) ExecuteRevision(
 	if err := a.validateSkillRef(ref); err != nil {
 		return evalport.ExecutionResult{}, err
 	}
-	// Inject tenant context so the agent-context binding port (whose execTenant
-	// reads it) routes to the right schema; the raw agent_skill_links read now
-	// lives behind agentport.AgentSkillBinding, not here.
-	ctx = postgres.WithTenant(ctx, &postgres.TenantContext{
-		TenantID: tenantID, UserID: requestedBy, Role: postgres.RoleTenantAdmin,
-	})
-	agentID, found, err := a.bindings.FindAgentBySkill(ctx, ref.ResourceID)
-	if err != nil {
-		return evalport.ExecutionResult{}, fmt.Errorf("agent scenario evaluation: resolve agent for Skill %s: %w", ref.ResourceID, err)
+	if a.revisions == nil {
+		return evalport.ExecutionResult{}, errors.New("agent scenario evaluation: revision service unavailable")
 	}
-	if !found {
-		return evalport.ExecutionResult{}, fmt.Errorf("agent scenario evaluation requires an Agent bound to Skill %s", ref.ResourceID)
+	// D7：执行时用 run 创建时锁定的承载 agent revision，不读 Registry 当前生产
+	// 配置，可重放。快照缺失/pin 缺失 → fail-closed，提示 recreate run。
+	snap := evaldomain.EvalSnapshotFromCtx(ctx)
+	if snap == nil {
+		return evalport.ExecutionResult{}, errors.New("agent scenario evaluation: evaluation context snapshot required")
 	}
-	catalog, err := a.skills.ResolveSkills(ctx, tenantID, []agentport.SkillRevisionRef{{SkillID: ref.ResourceID, RevisionID: ref.RevisionID}})
+	agentRev, agentID, err := a.resolvePinnedAgent(ctx, tenantID, requestedBy, snap, ref)
 	if err != nil {
 		return evalport.ExecutionResult{}, err
 	}
-	activation, ok := catalog[ref.ResourceID]
-	if !ok {
-		return evalport.ExecutionResult{}, fmt.Errorf("Skill revision %s is not available", ref.RevisionID)
-	}
-	queryBytes, err := json.Marshal(testCase.Input)
+	activation, err := a.resolveSkillActivation(ctx, tenantID, ref)
 	if err != nil {
 		return evalport.ExecutionResult{}, err
 	}
-	query := string(queryBytes)
-	if text, ok := testCase.Input.(string); ok {
-		query = text
+	query, err := evaluationCaseQuery(testCase.Input)
+	if err != nil {
+		return evalport.ExecutionResult{}, err
 	}
 	traceID := uuid.Must(uuid.NewV7()).String()
-	result, duration, err := a.agents.ExecuteSkillScenario(
-		ctx,
-		agentID,
+	result, duration, err := a.agents.ExecuteSkillScenarioRevision(ctx, agentRev,
 		agentapp.ExecRequest{Query: query, UserID: requestedBy},
 		agentapp.ExecMeta{
 			TenantID: tenantID,
@@ -1056,6 +1047,8 @@ func (a agentScenarioEvaluationAdapter) ExecuteRevision(
 				Evaluation: true,
 				ResourceManifest: map[string]string{
 					"skill:" + ref.ResourceID: ref.RevisionID,
+					// resolvePinnedAgent 已 fail-closed 保证 pin 非空。
+					"agent:" + agentID: snap.PinnedAssignments.SkillAgentRevision[ref.ResourceID],
 				},
 			},
 		},
@@ -1066,6 +1059,57 @@ func (a agentScenarioEvaluationAdapter) ExecuteRevision(
 	}
 	return evalport.ExecutionResult{Output: result.Output, TraceID: traceID, Tokens: result.TokensUsed,
 		CostUSD: result.CostUSD, DurationMs: duration, Tools: mapToolObservations(result.ToolObservations)}, nil
+}
+
+// resolvePinnedAgent 加载并解码 run 快照锁定的承载 agent revision（D7）：
+// pin 缺失 → fail-closed；FindAgentBySkill 解析承载 agent；revisions.Get 读锁定
+// revision payload 并解码为被测 agent。执行绝不落到 Registry 当前生产配置。
+func (a agentScenarioEvaluationAdapter) resolvePinnedAgent(
+	ctx context.Context, tenantID, requestedBy string, snap *evaldomain.EvaluationContextSnapshot, ref evaldomain.ResourceRef,
+) (agentdomain.AgentRevision, string, error) {
+	pinnedID := snap.PinnedAssignments.SkillAgentRevision[ref.ResourceID]
+	if pinnedID == "" {
+		return agentdomain.AgentRevision{}, "", fmt.Errorf("agent scenario evaluation: no pinned agent revision for Skill %s; recreate the run", ref.ResourceID)
+	}
+	ctx = postgres.WithTenant(ctx, &postgres.TenantContext{
+		TenantID: tenantID, UserID: requestedBy, Role: postgres.RoleTenantAdmin,
+	})
+	agentID, found, err := a.bindings.FindAgentBySkill(ctx, ref.ResourceID)
+	if err != nil {
+		return agentdomain.AgentRevision{}, "", fmt.Errorf("agent scenario evaluation: resolve agent for Skill %s: %w", ref.ResourceID, err)
+	}
+	if !found {
+		return agentdomain.AgentRevision{}, "", fmt.Errorf("agent scenario evaluation requires an Agent bound to Skill %s", ref.ResourceID)
+	}
+	_, payload, found, err := a.revisions.Get(ctx, tenantID, evaldomain.ResourceRef{
+		Kind: evaldomain.ResourceKindAgent, ResourceID: agentID, RevisionID: pinnedID,
+	})
+	if err != nil {
+		return agentdomain.AgentRevision{}, "", fmt.Errorf("agent scenario evaluation: load pinned agent revision %s: %w", pinnedID, err)
+	}
+	if !found {
+		return agentdomain.AgentRevision{}, "", fmt.Errorf("agent scenario evaluation: pinned agent revision %s not found; recreate the run", pinnedID)
+	}
+	var agentRev agentdomain.AgentRevision
+	if err := json.Unmarshal(payload, &agentRev); err != nil {
+		return agentdomain.AgentRevision{}, "", fmt.Errorf("agent scenario evaluation: decode pinned agent revision: %w", err)
+	}
+	return agentRev, agentID, nil
+}
+
+// resolveSkillActivation 解析被测 skill revision 的激活信息：缺失 → 报不可用。
+func (a agentScenarioEvaluationAdapter) resolveSkillActivation(
+	ctx context.Context, tenantID string, ref evaldomain.ResourceRef,
+) (agentport.SkillActivation, error) {
+	catalog, err := a.skills.ResolveSkills(ctx, tenantID, []agentport.SkillRevisionRef{{SkillID: ref.ResourceID, RevisionID: ref.RevisionID}})
+	if err != nil {
+		return agentport.SkillActivation{}, err
+	}
+	activation, ok := catalog[ref.ResourceID]
+	if !ok {
+		return agentport.SkillActivation{}, fmt.Errorf("Skill revision %s is not available", ref.RevisionID)
+	}
+	return activation, nil
 }
 
 func (l evaluationTenantLister) ListTenantIDs(ctx context.Context) ([]string, error) {
@@ -1157,8 +1201,16 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	activationResolver := publishedSkillActivationResolver{versions: c.Skill.VersionService}
 	revisionRepo := evalpersist.NewPgRevisionRepository(db)
 	manager := skillCandidateManager{versions: c.Skill.VersionService, revisions: revisionRepo}
+	var sharedRevisionService *evalapp.RevisionService
+	if c.RevisionObjectStore != nil {
+		sharedRevisionService = evalapp.NewRevisionService(
+			evalpersist.RevisionObjectStoreAdapter{Store: c.RevisionObjectStore},
+			revisionRepo,
+		)
+	}
 	skillAdapter := agentScenarioEvaluationAdapter{
 		agents:    c.Agent.Service,
+		revisions: sharedRevisionService,
 		skills:    activationResolver,
 		bindings:  agentpersist.NewPgAgentRepo(db),
 		resources: manager,
@@ -1175,13 +1227,6 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	var runtimeMCPAdapter *mcpEvaluationAdapter
 	var knowledgeProvider evalport.ResourceRevisionProvider
 	var runtimeKnowledgeAdapter *knowledgeEvaluationAdapter
-	var sharedRevisionService *evalapp.RevisionService
-	if c.RevisionObjectStore != nil {
-		sharedRevisionService = evalapp.NewRevisionService(
-			evalpersist.RevisionObjectStoreAdapter{Store: c.RevisionObjectStore},
-			revisionRepo,
-		)
-	}
 	if c.Agent != nil && sharedRevisionService != nil {
 		agentAdapter := agentEvaluationAdapter{
 			revisions: sharedRevisionService, agents: c.Agent.Service, modelValidator: tenantModelValidator(c.Agent.TenantResolver),
@@ -1224,6 +1269,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	experimentService := evalapp.NewExperimentService(experimentRepo)
 	jobService := evalapp.NewJobService(jobRepo, service, c.buildSnapshotCapturer(
 		experimentService, runtimeMCPAdapter, runtimeKnowledgeAdapter, sharedRevisionService,
+		agentpersist.NewPgAgentRepo(db), runtimeAgentAdapter,
 	))
 	optimizationService := evalapp.NewOptimizationService(
 		evaluationCandidateRouter{creators: candidateCreators}, buildEvaluationPromptRewriter(c), optimizationRepo,
@@ -1265,12 +1311,14 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 // buildSnapshotCapturer 装配创建时快照捕获器：从既有 wiring 组件取 parameters、
 // revision 读取、窗口解析与 MCP/Knowledge 分流 resolver。revision 服务或
 // parameters/agent 组件缺失时返回 nil（EnqueueRun fail-closed：capturer 未配置
-// 即拒绝创建）。bindings/baselines 由 Task 6 skill 分支补。
+// 即拒绝创建）。bindings/baselines 供 skill 场景锁承载 agent pin（D7）。
 func (c *Container) buildSnapshotCapturer(
 	experimentService *evalapp.ExperimentService,
 	runtimeMCPAdapter *mcpEvaluationAdapter,
 	runtimeKnowledgeAdapter *knowledgeEvaluationAdapter,
 	revisions agentRevisionService,
+	bindings agentport.AgentSkillBinding,
+	baselines *agentEvaluationAdapter,
 ) evalport.SnapshotCapturer {
 	if c.Parameters == nil || c.Parameters.Service == nil || c.Agent == nil {
 		return nil
@@ -1278,6 +1326,8 @@ func (c *Container) buildSnapshotCapturer(
 	capturer := &snapshotCapturer{
 		params:    c.Parameters.Service,
 		revisions: revisions,
+		bindings:  bindings,
+		baselines: baselines,
 		modelCtx:  modelContextProvider(c.Agent.TenantResolver),
 		details:   tenantModelDetailsProvider(c.Agent.TenantResolver),
 		vendor:    llmgateway.LookupModelSpec,

@@ -30,6 +30,7 @@ type agentRevisionService interface {
 type agentRevisionExecutor interface {
 	SnapshotRevision(context.Context, string, string) (agentdomain.AgentRevision, error)
 	ExecuteRevision(context.Context, agentdomain.AgentRevision, agentapp.ExecRequest, agentapp.ExecMeta) (*agentapp.AgentResult, int, error)
+	ExecuteSkillScenarioRevision(context.Context, agentdomain.AgentRevision, agentapp.ExecRequest, agentapp.ExecMeta, []agentport.SkillActivation) (*agentapp.AgentResult, int, error)
 }
 
 // agentReadWriter provides read-write access to the Agent table for

@@ -30,7 +30,11 @@ type snapshotCapturer struct {
 	vendor      func(string) (int, int)
 	mcpResolver agentport.MCPRevisionResolver
 	knowRes     agentport.KnowledgeRevisionResolver
-	logger      *zap.Logger
+	// bindings 解析 skill→承载 agent（agent_skill_links 只读 port）。
+	bindings agentport.AgentSkillBinding
+	// baselines 提供承载 agent 的 CreatePublishedBaseline（skill 场景锁 pin，D7）。
+	baselines *agentEvaluationAdapter
+	logger    *zap.Logger
 }
 
 // warn 记录快照捕获过程中的非阻断问题（resolver/DB 读取失败仍回退，不阻断创建）。
@@ -69,7 +73,7 @@ func (c snapshotCapturer) Capture(ctx context.Context, tenantID string, input ev
 		return nil, err
 	}
 	snap.Execution = []evaldomain.GroupSnapshot{agentGroup, traceGroup}
-	subject, err := c.loadSubject(ctx, tenantID, input.Resource)
+	subject, pinnedID, err := c.loadSubject(ctx, tenantID, input.Resource)
 	if err != nil {
 		return nil, err
 	}
@@ -79,6 +83,11 @@ func (c snapshotCapturer) Capture(ctx context.Context, tenantID string, input ev
 	}
 	snap.ResolvedExecution = evaldomain.ResolvedExecution{ContextWindow: win, OutputReserve: reserve}
 	c.capturePinnedAssignments(ctx, tenantID, subject, snap)
+	// skill 资源额外记录承载 agent 锁定 revision pin（D7）：执行时用 pin 而非
+	// Registry 当前生产配置，可重放。
+	if pinnedID != "" {
+		snap.PinnedAssignments.SkillAgentRevision[input.Resource.ResourceID] = pinnedID
+	}
 	return snap, nil
 }
 
@@ -110,29 +119,57 @@ func (c snapshotCapturer) captureGroup(ctx context.Context, groupKey string) (ev
 }
 
 // loadSubject 加载被测承载 agent revision：agent 资源读锁定 revision 的 payload；
-// skill 资源由 Task 6 补 skillLocker（本 Task 先返回明确错误，Task 6 替换为
-// FindAgentBySkill → SnapshotRevision → CreatePublishedBaseline 并记录 pin）。
-func (c snapshotCapturer) loadSubject(ctx context.Context, tenantID string, resource evaldomain.ResourceRef) (*agentdomain.AgentRevision, error) {
+// skill 资源走 lockSkillSubject（D7：FindAgentBySkill → CreatePublishedBaseline
+// 幂等 pin），返回承载 agent revision 与 pin 的 revisionID（skill 分支非空）。
+func (c snapshotCapturer) loadSubject(ctx context.Context, tenantID string, resource evaldomain.ResourceRef) (*agentdomain.AgentRevision, string, error) {
 	switch resource.Kind {
 	case evaldomain.ResourceKindAgent:
 		if c.revisions == nil {
-			return nil, fmt.Errorf("capture subject agent %s: revision service unavailable", resource.RevisionID)
+			return nil, "", fmt.Errorf("capture subject agent %s: revision service unavailable", resource.RevisionID)
 		}
 		_, payload, found, err := c.revisions.Get(ctx, tenantID, resource)
 		if err != nil {
-			return nil, fmt.Errorf("capture subject agent %s: %w", resource.RevisionID, err)
+			return nil, "", fmt.Errorf("capture subject agent %s: %w", resource.RevisionID, err)
 		}
 		if !found {
-			return nil, fmt.Errorf("capture subject agent %s: revision not found", resource.RevisionID)
+			return nil, "", fmt.Errorf("capture subject agent %s: revision not found", resource.RevisionID)
 		}
 		var rev agentdomain.AgentRevision
 		if err := json.Unmarshal(payload, &rev); err != nil {
-			return nil, fmt.Errorf("capture subject agent %s: decode revision: %w", resource.RevisionID, err)
+			return nil, "", fmt.Errorf("capture subject agent %s: decode revision: %w", resource.RevisionID, err)
 		}
-		return &rev, nil
+		return &rev, "", nil
+	case evaldomain.ResourceKindSkill:
+		return c.lockSkillSubject(ctx, tenantID, resource.ResourceID)
 	default:
-		return nil, fmt.Errorf("capture subject: unsupported resource kind %q", resource.Kind)
+		return nil, "", fmt.Errorf("capture subject: unsupported resource kind %q", resource.Kind)
 	}
+}
+
+// lockSkillSubject 锁承载 agent 的 published revision（D7）：FindAgentBySkill →
+// CreatePublishedBaseline（SnapshotRevision→Create→Publish，幂等 contentHash）→
+// 返回承载 agent revision + 记录 pin。创建时点固化，评测执行与生产 drift 无关。
+// CreatePublishedBaseline 已自行处理 tenant ctx，此处无需再 WithTenant。
+func (c snapshotCapturer) lockSkillSubject(ctx context.Context, tenantID, skillID string) (*agentdomain.AgentRevision, string, error) {
+	if c.bindings == nil || c.baselines == nil {
+		return nil, "", errors.New("capture skill subject: bindings/baselines not configured")
+	}
+	agentID, found, err := c.bindings.FindAgentBySkill(ctx, skillID)
+	if err != nil {
+		return nil, "", fmt.Errorf("capture skill %s: resolve agent: %w", skillID, err)
+	}
+	if !found {
+		return nil, "", fmt.Errorf("capture skill %s: no Agent bound", skillID)
+	}
+	ref, err := c.baselines.CreatePublishedBaseline(ctx, tenantID, agentID)
+	if err != nil {
+		return nil, "", fmt.Errorf("capture skill %s: pin agent baseline: %w", skillID, err)
+	}
+	snapshot, err := c.baselines.agents.SnapshotRevision(ctx, tenantID, agentID)
+	if err != nil {
+		return nil, "", fmt.Errorf("capture skill %s: snapshot agent %s: %w", skillID, agentID, err)
+	}
+	return &snapshot, ref.RevisionID, nil
 }
 
 // resolveSnapshotWindow 现场固化执行窗口与输出保留（D4：创建时点解析，执行不再读

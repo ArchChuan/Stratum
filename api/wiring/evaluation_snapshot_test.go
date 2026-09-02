@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
+	agentapp "github.com/byteBuilderX/stratum/internal/agent/application"
 	agentdomain "github.com/byteBuilderX/stratum/internal/agent/domain"
 	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	evaldomain "github.com/byteBuilderX/stratum/internal/evaluation/domain"
@@ -24,6 +25,7 @@ type fakeAgentRevisionSvc struct {
 	found    bool
 	err      error
 	calls    int
+	createID string
 }
 
 func (f *fakeAgentRevisionSvc) Get(
@@ -46,7 +48,7 @@ func (f *fakeAgentRevisionSvc) Get(
 }
 
 func (f *fakeAgentRevisionSvc) Create(context.Context, string, evalport.CreateRevisionInput) (evaldomain.ResourceRevision, bool, error) {
-	return evaldomain.ResourceRevision{}, true, nil
+	return evaldomain.ResourceRevision{ID: f.createID, ResourceKind: evaldomain.ResourceKindAgent, ResourceID: f.revision.AgentID}, true, nil
 }
 
 func (f *fakeAgentRevisionSvc) Publish(context.Context, string, evaldomain.ResourceRef) (evaldomain.ResourceRevision, error) {
@@ -243,9 +245,97 @@ func TestSnapshotCapturerCaptureFailsClosedWhenRevisionServiceMissing(t *testing
 func TestSnapshotCapturerLoadSubjectRejectsUnsupportedKind(t *testing.T) {
 	capturer, _ := newSnapshotCapturerFixture(t)
 
-	_, err := capturer.loadSubject(context.Background(), "tenant-1", evaldomain.ResourceRef{
-		Kind: evaldomain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "rev-1",
+	_, _, err := capturer.loadSubject(context.Background(), "tenant-1", evaldomain.ResourceRef{
+		Kind: evaldomain.ResourceKind("bogus"), ResourceID: "unknown-1",
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unsupported resource kind")
+}
+
+// fakeSkillBinding 返回固定的 skill→agent 绑定，供 skill 分支 capture pin 测试。
+type fakeSkillBinding struct {
+	agentID string
+	found   bool
+	err     error
+}
+
+func (f fakeSkillBinding) FindAgentBySkill(context.Context, string) (string, bool, error) {
+	return f.agentID, f.found, f.err
+}
+
+// fakeBaselineAgentExecutor 是 agentRevisionExecutor 的桩：SnapshotRevision 返回
+// 可哈希的有效 revision，供 CreatePublishedBaseline 幂等锁 pin。
+type fakeBaselineAgentExecutor struct {
+	revision agentdomain.AgentRevision
+}
+
+func (e *fakeBaselineAgentExecutor) SnapshotRevision(
+	context.Context, string, string,
+) (agentdomain.AgentRevision, error) {
+	return e.revision, nil
+}
+
+func (e *fakeBaselineAgentExecutor) ExecuteRevision(
+	context.Context, agentdomain.AgentRevision, agentapp.ExecRequest, agentapp.ExecMeta,
+) (*agentapp.AgentResult, int, error) {
+	return nil, 0, nil
+}
+
+func (e *fakeBaselineAgentExecutor) ExecuteSkillScenarioRevision(
+	context.Context, agentdomain.AgentRevision, agentapp.ExecRequest, agentapp.ExecMeta, []agentport.SkillActivation,
+) (*agentapp.AgentResult, int, error) {
+	return nil, 0, nil
+}
+
+// TestCaptureSkillPin 验证 skill 资源评测创建时锁定承载 agent 的 published
+// revision（D7）：FindAgentBySkill → CreatePublishedBaseline 幂等 pin → 快照写入
+// SkillAgentRevision[skillID]。
+func TestCaptureSkillPin(t *testing.T) {
+	capturer, _ := newSnapshotCapturerFixture(t)
+	rev := agentdomain.AgentRevision{
+		AgentID: "agent-1", Type: agentdomain.ReActAgent, SystemPrompt: "你是助手", Model: "qwen-max",
+		MaxIterations:   3,
+		ModelParameters: agentdomain.ModelParameters{MaxContextTokens: 8192, MaxTokens: 2048},
+	}
+	revisions := &fakeAgentRevisionSvc{found: true, revision: rev, createID: "pinned-rev-1"}
+	capturer.revisions = revisions
+	capturer.bindings = fakeSkillBinding{agentID: "agent-1", found: true}
+	capturer.baselines = &agentEvaluationAdapter{
+		revisions: revisions,
+		agents:    &fakeBaselineAgentExecutor{revision: rev},
+	}
+
+	snap, err := capturer.Capture(context.Background(), "tenant-1", evalport.CaptureInput{
+		Resource: evaldomain.ResourceRef{
+			Kind: evaldomain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "rev-1",
+		},
+		RequestedBy: "user-1",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, snap)
+	require.Equal(t, "pinned-rev-1", snap.PinnedAssignments.SkillAgentRevision["skill-1"])
+	require.Equal(t, evaldomain.ResolvedExecution{ContextWindow: 8192, OutputReserve: 2048}, snap.ResolvedExecution)
+}
+
+// TestCaptureSkillPinFailsClosedWhenBindingMissing 验证 skill 分支 fail-closed：
+// 无绑定 agent / resolver 未配置时创建失败。
+func TestCaptureSkillPinFailsClosedWhenBindingMissing(t *testing.T) {
+	capturer, _ := newSnapshotCapturerFixture(t)
+	rev := agentdomain.AgentRevision{
+		AgentID: "agent-1", Type: agentdomain.ReActAgent, SystemPrompt: "你是助手", Model: "qwen-max",
+		MaxIterations: 3,
+	}
+	capturer.bindings = fakeSkillBinding{found: false}
+	capturer.baselines = &agentEvaluationAdapter{
+		revisions: &fakeAgentRevisionSvc{createID: "pinned-rev-1"},
+		agents:    &fakeBaselineAgentExecutor{revision: rev},
+	}
+
+	_, err := capturer.Capture(context.Background(), "tenant-1", evalport.CaptureInput{
+		Resource: evaldomain.ResourceRef{
+			Kind: evaldomain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "rev-1",
+		},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "no Agent bound")
 }
