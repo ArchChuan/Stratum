@@ -86,6 +86,9 @@ export const EVALUATION_GENERATE_MAX_CASES = 50;
 // 工具序列过程断言 max_calls 上限（与后端 pkg/constants evaluation.go 同步，
 // 前端表单 InputNumber 硬上限；仅约束表单输入，运行时后端为权威）。
 export const EVALUATION_MAX_CALLS_LIMIT = 50;
+// 失败归因报告「系统性模式」的批次数阈值：失败 case 数 ≥ 该值才标「系统性」。
+// §9 服务端落地后改由服务端 systematic 信号替代。
+export const EVALUATION_ATTRIBUTION_SYSTEMATIC_MIN_CASES = 2;
 
 export const MEMORY_SEARCH_LIMIT = 20;
 // 记忆事实分类白名单（与后端 internal/memory/domain/fact.go factCategoryAllowSet 一致）。
