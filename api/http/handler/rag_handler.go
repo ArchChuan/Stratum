@@ -203,10 +203,13 @@ func (h *RAGHandler) Query(c *gin.Context) {
 	sources := make([]gin.H, len(result.Sources))
 	for i, src := range result.Sources {
 		sources[i] = gin.H{
-			"document_id": src.DocumentID,
-			"content":     src.Content,
-			"chunk_index": src.ChunkIndex,
-			"score":       src.Score,
+			"document_id":    src.DocumentID,
+			"document_title": src.DocumentTitle,
+			"content":        src.Content,
+			"chunk_index":    src.ChunkIndex,
+			"score":          src.Score,
+			// workspace 传请求名：前端 SourceItem 用它判定可预览并传给预览抽屉。
+			"workspace": req.Workspace,
 		}
 	}
 	response := gin.H{

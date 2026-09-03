@@ -1762,7 +1762,7 @@ func (a *BaseAgent) persistChatMessages(ctx context.Context, tracer oteltrace.Tr
 		ConversationID: cfg.ConversationID, Role: "assistant", Content: result.Output,
 		UserID: cfg.UserID, AgentID: agentID, MemoryScope: memoryScope,
 		SkipOutbox: false, Visibility: domain.ChatMessageVisibilityUser, Artifacts: result.Artifacts,
-		TraceID: cfg.TraceID,
+		Sources: result.Sources, TraceID: cfg.TraceID,
 	}
 	_, saveAgentSpan := tracer.Start(ctx, "agent.chat_store.save_assistant")
 	saveCtx2, saveCancel2 := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)

@@ -950,6 +950,10 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 );
 ALTER TABLE chat_messages
     ADD COLUMN IF NOT EXISTS artifacts_json JSONB NOT NULL DEFAULT '[]';
+-- sources_json 持久化 assistant 回答的 RAG 溯源来源（camelCase JSON，与 live
+-- SSE sources 帧同构），供刷新/重进会话时回放；旧行默认 []（无来源，不迁移）。
+ALTER TABLE chat_messages
+    ADD COLUMN IF NOT EXISTS sources_json JSONB NOT NULL DEFAULT '[]';
 ALTER TABLE chat_messages
     ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'user';
 ALTER TABLE chat_messages DROP CONSTRAINT IF EXISTS chat_messages_visibility_check;
