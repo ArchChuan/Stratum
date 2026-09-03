@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
 func TestQueryServiceNormalizesLimitsAndDelegates(t *testing.T) {
@@ -97,10 +99,67 @@ func TestQueryServiceReturnsEmptyCollectionsAsArrays(t *testing.T) {
 	}
 }
 
+// TestQueryServiceMonitorNormalizesWindowAndLimit 兜底：未给窗口 → 填近 EvalMonitorWindowDays 天；
+// limit 默认/封顶；window 与空切片由 service 保证。
+func TestQueryServiceMonitorNormalizesWindowAndLimit(t *testing.T) {
+	repo := &queryRepoStub{}
+	svc := NewQueryService(repo)
+	page, err := svc.MonitorResources(context.Background(), "tenant-1", port.MonitorFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repo.monFilter.From == nil || repo.monFilter.To == nil {
+		t.Fatal("window not defaulted")
+	}
+	if !repo.monFilter.To.After(*repo.monFilter.From) {
+		t.Fatalf("window invalid: %v -> %v", repo.monFilter.From, repo.monFilter.To)
+	}
+	if repo.monFilter.Limit != constants.EvalMonitorResourceLimitDefault {
+		t.Fatalf("default limit = %d", repo.monFilter.Limit)
+	}
+	if page.Items == nil || page.Window.From.IsZero() {
+		t.Fatalf("page items/window not normalized: %+v", page)
+	}
+}
+
+// TestQueryServiceMonitorRejectsBadFilters kind 非法 / 单传 resource_id / from>to → invalid。
+func TestQueryServiceMonitorRejectsBadFilters(t *testing.T) {
+	svc := NewQueryService(&queryRepoStub{})
+	now := time.Now().UTC()
+	before, after := now.Add(-time.Hour), now
+	cases := []port.MonitorFilter{
+		{ResourceKind: "invalid"},
+		{ResourceID: "only-id"},
+		{From: &after, To: &before},
+	}
+	for _, filter := range cases {
+		if _, err := svc.MonitorResources(context.Background(), "tenant-1", filter); !errors.Is(err, domain.ErrInvalidCenterQuery) {
+			t.Errorf("filter %+v error = %v, want invalid", filter, err)
+		}
+	}
+}
+
+// TestQueryServiceMonitorTrendRequiresResource trend 缺 kind/id → invalid；repo not-found 透传。
+func TestQueryServiceMonitorTrendRequiresResource(t *testing.T) {
+	repo := &queryRepoStub{}
+	svc := NewQueryService(repo)
+	if _, err := svc.MonitorTrend(context.Background(), "tenant-1", port.MonitorFilter{}); !errors.Is(err, domain.ErrInvalidCenterQuery) {
+		t.Fatalf("missing resource error = %v", err)
+	}
+	repo.err = port.ErrCenterResourceNotFound
+	if _, err := svc.MonitorTrend(context.Background(), "tenant-1", port.MonitorFilter{
+		ResourceKind: "skill", ResourceID: "sk1",
+	}); !errors.Is(err, domain.ErrCenterResourceNotFound) {
+		t.Fatalf("not found error = %v", err)
+	}
+}
+
 type queryRepoStub struct {
 	filter     port.CenterFilter
 	err        error
 	candidates domain.CandidatePage
+	monFilter  port.MonitorFilter
+	monPage    domain.MonitorResourcesPage
 }
 
 func (r *queryRepoStub) Overview(context.Context, string) (domain.CenterOverview, error) {
@@ -125,4 +184,12 @@ func (r *queryRepoStub) ListExperiments(context.Context, string, port.CenterFilt
 func (r *queryRepoStub) Timeline(_ context.Context, _ string, filter port.CenterFilter) (domain.TimelinePage, error) {
 	r.filter = filter
 	return domain.TimelinePage{}, r.err
+}
+func (r *queryRepoStub) MonitorResources(_ context.Context, _ string, filter port.MonitorFilter) (domain.MonitorResourcesPage, error) {
+	r.monFilter = filter
+	return r.monPage, r.err
+}
+func (r *queryRepoStub) MonitorTrend(_ context.Context, _ string, filter port.MonitorFilter) (domain.MonitorTrendSeries, error) {
+	r.monFilter = filter
+	return domain.MonitorTrendSeries{}, r.err
 }

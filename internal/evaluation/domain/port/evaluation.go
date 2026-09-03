@@ -17,6 +17,13 @@ type CenterFilter struct {
 	Limit                                    int
 }
 
+// MonitorFilter 评测监控聚合查询过滤（窗口必填由 application 兜底近 7 天）。
+type MonitorFilter struct {
+	ResourceKind, ResourceID string
+	From, To                 *time.Time
+	Limit                    int
+}
+
 type CenterQueryRepository interface {
 	Overview(context.Context, string) (domain.CenterOverview, error)
 	ListResources(context.Context, string, CenterFilter) (domain.ResourcePage, error)
@@ -25,6 +32,8 @@ type CenterQueryRepository interface {
 	ListCandidates(context.Context, string, CenterFilter) (domain.CandidatePage, error)
 	ListExperiments(context.Context, string, CenterFilter) (domain.ExperimentPage, error)
 	Timeline(context.Context, string, CenterFilter) (domain.TimelinePage, error)
+	MonitorResources(context.Context, string, MonitorFilter) (domain.MonitorResourcesPage, error)
+	MonitorTrend(context.Context, string, MonitorFilter) (domain.MonitorTrendSeries, error)
 }
 
 type ExecutionResult struct {
