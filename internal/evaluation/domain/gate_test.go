@@ -50,6 +50,12 @@ func TestDecideRollbackCandidatesMapToActions(t *testing.T) {
 			want:   GateL2Escalate,
 		},
 		{
+			name:   "rule2 rule blocks >= min -> platform manual",
+			policy: platform,
+			ev:     GateEvidence{RuleBlockCount: constants.GateRuleBlockRollbackMin},
+			want:   GateRollbackManual,
+		},
+		{
 			name:   "rule3 anomalies >= rollback min and confirmation regressed -> resource auto",
 			policy: resourceAuto,
 			ev: GateEvidence{
@@ -63,6 +69,17 @@ func TestDecideRollbackCandidatesMapToActions(t *testing.T) {
 			policy: resourceAuto,
 			ev:     GateEvidence{AnomalyCount: constants.GateAnomalyRollbackMin + 2},
 			want:   GateL2Escalate,
+		},
+		{
+			// 异常数 ≥ 告警 3 但 < 回滚门槛 10：即使确认 run 劣化也不回滚，
+			// rule6 none 又因 ≥ 告警阈值不触发 → 兜底 escalate。
+			name:   "rule3 anomaly within [alert, rollback) with regression -> escalate",
+			policy: resourceAuto,
+			ev: GateEvidence{
+				AnomalyCount:    constants.GateAnomalyAlertMin + 2,
+				ConfirmationRun: &RunComparison{Regressed: true},
+			},
+			want: GateL2Escalate,
 		},
 	}
 	for _, tc := range cases {
@@ -137,7 +154,11 @@ func TestMapRollback(t *testing.T) {
 		want   GateAction
 	}{
 		{"unsupported -> escalate", GatePolicy{Scope: ScopeResource, RollbackSupported: false}, GateL2Escalate},
-		{"supported + auto -> auto", GatePolicy{Scope: ScopeResource, RollbackSupported: true, AutoRollbackAllowed: true}, GateRollbackAuto},
+		{
+			name:   "supported + auto -> auto",
+			policy: GatePolicy{Scope: ScopeResource, RollbackSupported: true, AutoRollbackAllowed: true},
+			want:   GateRollbackAuto,
+		},
 		{"supported + manual -> manual", GatePolicy{Scope: ScopePlatform, RollbackSupported: true}, GateRollbackManual},
 	}
 	for _, tc := range cases {
@@ -162,11 +183,66 @@ func TestRunRegressed(t *testing.T) {
 }
 
 func TestGateActionValuesMatchLedgerDecisionText(t *testing.T) {
-	// 台账 decision 列直接存 GateAction 文本（eval_gate_actions.decision）。
-	for _, a := range []GateAction{GateNone, GateL2Escalate, GateRollbackManual, GateRollbackAuto} {
-		if a == "" {
-			t.Fatal("GateAction must not be empty string")
+	// 台账 decision 列直接存 GateAction 文本（eval_gate_actions.decision），
+	// 常量值即落库值：锁定精确拼写，防改名/错字悄悄改台账。
+	cases := []struct {
+		action GateAction
+		want   string
+	}{
+		{GateNone, "none"},
+		{GateL2Escalate, "l2_escalate"},
+		{GateRollbackManual, "rollback_manual"},
+		{GateRollbackAuto, "rollback_auto"},
+	}
+	for _, tc := range cases {
+		if got := string(tc.action); got != tc.want {
+			t.Fatalf("GateAction text = %q, want %q", got, tc.want)
 		}
+	}
+}
+
+func TestReviewVerdictValuesPinned(t *testing.T) {
+	// ReviewVerdict 文本随证据 JSONB review_verdict 落台账（evidencePayload），
+	// 锁定精确拼写，防改名/错字悄悄改人工确认结论口径。
+	cases := []struct {
+		verdict ReviewVerdict
+		want    string
+	}{
+		{ReviewVerdictConfirmRegression, "confirm_regression"},
+		{ReviewVerdictConfirmRollback, "confirm_rollback"},
+	}
+	for _, tc := range cases {
+		if got := string(tc.verdict); got != tc.want {
+			t.Fatalf("ReviewVerdict text = %q, want %q", got, tc.want)
+		}
+	}
+}
+
+func TestGateTargetKey(t *testing.T) {
+	// Key 是冷却/去重与窗口聚合的稳定键：平台键只含组，资源键含 kind/resource/revision，
+	// 两者不串扰、不带 version 等易变标签。
+	cases := []struct {
+		name string
+		t    GateTarget
+		want string
+	}{
+		{
+			name: "platform scope key pins group only",
+			t:    GateTarget{Scope: ScopePlatform, GroupKey: "agent", VersionSeq: 2},
+			want: "platform:agent",
+		},
+		{
+			name: "resource scope key joins kind resource and revision",
+			t:    GateTarget{Scope: ScopeResource, Kind: "skill", ResourceID: "s1", RevisionID: "rev-9", VersionSeq: 2},
+			want: "resource:skill:s1:rev-9",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.t.Key(); got != tc.want {
+				t.Fatalf("GateTarget.Key() = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
