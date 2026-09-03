@@ -150,7 +150,7 @@ func newSnapshotCapturerFixture(t *testing.T) (*snapshotCapturer, *fakeAgentRevi
 func TestSnapshotCapturerCaptureGroupPicksCurrentVersion(t *testing.T) {
 	capturer, _ := newSnapshotCapturerFixture(t)
 
-	group, err := capturer.captureGroup(context.Background(), evaldomain.GroupEvaluation)
+	group, err := capturer.captureGroup(context.Background(), evaldomain.GroupEvaluation, nil)
 	require.NoError(t, err)
 	require.Equal(t, evaldomain.GroupEvaluation, group.GroupKey)
 	require.Equal(t, int64(3), group.VersionSeq)
@@ -163,7 +163,7 @@ func TestSnapshotCapturerCaptureGroupPicksCurrentVersion(t *testing.T) {
 func TestSnapshotCapturerCaptureGroupUnpublishedReturnsEmptyGroup(t *testing.T) {
 	capturer, _ := newSnapshotCapturerFixture(t)
 
-	group, err := capturer.captureGroup(context.Background(), "unpublished")
+	group, err := capturer.captureGroup(context.Background(), "unpublished", nil)
 	require.NoError(t, err)
 	require.Equal(t, "unpublished", group.GroupKey)
 	require.Zero(t, group.VersionSeq)
@@ -175,7 +175,7 @@ func TestSnapshotCapturerCaptureGroupPropagatesStoreError(t *testing.T) {
 	capturer.params = parametersapp.NewService(parametersdomain.NewParametersRegistry(),
 		&fakePlatformStore{err: context.DeadlineExceeded})
 
-	_, err := capturer.captureGroup(context.Background(), evaldomain.GroupEvaluation)
+	_, err := capturer.captureGroup(context.Background(), evaldomain.GroupEvaluation, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "capture evaluation group versions")
 }

@@ -379,9 +379,10 @@ func (h *EvaluationHandler) EnqueueRun(c *gin.Context) {
 		Resource: domain.ResourceRef{
 			Kind: domain.ResourceKind(req.Resource.Kind), ResourceID: req.Resource.ResourceID, RevisionID: req.Resource.RevisionID,
 		},
-		SuiteRevisionID: req.SuiteRevisionID,
-		IdempotencyKey:  req.IdempotencyKey,
-		RequestedBy:     requestedBy,
+		SuiteRevisionID:      req.SuiteRevisionID,
+		IdempotencyKey:       req.IdempotencyKey,
+		RequestedBy:          requestedBy,
+		PlatformSeqOverrides: req.PlatformSeqOverrides,
 	})
 	if err != nil {
 		_ = c.Error(err)
