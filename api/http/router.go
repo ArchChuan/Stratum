@@ -197,6 +197,9 @@ func registerEvaluations(r *gin.Engine, c *wiring.Container, requireActive gin.H
 		// handler 内部在观测服务未装配时 fail closed 503（Task 12 wiring 注入）。
 		evaluations.GET("/observations", h.ListObservations)
 		evaluations.GET("/observations/:id", h.GetObservation)
+		// 评测指标监控（spec 2026-09-03 §4.2）：租户自有观测/评测聚合，member 可读。
+		evaluations.GET("/monitoring/resources", h.ListMonitorResources)
+		evaluations.GET("/monitoring/resources/trend", h.GetMonitorTrend)
 		// P1c 评审池：读对 member 放开；评审决策回写仍 requireAdmin。
 		evaluations.GET("/review", h.ListReviewItems)
 		evaluations.GET("/review/:id", h.GetReviewItem)

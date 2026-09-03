@@ -65,6 +65,8 @@ type evaluationQueryService interface {
 	ListCandidates(context.Context, string, port.CenterFilter) (domain.CandidatePage, error)
 	ListExperiments(context.Context, string, port.CenterFilter) (domain.ExperimentPage, error)
 	Timeline(context.Context, string, port.CenterFilter) (domain.TimelinePage, error)
+	MonitorResources(context.Context, string, port.MonitorFilter) (domain.MonitorResourcesPage, error)
+	MonitorTrend(context.Context, string, port.MonitorFilter) (domain.MonitorTrendSeries, error)
 }
 
 type evaluationCandidateCommandService interface {
@@ -757,6 +759,111 @@ func (h *EvaluationHandler) GetObservation(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, obs)
+}
+
+// MonitorQuery 监控聚合查询参数（spec 2026-09-03 §4.2）。from/to 可选（RFC3339，
+// 缺省由 service 兜底近 EvalMonitorWindowDays 天）；端点 1 resource_kind/resource_id
+// 可选、limit 可选（默认/上限走 pkg/constants）；端点 2 trend 复用同 DTO，kind/id
+// 必填由 handler 校验。
+type MonitorQuery struct {
+	ResourceKind string     `form:"resource_kind"`
+	ResourceID   string     `form:"resource_id"`
+	From         *time.Time `form:"from" time_format:"2006-01-02T15:04:05Z07:00"`
+	To           *time.Time `form:"to" time_format:"2006-01-02T15:04:05Z07:00"`
+	Limit        int        `form:"limit"`
+}
+
+// ListMonitorResources 返回窗口内资源行四区摘要（spec §4.2 端点 1，member 可读）。
+func (h *EvaluationHandler) ListMonitorResources(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	var req MonitorQuery
+	if err := c.ShouldBindQuery(&req); err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+	if err := validateMonitorResourcesQuery(req); err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+	page, err := h.queries.MonitorResources(c.Request.Context(), tenantID, port.MonitorFilter{
+		ResourceKind: req.ResourceKind, ResourceID: req.ResourceID, From: req.From, To: req.To, Limit: req.Limit,
+	})
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, page)
+}
+
+// GetMonitorTrend 返回单资源四区时间趋势（spec §4.2 端点 2，member 可读）。
+func (h *EvaluationHandler) GetMonitorTrend(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	var req MonitorQuery
+	if err := c.ShouldBindQuery(&req); err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+	if err := validateMonitorTrendQuery(req); err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+	series, err := h.queries.MonitorTrend(c.Request.Context(), tenantID, port.MonitorFilter{
+		ResourceKind: req.ResourceKind, ResourceID: req.ResourceID, From: req.From, To: req.To,
+	})
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, series)
+}
+
+// validateMonitorResourcesQuery 端点 1：kind 提供时须在资源白名单内；单传
+// resource_id 而无 kind 拒绝；from/to 同时提供时顺序合法。kind/id 均可不传
+// （整租户窗口汇总）。
+func validateMonitorResourcesQuery(req MonitorQuery) error {
+	if err := validateMonitorWindowQuery(req); err != nil {
+		return err
+	}
+	if req.ResourceID != "" && req.ResourceKind == "" {
+		return errors.New("resource_id requires resource_kind")
+	}
+	return nil
+}
+
+// validateMonitorTrendQuery 端点 2：在窗口/白名单校验基础上强制 kind+id 成对必填。
+func validateMonitorTrendQuery(req MonitorQuery) error {
+	if err := validateMonitorWindowQuery(req); err != nil {
+		return err
+	}
+	if req.ResourceKind == "" {
+		return errors.New("resource kind required")
+	}
+	if req.ResourceID == "" {
+		return errors.New("resource id required")
+	}
+	return nil
+}
+
+// validateMonitorWindowQuery 两端点共享：kind 若提供须为 skill|agent|mcp|knowledge
+// （复用 domain.ResourceKind.Validate）；from/to 同时提供时不得倒置。
+func validateMonitorWindowQuery(req MonitorQuery) error {
+	if req.ResourceKind != "" {
+		if err := domain.ResourceKind(req.ResourceKind).Validate(); err != nil {
+			return err
+		}
+	}
+	if req.From != nil && req.To != nil && req.From.After(*req.To) {
+		return errors.New("from must not be after to")
+	}
+	return nil
 }
 
 // ReviewListQuery 评审池分页查询参数（status/trigger_reason 为原始字符串，边界在
