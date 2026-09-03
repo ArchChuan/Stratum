@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -52,6 +53,36 @@ func (s *stubPlatformOps) UpdateEvalState(_ context.Context, _ string, _ int64, 
 	return nil
 }
 
+// stubApprovals 记录人工审批请求；approvalID 为预置返回 id，err 模拟请求失败
+// （请求先记录、err 再决定返回值，便于断言失败路径确实到达 requestApproval）。
+type stubApprovals struct {
+	requests   []domain.GateActionRecord
+	approvalID string
+	err        error
+}
+
+func (s *stubApprovals) RequestRollbackApproval(_ context.Context, _ string, rec domain.GateActionRecord) (string, error) {
+	s.requests = append(s.requests, rec)
+	if s.err != nil {
+		return "", s.err
+	}
+	return s.approvalID, nil
+}
+
+// stubResourceRollback 记录资源自动回滚执行；err 模拟执行失败。
+type stubResourceRollback struct {
+	rollbacks []domain.GateTarget
+	err       error
+}
+
+func (s *stubResourceRollback) Rollback(_ context.Context, _ string, target domain.GateTarget) error {
+	s.rollbacks = append(s.rollbacks, target)
+	if s.err != nil {
+		return s.err
+	}
+	return nil
+}
+
 // gateObs 构造一条平台源观测（组=agent，seq=2）。
 func gateObs() domain.EvalObservation {
 	return domain.EvalObservation{
@@ -59,6 +90,17 @@ func gateObs() domain.EvalObservation {
 		Param: domain.ParamVersion{
 			Source:   domain.ParamSourcePlatform,
 			Platform: domain.PlatformParamVersion{GroupKey: "agent", VersionSeq: 2},
+		},
+	}
+}
+
+// gateResourceObs 构造一条资源源观测（kind=skill、resourceID=s1、version=rev-9）。
+func gateResourceObs() domain.EvalObservation {
+	return domain.EvalObservation{
+		Resource: domain.ObservationResourceRef{Kind: "skill", ResourceID: "s1"},
+		Param: domain.ParamVersion{
+			Source:   domain.ParamSourceResource,
+			Resource: domain.ResourceParamVersion{Ref: "rev-9", Version: "rev-9"},
 		},
 	}
 }
@@ -228,5 +270,137 @@ func TestActionLabel(t *testing.T) {
 	}
 	if got := actionLabel(domain.GateNone); got != "" {
 		t.Fatalf("none label = %q, want empty", got)
+	}
+}
+
+func TestHandleObservationRoutesResourceScopeRollbackActions(t *testing.T) {
+	// I1：资源 scope 锚点决策必须落到 rollback_auto / rollback_manual 对应执行路径
+	// （execAutoRollback / requestApproval / applyResourceRollback 分发）。
+	ctx := context.Background()
+	blocked := domain.GateEvidence{RuleBlockCount: constants.GateRuleBlockRollbackMin}
+	resourceTarget := domain.GateTarget{
+		Scope: domain.ScopeResource, Kind: "skill", ResourceID: "s1", RevisionID: "rev-9",
+	}
+	policy := func(auto bool) domain.GatePolicy {
+		return domain.GatePolicy{Scope: domain.ScopeResource, RollbackSupported: true, AutoRollbackAllowed: auto}
+	}
+	boom := errors.New("boom")
+
+	tests := []struct {
+		name           string
+		auto           bool // true → auto 策略（rollback_auto）；false → manual 策略（rollback_manual）
+		approvals      *stubApprovals
+		rollback       *stubResourceRollback
+		wantDecision   domain.GateAction
+		wantRollbacks  int
+		wantApprovals  int
+		wantApprovalID string
+	}{
+		{
+			name:          "auto calls resource executor and records rollback_auto ledger",
+			auto:          true,
+			rollback:      &stubResourceRollback{},
+			wantDecision:  domain.GateRollbackAuto,
+			wantRollbacks: 1,
+		},
+		{
+			name:          "auto keeps ledger when resource executor unassembled",
+			auto:          true,
+			wantDecision:  domain.GateRollbackAuto,
+			wantRollbacks: 0,
+		},
+		{
+			name:          "auto executor failure keeps ledger (fail-open)",
+			auto:          true,
+			rollback:      &stubResourceRollback{err: boom},
+			wantDecision:  domain.GateRollbackAuto,
+			wantRollbacks: 1,
+		},
+		{
+			name:           "manual requests approval and backfills ledger approval id",
+			auto:           false,
+			approvals:      &stubApprovals{approvalID: "ap-1"},
+			wantDecision:   domain.GateRollbackManual,
+			wantApprovals:  1,
+			wantApprovalID: "ap-1",
+		},
+		{
+			name:          "manual keeps ledger when approval requester unassembled",
+			auto:          false,
+			wantDecision:  domain.GateRollbackManual,
+			wantApprovals: 0,
+		},
+		{
+			name:          "manual approval failure keeps ledger (fail-open)",
+			auto:          false,
+			approvals:     &stubApprovals{err: boom},
+			wantDecision:  domain.GateRollbackManual,
+			wantApprovals: 1,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &stubGateStore{evidence: blocked}
+			// 注意：未装配（nil→skip）须把依赖接口字段保持真 nil，不能赋 typed nil
+			// 具体指针（那样接口非 nil、nil 守卫失效）。故按 case 条件填充。
+			deps := GateServiceDeps{
+				Cfg:    func(context.Context) domain.GateConfig { return domain.GateConfig{Enabled: true} },
+				Repo:   store,
+				Policy: &stubGatePolicy{policy: policy(tc.auto)},
+			}
+			if tc.approvals != nil {
+				deps.Approvals = tc.approvals
+			}
+			if tc.rollback != nil {
+				deps.ResourceRollback = tc.rollback
+			}
+			svc := newTestGate(deps, fixedNow())
+
+			if err := svc.HandleObservation(ctx, "t1", gateResourceObs()); err != nil {
+				t.Fatalf("HandleObservation error = %v", err)
+			}
+			if len(store.actions) != 1 {
+				t.Fatalf("ledger actions = %d, want 1", len(store.actions))
+			}
+			rec := store.actions[0]
+			if rec.Decision != tc.wantDecision || rec.Action != "rollback_recommended" {
+				t.Fatalf("ledger decision/action = %q/%q, want %q/rollback_recommended",
+					rec.Decision, rec.Action, tc.wantDecision)
+			}
+			if rec.Target != resourceTarget {
+				t.Fatalf("ledger target = %+v, want %+v", rec.Target, resourceTarget)
+			}
+			if rec.ApprovalID != tc.wantApprovalID {
+				t.Fatalf("ledger approval id = %q, want %q", rec.ApprovalID, tc.wantApprovalID)
+			}
+
+			gotRollbacks := 0
+			if tc.rollback != nil {
+				gotRollbacks = len(tc.rollback.rollbacks)
+			}
+			if gotRollbacks != tc.wantRollbacks {
+				t.Fatalf("execAutoRollback calls = %d, want %d", gotRollbacks, tc.wantRollbacks)
+			}
+			if gotRollbacks > 0 && tc.rollback.rollbacks[0] != resourceTarget {
+				t.Fatalf("rollback target = %+v, want %+v", tc.rollback.rollbacks[0], resourceTarget)
+			}
+
+			gotApprovals := 0
+			if tc.approvals != nil {
+				gotApprovals = len(tc.approvals.requests)
+			}
+			if gotApprovals != tc.wantApprovals {
+				t.Fatalf("requestApproval calls = %d, want %d", gotApprovals, tc.wantApprovals)
+			}
+			if gotApprovals > 0 {
+				req := tc.approvals.requests[0]
+				if req.Decision != domain.GateRollbackManual {
+					t.Fatalf("approval request decision = %q, want rollback_manual", req.Decision)
+				}
+				if req.Target != resourceTarget {
+					t.Fatalf("approval request target = %+v, want %+v", req.Target, resourceTarget)
+				}
+			}
+		})
 	}
 }
