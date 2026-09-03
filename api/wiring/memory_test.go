@@ -205,6 +205,16 @@ func (m *wiringPlatformStore) ListVersions(_ context.Context, _ string) ([]param
 	return []parametersport.PlatformVersion{}, nil
 }
 
+// GetVersion/UpdateEvalState 补齐接口（分层门禁 P1）：wiringPlatformStore 只模拟
+// 单值 settings（无版本列），版本寻址恒 ErrVersionNotFound。
+func (m *wiringPlatformStore) GetVersion(context.Context, string, int64) (parametersport.PlatformVersion, error) {
+	return parametersport.PlatformVersion{}, parametersdomain.ErrVersionNotFound
+}
+
+func (m *wiringPlatformStore) UpdateEvalState(context.Context, string, int64, string, string) error {
+	return parametersdomain.ErrVersionNotFound
+}
+
 // TestPlatformParamResolverFallback 守护 platformParamResolver 的编排：
 // 平台声明值优先；无声明回落 registry 定义默认；svc 缺失 fail-closed 到 absent。
 func TestPlatformParamResolverFallback(t *testing.T) {

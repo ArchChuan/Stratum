@@ -273,8 +273,11 @@ type SnapshotCapturer interface {
 }
 
 // CaptureInput 描述一次快照捕获：被测资源 + 评测套件 revision + 请求者。
+// PlatformSeqOverrides 按平台组（evaluation/agent/trace groupKey）指定历史版本
+// version_seq 覆盖（对照确认 run 重放）；空 = 现 IsCurrent 语义。
 type CaptureInput struct {
-	Resource        domain.ResourceRef
-	SuiteRevisionID string
-	RequestedBy     string
+	Resource             domain.ResourceRef
+	SuiteRevisionID      string
+	RequestedBy          string
+	PlatformSeqOverrides map[string]int64
 }

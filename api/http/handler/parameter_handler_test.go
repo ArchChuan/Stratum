@@ -160,6 +160,32 @@ func (f *fakePlatformStore) ListVersions(_ context.Context, groupKey string) ([]
 	return out, nil
 }
 
+// GetVersion/UpdateEvalState 补齐接口（分层门禁 P1）：eval_state 是 DB 独立列，
+// 桩里用 Snapshot["eval_state"] 占位；仅需要存在性 + ErrVersionNotFound 语义。
+func (f *fakePlatformStore) GetVersion(_ context.Context, groupKey string, versionSeq int64) (port.PlatformVersion, error) {
+	g := f.group(groupKey)
+	for _, v := range g.versions {
+		if int64(v.VersionSeq) == versionSeq {
+			return *v, nil
+		}
+	}
+	return port.PlatformVersion{}, paramdomain.ErrVersionNotFound
+}
+
+func (f *fakePlatformStore) UpdateEvalState(_ context.Context, groupKey string, versionSeq int64, state, _ string) error {
+	g := f.group(groupKey)
+	for _, v := range g.versions {
+		if int64(v.VersionSeq) == versionSeq {
+			if v.Snapshot == nil {
+				v.Snapshot = make(map[string]json.RawMessage)
+			}
+			v.Snapshot["eval_state"] = json.RawMessage(`"` + state + `"`)
+			return nil
+		}
+	}
+	return paramdomain.ErrVersionNotFound
+}
+
 func setupParameterRouter(h *ParameterHandler) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()

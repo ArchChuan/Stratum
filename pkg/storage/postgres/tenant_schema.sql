@@ -562,6 +562,29 @@ CREATE INDEX IF NOT EXISTS idx_eval_observations_resource_time
     ON eval_observations (resource_kind, resource_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_eval_observations_trace
     ON eval_observations (trace_id);
+CREATE INDEX IF NOT EXISTS idx_eval_observations_verdict_time
+    ON eval_observations (verdict, created_at DESC);
+
+-- 分层门禁台账（spec §4.1.2）：每次 gate 评估决策落一行；target/evidence 为 JSONB
+-- 结构化字段，由 Go json.Marshal 写入。人工审批走 agent_tool_approvals，不新增审批表，
+-- approval_id 关联。action 记录决策对应的动作形态（如 rollback_recommended / escalate）。
+CREATE TABLE IF NOT EXISTS eval_gate_actions (
+    id TEXT PRIMARY KEY,
+    scope TEXT NOT NULL CHECK (scope IN ('platform','resource')),
+    target JSONB NOT NULL,
+    layer TEXT NOT NULL,
+    decision TEXT NOT NULL,
+    action TEXT NOT NULL DEFAULT '',
+    evidence JSONB NOT NULL DEFAULT '{}'::jsonb,
+    actor TEXT NOT NULL DEFAULT '',
+    approval_id TEXT NOT NULL DEFAULT '',
+    host_tenant_id TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_eval_gate_actions_target_time
+    ON eval_gate_actions (scope, target, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_eval_gate_actions_decision
+    ON eval_gate_actions (decision, created_at DESC);
 
 -- 人工评审池（P1c §6.6）：观测/评测集判定低置信与判异信号入池，人工 4 分类回写。
 -- snapshot JSONB 保留入池时完整上下文（观测信号 / case 快照），评审详情免回查。
@@ -574,7 +597,7 @@ CREATE TABLE IF NOT EXISTS eval_review_items (
     resource_kind  TEXT NOT NULL,
     resource_id    TEXT NOT NULL,
     trigger_reason TEXT NOT NULL CHECK (trigger_reason IN
-        ('low_confidence','dimension_split','judge_rule_conflict','needs_review','process_output_conflict')),
+        ('low_confidence','dimension_split','judge_rule_conflict','needs_review','process_output_conflict','behavior_anomaly')),
     snapshot       JSONB NOT NULL DEFAULT '{}'::jsonb,
     status         TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','reviewed')),
     human_verdict  TEXT NOT NULL DEFAULT '' CHECK (human_verdict IN
@@ -587,13 +610,15 @@ CREATE TABLE IF NOT EXISTS eval_review_items (
 );
 -- 升级存量租户：评测删除门禁的创建者列（评审项系统入池恒 ''，仅租户 owner 可删）。
 ALTER TABLE eval_review_items ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT '';
--- 升级存量租户：§6.5 process_output_conflict 加入 trigger_reason 枚举后，历史租户
--- 的旧 check 约束仍拒绝该值（过程断言失败入池即 500）。CREATE TABLE IF NOT EXISTS
--- 不会重建已有表，故以 DROP IF EXISTS + ADD CONSTRAINT 幂等替换——每次 provision
--- 先删后加，新旧租户最终都含 process_output_conflict。
+-- 升级存量租户：trigger_reason 枚举随门禁演进扩展——§6.5 加 process_output_conflict，
+-- 分层门禁 P1（spec §4.1.2）判异信号加 behavior_anomaly（行为异常/judge 跌阈需人工
+-- 复核时入池）。历史租户旧 check 约束仍拒绝新值（过程断言失败入池即 500），而
+-- CREATE TABLE IF NOT EXISTS 不会重建已有表，故以 DROP IF EXISTS + ADD CONSTRAINT
+-- 幂等替换——每次 provision 先删后加，新旧租户最终都含 process_output_conflict 与
+-- behavior_anomaly。
 ALTER TABLE eval_review_items DROP CONSTRAINT IF EXISTS eval_review_items_trigger_reason_check;
 ALTER TABLE eval_review_items ADD CONSTRAINT eval_review_items_trigger_reason_check
-    CHECK (trigger_reason IN ('low_confidence','dimension_split','judge_rule_conflict','needs_review','process_output_conflict'));
+    CHECK (trigger_reason IN ('low_confidence','dimension_split','judge_rule_conflict','needs_review','process_output_conflict','behavior_anomaly'));
 CREATE INDEX IF NOT EXISTS idx_eval_review_items_status
     ON eval_review_items(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_eval_review_items_source

@@ -133,3 +133,17 @@ const (
 	// rune 数：超过后按 rune 截断并追加省略号。
 	StepJudgeRawTextMaxChars = 500
 )
+
+// 分层门禁阈值（spec §4.2.4）。时间型常量沿用本文件不带 _MS 后缀的风格。
+// GateRuleBlockRollbackMin 规则阻断回滚门槛、GateAnomalyRollbackMin 行为异常回滚门槛、
+// GateAnomalyAlertMin 告警门槛、GateObservationWindow 证据窗口、GateCooldown 决策冷却、
+// GateAutoRollbackMaxPerDay 自动回滚日限、RunRegressionDeltaThreshold 对照 run 劣化阈值。
+const (
+	GateObservationWindow       = 10 * time.Minute
+	GateCooldown                = 10 * time.Minute
+	GateRuleBlockRollbackMin    = 3
+	GateAnomalyRollbackMin      = 10
+	GateAnomalyAlertMin         = 3
+	GateAutoRollbackMaxPerDay   = 3
+	RunRegressionDeltaThreshold = -0.05
+)

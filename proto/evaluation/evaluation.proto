@@ -73,6 +73,8 @@ message EnqueueEvaluationRunRequest {
   string suite_revision_id = 2;
   // @binding: required,max=255
   string idempotency_key = 3;
+  // 平台组历史版本覆盖（对照确认 run 重放）；空 = 现 IsCurrent 语义。
+  map<string, int64> platform_seq_overrides = 4;
 }
 
 message EvaluationJobResponse {
