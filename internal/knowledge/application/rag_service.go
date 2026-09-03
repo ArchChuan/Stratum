@@ -349,6 +349,10 @@ type Source struct {
 	ParentContent string // non-empty when parent chunk was fetched (Parent-Child strategy)
 	ChunkIndex    int64
 	Score         float32
+	// DocumentTitle is the owning document's source file name, backfilled at
+	// the end of Query for the /knowledge/query citation cards. Display-only;
+	// empty when the doc index read fails (never fails the query).
+	DocumentTitle string
 }
 
 // DocumentPreview is the chunk-reassembled content of a document for the
@@ -479,6 +483,8 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 	result.Latency = time.Since(startTime)
 
 	rs.expandParentContext(ctx, req, result)
+	// 来源卡片需文档名：expandParentContext 后回填以覆盖其追加的 parent 分块。
+	rs.decorateSourceTitles(ctx, req.TenantID, req.WorkspaceID, result.Sources)
 
 	rs.logger.Info("RAG query completed",
 		zap.String("trace_id", sc.TraceID),
@@ -1428,6 +1434,25 @@ func (rs *RAGService) documentTitles(ctx context.Context, tenantID, workspaceID 
 		}
 	}
 	return titles
+}
+
+// decorateSourceTitles backfills each query source's display title from the
+// workspace document index. Titles are display metadata only: index read
+// failures leave them empty rather than failing the query (documentTitles
+// logs the warning).
+func (rs *RAGService) decorateSourceTitles(ctx context.Context, tenantID, workspaceID string, sources []Source) {
+	if len(sources) == 0 {
+		return
+	}
+	applySourceTitles(sources, rs.documentTitles(ctx, tenantID, workspaceID))
+}
+
+func applySourceTitles(sources []Source, titles map[string]string) {
+	for i := range sources {
+		if title, ok := titles[sources[i].DocumentID]; ok {
+			sources[i].DocumentTitle = title
+		}
+	}
 }
 
 // mergeEvidenceResults keeps the same at-least-one semantics as mergeResults:
