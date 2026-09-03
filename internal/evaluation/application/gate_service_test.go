@@ -81,7 +81,7 @@ type stubResourceRollback struct {
 	err       error
 }
 
-func (s *stubResourceRollback) Rollback(_ context.Context, _ string, target domain.GateTarget) error {
+func (s *stubResourceRollback) Rollback(_ context.Context, _ string, target domain.GateTarget, _, _, _ string) error {
 	s.rollbacks = append(s.rollbacks, target)
 	if s.err != nil {
 		return s.err
