@@ -93,4 +93,24 @@ describe('evaluation center api', () => {
       })).rejects.toThrow();
     },
   );
+
+  it('lists monitor resources with the window and limit forwarded as query params', async () => {
+    const data = { items: [], window: { from: '2026-08-27T00:00:00Z', to: '2026-09-03T00:00:00Z' } };
+    client.get.mockResolvedValue({ data });
+    const page = await evaluationApi.listMonitorResources({ resource_kind: 'skill', from: '2026-08-27T00:00:00Z', to: '2026-09-03T00:00:00Z', limit: 20 });
+    expect(client.get).toHaveBeenCalledWith('/evaluations/monitoring/resources', {
+      params: { resource_kind: 'skill', from: '2026-08-27T00:00:00Z', to: '2026-09-03T00:00:00Z', limit: 20 },
+    });
+    expect(page.window.from).toBe('2026-08-27T00:00:00Z');
+  });
+
+  it('fetches the per-resource trend through the trend endpoint', async () => {
+    const data = { resource_kind: 'skill', resource_id: 'skill-a', series: [], runs: [] };
+    client.get.mockResolvedValue({ data });
+    const trend = await evaluationApi.getMonitorTrend({ resource_kind: 'skill', resource_id: 'skill-a', from: '2026-08-27T00:00:00Z', to: '2026-09-03T00:00:00Z' });
+    expect(client.get).toHaveBeenCalledWith('/evaluations/monitoring/resources/trend', {
+      params: { resource_kind: 'skill', resource_id: 'skill-a', from: '2026-08-27T00:00:00Z', to: '2026-09-03T00:00:00Z' },
+    });
+    expect(trend.runs).toEqual([]);
+  });
 });
