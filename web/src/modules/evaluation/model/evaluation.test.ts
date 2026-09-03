@@ -21,9 +21,6 @@ import {
   monitorResourceSummarySchema,
   monitorResourcesPageSchema,
   monitorTrendSchema,
-  processBaselineSchema,
-  qualityDimSchema,
-  runProcessPointSchema,
 } from './evaluation';
 
 describe('evaluation model', () => {
