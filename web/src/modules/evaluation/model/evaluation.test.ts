@@ -16,6 +16,11 @@ import {
   safeSummarySchema,
   candidateCommandResponseSchema,
   experimentCommandResponseSchema,
+  behaviorStatsSchema,
+  costStatsSchema,
+  monitorResourceSummarySchema,
+  monitorResourcesPageSchema,
+  monitorTrendSchema,
 } from './evaluation';
 
 describe('evaluation model', () => {
@@ -238,5 +243,57 @@ describe('observedTraceEvidenceSchema', () => {
   it('parses a valid trace evidence object', () => {
     const ev = observedTraceEvidenceSchema.parse({ cost_usd: 0.05, latency_ms: 200, success: false, tool_call_count: 3, tool_error_count: 1 });
     expect(ev.tool_call_count).toBe(3);
+  });
+});
+
+describe('evaluation monitor schemas', () => {
+  // §4.2 端点 1 样例：quality 仅列实际出现维度；cost 延迟可 null；process 可为对象或 null。
+  const summaryRow = {
+    resource_kind: 'skill', resource_id: 'skill-a', sample_count: 128,
+    quality: [{ dimension: 'faithfulness', pass_rate: 0.92, avg_score: 0.92, avg_confidence: 0.87, samples: 128 }],
+    behavior: { rule_hits: 15, retry_count: 3, escalation_count: 1, abandonment_count: 0,
+      verdict: { pass: 120, flag: 6, block: 2 } },
+    cost: { total_tokens: 154000, total_cost_usd: 0.42, avg_latency_ms: 1800, p95_latency_ms: 5200 },
+    process: { process_pass_rate: 0.67, run_id: 'run-9', run_created_at: '2026-09-02T08:00:00Z' },
+  };
+
+  it('parses the endpoint 1 resource-row summary with inner behavior and nullable process', () => {
+    const page = monitorResourcesPageSchema.parse({ items: [summaryRow], window: { from: '2026-08-27T00:00:00Z', to: '2026-09-03T00:00:00Z' } });
+    expect(page.items[0].quality[0].pass_rate).toBe(0.92);
+    expect(page.items[0].behavior.verdict.block).toBe(2);
+    expect(page.items[0].cost.p95_latency_ms).toBe(5200);
+    expect(page.items[0].process?.run_id).toBe('run-9');
+    expect(page.window.from).toBe('2026-08-27T00:00:00Z');
+  });
+
+  it('keeps process null when the window has no succeeded run', () => {
+    const row = monitorResourceSummarySchema.parse({ ...summaryRow, process: null });
+    expect(row.process).toBeNull();
+  });
+
+  it('keeps latency null when no latency sample exists', () => {
+    const cost = costStatsSchema.parse({ total_tokens: 0, total_cost_usd: 0, avg_latency_ms: null, p95_latency_ms: null });
+    expect(cost.avg_latency_ms).toBeNull();
+  });
+
+  it('accepts empty quality and empty series/runs as honest empty states', () => {
+    expect(monitorResourceSummarySchema.parse({ ...summaryRow, quality: [], process: null }).quality).toEqual([]);
+    const trend = monitorTrendSchema.parse({ resource_kind: 'skill', resource_id: 'skill-a', series: [], runs: [] });
+    expect(trend.series).toEqual([]);
+    expect(trend.runs).toEqual([]);
+  });
+
+  it('rejects unknown top-level and nested keys (strict wire contract)', () => {
+    expect(() => monitorResourcesPageSchema.parse({ items: [summaryRow], window: { from: 'a', to: 'b' }, next_cursor: 'x' })).toThrow();
+    expect(() => behaviorStatsSchema.parse({ rule_hits: 1, retry_count: 0, escalation_count: 0,
+      abandonment_count: 0, verdict: { pass: 1, flag: 0, block: 0 }, extra: true })).toThrow();
+    expect(() => monitorResourceSummarySchema.parse({ ...summaryRow, resource_kind: 'plugin' })).toThrow();
+  });
+
+  it('parses a full-limit row set without a pagination field (truncation is client-inferred)', () => {
+    const items = Array.from({ length: 20 }, (_, index) => ({ ...summaryRow, resource_id: `skill-${index}` }));
+    const page = monitorResourcesPageSchema.parse({ items, window: { from: 'a', to: 'b' } });
+    expect(page.items).toHaveLength(20);
+    expect(page.items[0].resource_id).toBe('skill-0');
   });
 });

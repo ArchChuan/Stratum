@@ -242,8 +242,13 @@ func withTenantAndUser(tenantID, userID string) gin.HandlerFunc {
 }
 
 type fakeEvaluationQueries struct {
-	tenantID string
-	filter   port.CenterFilter
+	tenantID     string
+	filter       port.CenterFilter
+	monitorKind  string
+	monitorID    string
+	monitorFrom  *time.Time
+	monitorTo    *time.Time
+	monitorLimit int
 }
 
 func (f *fakeEvaluationQueries) Overview(context.Context, string) (domain.CenterOverview, error) {
@@ -277,6 +282,29 @@ func (f *fakeEvaluationQueries) ListExperiments(context.Context, string, port.Ce
 }
 func (f *fakeEvaluationQueries) Timeline(context.Context, string, port.CenterFilter) (domain.TimelinePage, error) {
 	return domain.TimelinePage{}, nil
+}
+func (f *fakeEvaluationQueries) MonitorResources(_ context.Context, tenantID string, filter port.MonitorFilter) (domain.MonitorResourcesPage, error) {
+	f.tenantID = tenantID
+	f.monitorKind = filter.ResourceKind
+	f.monitorID = filter.ResourceID
+	f.monitorFrom = filter.From
+	f.monitorTo = filter.To
+	f.monitorLimit = filter.Limit
+	pass := 0.92
+	return domain.MonitorResourcesPage{Items: []domain.MonitorResourceSummary{{
+		ResourceKind: domain.ResourceKindSkill, ResourceID: "sk1", SampleCount: 2,
+		Quality: []domain.QualityDim{{Dimension: "faithfulness", PassRate: pass, AvgScore: pass, AvgConfidence: 0.8, Samples: 2}},
+		Process: &domain.ProcessBaseline{ProcessPassRate: 0.5, RunID: "runA", RunCreatedAt: time.Now().UTC()},
+	}}}, nil
+}
+func (f *fakeEvaluationQueries) MonitorTrend(_ context.Context, tenantID string, filter port.MonitorFilter) (domain.MonitorTrendSeries, error) {
+	f.tenantID = tenantID
+	f.monitorKind = filter.ResourceKind
+	f.monitorID = filter.ResourceID
+	f.monitorFrom = filter.From
+	f.monitorTo = filter.To
+	return domain.MonitorTrendSeries{ResourceKind: domain.ResourceKind(filter.ResourceKind), ResourceID: filter.ResourceID,
+		Series: []domain.MonitorTrendPoint{{BucketAt: time.Now().UTC()}}, Runs: []domain.RunProcessPoint{}}, nil
 }
 
 type fakeCandidateCommands struct {
@@ -820,5 +848,81 @@ func TestEvaluationHandlerListReviewUnavailableWithoutService(t *testing.T) {
 
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected 503 without review service, got status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// ---- 评测指标监控面板 handler（spec 2026-09-03 §4.2）----
+
+// TestEvaluationHandlerMonitorResourcesPropagatesFilter 端点 1：200 + 参数透传。
+func TestEvaluationHandlerMonitorResourcesPropagatesFilter(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	queries := &fakeEvaluationQueries{}
+	h := NewEvaluationHandler(nil, nil, nil, nil, nil, nil, queries, nil, zap.NewNop())
+	r := gin.New()
+	r.Use(middleware.ErrorHandler(zap.NewNop()))
+	r.GET("/evaluations/monitoring/resources", withTenant("tenant-1"), h.ListMonitorResources)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"/evaluations/monitoring/resources?resource_kind=skill&resource_id=sk1&from=2026-09-01T00:00:00Z&to=2026-09-03T00:00:00Z&limit=7", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if queries.monitorKind != "skill" || queries.monitorID != "sk1" || queries.monitorLimit != 7 {
+		t.Fatalf("filter not propagated: kind=%q id=%q limit=%d", queries.monitorKind, queries.monitorID, queries.monitorLimit)
+	}
+	if queries.monitorFrom == nil || queries.monitorTo == nil {
+		t.Fatal("from/to not propagated")
+	}
+	var page domain.MonitorResourcesPage
+	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil || len(page.Items) != 1 {
+		t.Fatalf("typed page response=%s err=%v", rec.Body.String(), err)
+	}
+}
+
+// TestEvaluationHandlerMonitorResourcesRejectsBadQuery 端点 1：400 表。
+func TestEvaluationHandlerMonitorResourcesRejectsBadQuery(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	queries := &fakeEvaluationQueries{}
+	h := NewEvaluationHandler(nil, nil, nil, nil, nil, nil, queries, nil, zap.NewNop())
+	r := gin.New()
+	r.Use(middleware.ErrorHandler(zap.NewNop()))
+	r.GET("/evaluations/monitoring/resources", withTenant("tenant-1"), h.ListMonitorResources)
+	urls := []string{
+		"/evaluations/monitoring/resources?resource_id=only",                                                      // 单传 id 无 kind
+		"/evaluations/monitoring/resources?resource_kind=bad",                                                     // kind 非法
+		"/evaluations/monitoring/resources?resource_kind=skill&from=2026-09-03T00:00:00Z&to=2026-09-01T00:00:00Z", // from>to
+	}
+	for _, raw := range urls {
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, raw, nil))
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("GET %s: status=%d body=%s, want 400", raw, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+// TestEvaluationHandlerMonitorTrendPropagates 端点 2：200 + 缺 kind/id → 400。
+func TestEvaluationHandlerMonitorTrendPropagates(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	queries := &fakeEvaluationQueries{}
+	h := NewEvaluationHandler(nil, nil, nil, nil, nil, nil, queries, nil, zap.NewNop())
+	r := gin.New()
+	r.Use(middleware.ErrorHandler(zap.NewNop()))
+	r.GET("/evaluations/monitoring/resources/trend", withTenant("tenant-1"), h.GetMonitorTrend)
+	ok := httptest.NewRecorder()
+	r.ServeHTTP(ok, httptest.NewRequest(http.MethodGet,
+		"/evaluations/monitoring/resources/trend?resource_kind=skill&resource_id=sk1", nil))
+	if ok.Code != http.StatusOK {
+		t.Fatalf("ok status=%d body=%s", ok.Code, ok.Body.String())
+	}
+	var series domain.MonitorTrendSeries
+	if err := json.Unmarshal(ok.Body.Bytes(), &series); err != nil || series.ResourceID != "sk1" {
+		t.Fatalf("typed series response=%s err=%v", ok.Body.String(), err)
+	}
+	bad := httptest.NewRecorder()
+	r.ServeHTTP(bad, httptest.NewRequest(http.MethodGet,
+		"/evaluations/monitoring/resources/trend?resource_kind=skill", nil)) // 缺 id
+	if bad.Code != http.StatusBadRequest {
+		t.Fatalf("bad status=%d body=%s, want 400", bad.Code, bad.Body.String())
 	}
 }

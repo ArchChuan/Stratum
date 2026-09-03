@@ -148,6 +148,18 @@ const (
 	RunRegressionDeltaThreshold = -0.05
 )
 
+// 评测指标监控面板（EvaluationCenterPage「监控」tab，spec 2026-09-03 §4.3）行为边界：
+// 默认监控窗口天数与资源行 limit 默认/上限。前端 web/src/constants 各持默认窗口天数
+// （spec §4.3：两端各持有默认值并在 UI 明示，后端为权威兜底）。
+const (
+	// EvalMonitorWindowDays 面板默认监控窗口（近 N 天，含端点）。
+	EvalMonitorWindowDays = 7
+	// EvalMonitorResourceLimitDefault 资源行摘要默认返回条数（按观测样本数降序）。
+	EvalMonitorResourceLimitDefault = 20
+	// EvalMonitorResourceLimitMax 资源行 limit 上限。
+	EvalMonitorResourceLimitMax = 100
+)
+
 // 分层门禁计数 label 与平台版本门禁状态（spec §3.4/§4.1.1；P2 只消费
 // eval_gate_action_total 开放 label 与 eval_state 状态文本，不新增 metric family）。
 const (

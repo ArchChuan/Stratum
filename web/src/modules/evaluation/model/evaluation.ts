@@ -375,3 +375,106 @@ export interface EvaluationCenterFilters {
   cursor?: string;
   limit?: number;
 }
+
+// —— 评测指标监控面板（spec 2026-09-03 §4.2）——
+
+// qualityDimSchema 单 judge 语义维度的窗口聚合；仅在实际观测到样本时出现。
+export const qualityDimSchema = z.object({
+  dimension: z.string(),
+  pass_rate: z.number(),
+  avg_score: z.number(),
+  avg_confidence: z.number(),
+  samples: z.number(),
+}).strict();
+export type QualityDim = z.infer<typeof qualityDimSchema>;
+
+export const verdictDistributionSchema = z.object({
+  pass: z.number(),
+  flag: z.number(),
+  block: z.number(),
+}).strict();
+export type VerdictDistribution = z.infer<typeof verdictDistributionSchema>;
+
+export const behaviorStatsSchema = z.object({
+  rule_hits: z.number(),
+  retry_count: z.number(),
+  escalation_count: z.number(),
+  abandonment_count: z.number(),
+  verdict: verdictDistributionSchema,
+}).strict();
+export type BehaviorStats = z.infer<typeof behaviorStatsSchema>;
+
+// costStatsSchema 观测线成本；avg/p95 延迟无样本时为 null（不做假装为零）。
+export const costStatsSchema = z.object({
+  total_tokens: z.number(),
+  total_cost_usd: z.number(),
+  avg_latency_ms: z.number().nullable(),
+  p95_latency_ms: z.number().nullable(),
+}).strict();
+export type CostStats = z.infer<typeof costStatsSchema>;
+
+// processBaselineSchema 窗口内最近一条 succeeded 评测 run 的过程通过率基线；
+// process 为 null 表示该窗口无离线评测（run 未做过程断言时该值恒 1.0，前端须带 run 元信息语境呈现）。
+export const processBaselineSchema = z.object({
+  process_pass_rate: z.number(),
+  run_id: z.string(),
+  run_created_at: z.string(),
+}).strict();
+export type ProcessBaseline = z.infer<typeof processBaselineSchema>;
+
+export const monitorResourceSummarySchema = z.object({
+  resource_kind: resourceKindSchema,
+  resource_id: z.string(),
+  sample_count: z.number(),
+  quality: z.array(qualityDimSchema),
+  behavior: behaviorStatsSchema,
+  cost: costStatsSchema,
+  process: processBaselineSchema.nullable(),
+}).strict();
+export type MonitorResourceSummary = z.infer<typeof monitorResourceSummarySchema>;
+
+export const monitorWindowSchema = z.object({ from: z.string(), to: z.string() }).strict();
+export type MonitorWindow = z.infer<typeof monitorWindowSchema>;
+
+// monitorResourcesPageSchema 端点 1；MVP 不分页，故无 next_cursor/truncated 字段，
+// 截断由前端以「items.length 达到 limit」推断（Task 7），schema 不为此添加字段。
+export const monitorResourcesPageSchema = z.object({
+  items: z.array(monitorResourceSummarySchema),
+  window: monitorWindowSchema,
+}).strict();
+export type MonitorResourcesPage = z.infer<typeof monitorResourcesPageSchema>;
+
+export const monitorTrendPointSchema = z.object({
+  bucket_at: z.string(),
+  sample_count: z.number(),
+  quality: z.array(qualityDimSchema),
+  behavior: behaviorStatsSchema,
+  cost: costStatsSchema,
+}).strict();
+export type MonitorTrendPoint = z.infer<typeof monitorTrendPointSchema>;
+
+export const runProcessPointSchema = z.object({
+  run_id: z.string(),
+  process_pass_rate: z.number(),
+  run_created_at: z.string(),
+}).strict();
+export type RunProcessPoint = z.infer<typeof runProcessPointSchema>;
+
+// monitorTrendSchema 端点 2：series 按日桶；runs 为该资源窗口内 succeeded run 过程基线点。
+export const monitorTrendSchema = z.object({
+  resource_kind: resourceKindSchema,
+  resource_id: z.string(),
+  series: z.array(monitorTrendPointSchema),
+  runs: z.array(runProcessPointSchema),
+}).strict();
+export type MonitorTrend = z.infer<typeof monitorTrendSchema>;
+
+export interface MonitorFilters {
+  resource_kind?: ResourceKind;
+  resource_id?: string;
+  /** RFC3339；省略由后端兜底近 7 天。 */
+  from?: string;
+  /** RFC3339。 */
+  to?: string;
+  limit?: number;
+}

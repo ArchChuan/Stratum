@@ -45,6 +45,15 @@ vi.mock('antd', async () => ({
   ...(await vi.importActual<typeof import('antd')>('antd')),
   message: { success: messageMocks.success, error: messageMocks.error },
 }));
+// 监控 Tab 挂载后按默认窗拉资源观测汇总；spread actual 保留 evaluationApi
+// 其余真实方法（页面其它路径引用），只替换本页测试关心的 listMonitorResources。
+const monitorApi = vi.hoisted(() => ({ listMonitorResources: vi.fn() }));
+vi.mock('../api/evaluation.api', async () => {
+  const actual = await vi.importActual<typeof import('../api/evaluation.api')>('../api/evaluation.api');
+  return { ...actual, evaluationApi: { ...actual.evaluationApi, listMonitorResources: monitorApi.listMonitorResources } };
+});
+
+const emptyMonitorWindow = { items: [], window: { from: '2026-08-27T00:00:00Z', to: '2026-09-03T00:00:00Z' } };
 
 const LocationProbe = () => {
   const location = useLocation();
@@ -179,5 +188,22 @@ describe('EvaluationCenterPage', () => {
     await waitFor(() => expect(useCenter).toHaveBeenLastCalledWith({
       resource_kind: 'skill', resource_id: 'skill-1', status: undefined,
     }));
+  });
+
+  it('places the monitoring tab after health and before the review pool', () => {
+    renderPage();
+    const names = screen.getAllByRole('tab').map((node) => node.textContent ?? '');
+    expect(names.indexOf('监控')).toBeGreaterThan(names.indexOf('运行通过率趋势'));
+    expect(names.indexOf('监控')).toBeLessThan(names.indexOf('人工评审池'));
+  });
+
+  it('mounts the monitoring panel with kind and resource filters from the deep link', async () => {
+    monitorApi.listMonitorResources.mockResolvedValue(emptyMonitorWindow);
+    renderPage('/evaluations?kind=skill&resource_id=skill-1');
+    fireEvent.click(screen.getByRole('tab', { name: '监控' }));
+    expect(await screen.findByTestId('evaluation-monitor-panel')).toBeInTheDocument();
+    await waitFor(() => expect(monitorApi.listMonitorResources).toHaveBeenCalledWith(expect.objectContaining({
+      resource_kind: 'skill', resource_id: 'skill-1',
+    })));
   });
 });

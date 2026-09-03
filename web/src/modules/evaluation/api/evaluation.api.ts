@@ -30,6 +30,11 @@ import {
   resourceRefSchema,
   candidateCommandResponseSchema,
   experimentCommandResponseSchema,
+  monitorResourcesPageSchema,
+  monitorTrendSchema,
+  type MonitorFilters,
+  type MonitorResourcesPage,
+  type MonitorTrend,
 } from '../model/evaluation';
 
 import api from '@/services/client';
@@ -67,6 +72,14 @@ export const evaluationApi = {
     const path = `/evaluations/resources/${kind}/${encodeURIComponent(resourceId)}/timeline`;
     const response = await api.get(path, filters ? { params: filters } : undefined);
     return timelinePageSchema.parse(response.data);
+  },
+  listMonitorResources: async (filters?: MonitorFilters): Promise<MonitorResourcesPage> => {
+    const response = await api.get('/evaluations/monitoring/resources', filters ? { params: filters } : undefined);
+    return monitorResourcesPageSchema.parse(response.data);
+  },
+  getMonitorTrend: async (filters: MonitorFilters): Promise<MonitorTrend> => {
+    const response = await api.get('/evaluations/monitoring/resources/trend', { params: filters });
+    return monitorTrendSchema.parse(response.data);
   },
   createSuite: async (data: { name: string; description?: string; resourceKind: ResourceKind; cases: EvaluationCase[] }) => {
     const { resourceKind, ...body } = data;
