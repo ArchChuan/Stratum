@@ -519,15 +519,16 @@ func TestChatStore_ValidTenantIDPassesUnifiedValidation(t *testing.T) {
 
 func TestDecodeSources(t *testing.T) {
 	cases := []struct {
-		name    string
-		raw     string
-		wantLen int
-		wantErr bool
+		name      string
+		raw       string
+		wantLen   int
+		wantErr   bool
+		wantTitle string // 非空时额外断言首条来源的 DocumentTitle 已从 camelCase 字段解码
 	}{
 		{name: "empty", raw: "", wantLen: 0},
 		{name: "null is empty slice", raw: "null", wantLen: 0},
 		{name: "empty array", raw: "[]", wantLen: 0},
-		{name: "camelCase round trip", raw: `[{"workspaceId":"ws-1","workspaceName":"产品库","chunkId":"c-1","documentId":"doc-1","documentTitle":"用户手册.pdf","snippet":"s","score":0.91,"hasScore":true}]`, wantLen: 1},
+		{name: "camelCase round trip", raw: `[{"workspaceId":"ws-1","workspaceName":"产品库","chunkId":"c-1","documentId":"doc-1","documentTitle":"用户手册.pdf","snippet":"s","score":0.91,"hasScore":true}]`, wantLen: 1, wantTitle: "用户手册.pdf"},
 		{name: "malformed", raw: `{`, wantErr: true},
 	}
 	for _, tc := range cases {
@@ -548,8 +549,8 @@ func TestDecodeSources(t *testing.T) {
 			if got == nil {
 				t.Fatal("decodeSources must return non-nil slice")
 			}
-			if tc.name == "camelCase round trip" && got[0].DocumentTitle != "用户手册.pdf" {
-				t.Fatalf("want camelCase fields decoded, got %#v", got[0])
+			if tc.wantTitle != "" && got[0].DocumentTitle != tc.wantTitle {
+				t.Fatalf("want camelCase DocumentTitle %q decoded, got %#v", tc.wantTitle, got[0])
 			}
 		})
 	}

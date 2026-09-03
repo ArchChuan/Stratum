@@ -483,7 +483,8 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 	result.Latency = time.Since(startTime)
 
 	rs.expandParentContext(ctx, req, result)
-	// 来源卡片需文档名：expandParentContext 后回填以覆盖其追加的 parent 分块。
+	// 来源卡片需文档名：decorateSourceTitles 仅按 DocumentID 从文档索引回填 title，
+	// 与 expandParentContext（只填 ParentContent、不增删分块）无顺序依赖，置于其后仅为聚合收尾。
 	rs.decorateSourceTitles(ctx, req.TenantID, req.WorkspaceID, result.Sources)
 
 	rs.logger.Info("RAG query completed",
