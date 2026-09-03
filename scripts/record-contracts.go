@@ -124,6 +124,8 @@ func recordDDDRoutes(ddRouter *gin.Engine, jwtSvc iamport.TokenService, outDir s
 		"GET /evaluations/suites": true, "GET /evaluations/runs": true,
 		"GET /evaluations/candidates": true, "GET /evaluations/experiments": true,
 		"GET /evaluations/resources/:kind/:id/timeline": true,
+		"GET /evaluations/monitoring/resources":         true,
+		"GET /evaluations/monitoring/resources/trend":   true,
 		"POST /evaluations/candidates/:id/reject":       true,
 		"POST /evaluations/experiments/:id/pause":       true,
 		"POST /evaluations/experiments/:id/promote":     true,
@@ -205,6 +207,11 @@ func recordEvalRoute(router http.Handler, tokens iamport.TokenService, method, r
 			path = strings.ReplaceAll(routePath, ":id", "candidate-1")
 		}
 	}
+	// 评测监控 GET 端点（spec §4.2）附加固定 query：resources 回显 window=from/to
+	// （空窗会兜底 live now，golden 不可复现）；trend 的 resource_kind+id 必填。
+	if method == http.MethodGet && strings.HasPrefix(routePath, "/evaluations/monitoring/") {
+		path = monitoringQueryPath(routePath, path)
+	}
 	c := Case{Name: "authenticated-success", Method: method, Path: path}
 	if method == http.MethodPost {
 		c.Name = "authenticated-conflict"
@@ -225,6 +232,16 @@ func recordEvalRoute(router http.Handler, tokens iamport.TokenService, method, r
 	}
 	out, _ := json.MarshalIndent([]Case{c}, "", "  ")
 	writeGolden(outPath, out)
+}
+
+// monitoringQueryPath 为评测监控 GET 端点附加确定性 query（spec §4.2）。固定
+// 窗口与 stub 样例的 time.Date 常量一致，保证 regen 逐字节可复现。
+func monitoringQueryPath(routePath, path string) string {
+	const fixedWindow = "from=2026-08-27T00:00:00Z&to=2026-09-03T00:00:00Z"
+	if strings.HasSuffix(routePath, "/trend") {
+		return path + "?resource_kind=skill&resource_id=resource-1&" + fixedWindow
+	}
+	return path + "?" + fixedWindow
 }
 
 // isReviewRoute 判断是否为 P1c 评审池路由（查询 + 决策）。
