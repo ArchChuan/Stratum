@@ -53,6 +53,9 @@ type Evaluation struct {
 	ObservationService   *evalapp.ObservationService
 	ReviewService        *evalapp.ReviewService
 	DeleteService        *evalapp.DeleteService
+	// ResourceRollbackExecutor L3 资源回滚执行器（agent/knowledge/skill/canary）。
+	// nil = 无任何可回滚后端（未装配）；Task 4 executeResourceRollback / T13 gate auto 消费。
+	ResourceRollbackExecutor evalport.ResourceRollbackExecutor
 }
 
 type evaluationResourceRouter struct {
@@ -1313,6 +1316,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	}
 	c.applyAgentRevisionResolvers(experimentService, runtimeAgentAdapter, runtimeMCPAdapter, runtimeKnowledgeAdapter)
 	c.applySkillEvaluationReader(experimentRepo)
+	c.Evaluation.ResourceRollbackExecutor = c.buildResourceRollbackExecutor(experimentRepo) // L3 资源回滚执行器（Task 3/T11；Task 4/T13 消费）
 	c.buildApprovalActionExecutor()
 	return nil
 }
