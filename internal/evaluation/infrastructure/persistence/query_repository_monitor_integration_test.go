@@ -15,8 +15,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// fixture 时间轴（UTC）。Window 为 [day1, day4)（含 day1..day3 全天，观测/run 落在
-// 各日 10:00/12:00，to 取 2026-09-04 00:00 才把 day3 的 obs3/runB 纳入窗口）。
+// fixture 时间轴（UTC）。Window 端点含 to（SQL 为 `>= from AND <= to`）：
+// from=day1 00:00、to=09-04 00:00，fixture 观测/run 均落在 day1..day3、严格小于 to，
+// 故 day3 全天（obs3/runA2/runB）全部纳入窗口。
 // 预期数值（手推）：
 //
 //	tenant_a / skill "sk1"：2 观测
@@ -24,7 +25,7 @@ import (
 //	  behavior：rule_hits 1（obs1 rule 长度1），retry 1，escalation 0，abandonment 0，
 //	  verdict pass 1 / flag 1 / block 0
 //	  cost：tokens 30 cost 0.03，avg_latency (100+300)/2=200，p95=100+0.95*200=290
-//	  process：runA（window 内最近 succeeded，process_pass_rate 0.5）
+//	  process：runA2（window 内最近 succeeded，process_pass_rate 0.8；runA 0.5 仅作趋势点）
 //	tenant_a / skill "sk2"：1 观测
 //	  quality：completeness 样本1 1.0 conf1.0
 //	  behavior：abandonment 1，verdict block 1；rule_hits 0
@@ -57,7 +58,7 @@ func TestPgCenterQueryRepositoryMonitorResourcesAndTrend(t *testing.T) {
 	seedMonitorA(t, ctx, pool, "tenant_monitor_one")
 	seedMonitorB(t, ctx, pool, "tenant_monitor_two")
 
-	// to 取 day4 00:00（排他上界），把 day3 全天的观测/run 纳入窗口。
+	// to 取 09-04 00:00；SQL 端点含 to（`<= $to`），fixture 观测/run 均严格小于 to，day3 全天纳入窗口。
 	from := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	to := time.Date(2026, 9, 4, 0, 0, 0, 0, time.UTC)
 	repo := NewPgCenterQueryRepository(pool)
@@ -86,8 +87,11 @@ func TestPgCenterQueryRepositoryMonitorResourcesAndTrend(t *testing.T) {
 		sk1.Cost.P95LatencyMS == nil || *sk1.Cost.P95LatencyMS != 290 {
 		t.Fatalf("sk1 cost = %+v", sk1.Cost)
 	}
-	if sk1.Process == nil || sk1.Process.RunID != "runA" || sk1.Process.ProcessPassRate != 0.5 {
-		t.Fatalf("sk1 process = %+v", sk1.Process)
+	// sk1 窗口内有两条 succeeded run（runA day2、runA2 day3）：LATERAL `ORDER BY created_at DESC LIMIT 1`
+	// 必须取最近一条 runA2；若 LIMIT 1 被删，观测会 join 两条 run 并拆成多行/放大 sample_count，
+	// 上面的 SampleCount==2 与下列 RunID 断言即会失败（防横向 fanout 回归）。
+	if sk1.Process == nil || sk1.Process.RunID != "runA2" || sk1.Process.ProcessPassRate != 0.8 {
+		t.Fatalf("sk1 process = %+v, want runA2 0.8", sk1.Process)
 	}
 	faith := findQuality(sk1.Quality, "faithfulness")
 	if faith == nil || faith.Samples != 2 || faith.PassRate != 0.5 || faith.AvgScore != 0.5 || faith.AvgConfidence != 0.8 {
@@ -155,8 +159,12 @@ func TestPgCenterQueryRepositoryMonitorResourcesAndTrend(t *testing.T) {
 	if day2Bucket.SampleCount != 1 || day2Bucket.Behavior.RetryCount != 1 || day2Bucket.Behavior.Verdict.Flag != 1 {
 		t.Fatalf("day2 bucket = %+v", day2Bucket)
 	}
-	if len(trend.Runs) != 1 || trend.Runs[0].RunID != "runA" || trend.Runs[0].ProcessPassRate != 0.5 {
-		t.Fatalf("trend runs = %+v", trend.Runs)
+	// trend runs 应含窗口内全部 succeeded run（runA day2、runA2 day3）且按 created_at 升序。
+	if len(trend.Runs) != 2 ||
+		trend.Runs[0].RunID != "runA" || trend.Runs[0].ProcessPassRate != 0.5 ||
+		trend.Runs[1].RunID != "runA2" || trend.Runs[1].ProcessPassRate != 0.8 ||
+		!trend.Runs[0].RunCreatedAt.Before(trend.Runs[1].RunCreatedAt) {
+		t.Fatalf("trend runs = %+v, want [runA(day2), runA2(day3)] 升序", trend.Runs)
 	}
 
 	// trend 无 run 的资源：runs 空数组
@@ -190,6 +198,7 @@ func seedMonitorA(t *testing.T, ctx context.Context, pool *pgxpool.Pool, schema 
 	day2 := time.Date(2026, 9, 2, 10, 0, 0, 0, time.UTC)
 	day3 := time.Date(2026, 9, 3, 10, 0, 0, 0, time.UTC)
 	runA := time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
+	runA2 := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC) // 窗口内第二条 succeeded（晚于 runA）
 	runB := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
 	rows := []struct {
 		id, kind, resourceID string
@@ -221,6 +230,7 @@ func seedMonitorA(t *testing.T, ctx context.Context, pool *pgxpool.Pool, schema 
 		at                     time.Time
 	}{
 		{id: "runA", resourceID: "sk1", status: "succeeded", metrics: `{"process_pass_rate":0.5}`, at: runA},
+		{id: "runA2", resourceID: "sk1", status: "succeeded", metrics: `{"process_pass_rate":0.8}`, at: runA2},
 		{id: "runB", resourceID: "sk2", status: "failed", metrics: `{"process_pass_rate":0.2}`, at: runB},
 	}
 	for _, run := range runs {

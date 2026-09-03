@@ -114,6 +114,12 @@ func TestQueryServiceMonitorNormalizesWindowAndLimit(t *testing.T) {
 	if !repo.monFilter.To.After(*repo.monFilter.From) {
 		t.Fatalf("window invalid: %v -> %v", repo.monFilter.From, repo.monFilter.To)
 	}
+	// 缺省窗口语义：近 EvalMonitorWindowDays 天。From/To 各自取 time.Now 有亚毫秒级先后差，
+	// 用 ≤1s 容差锁定真实跨度，防回归把兜底改成 1 小时等短窗仍通过。
+	wantSpan := time.Duration(constants.EvalMonitorWindowDays) * 24 * time.Hour
+	if got := repo.monFilter.To.Sub(*repo.monFilter.From); got < wantSpan || got-wantSpan > time.Second {
+		t.Fatalf("window span = %v, want ~%v", got, wantSpan)
+	}
 	if repo.monFilter.Limit != constants.EvalMonitorResourceLimitDefault {
 		t.Fatalf("default limit = %d", repo.monFilter.Limit)
 	}
