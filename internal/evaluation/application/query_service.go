@@ -127,6 +127,9 @@ func normalizeMonitorFilter(filter port.MonitorFilter) (port.MonitorFilter, erro
 	if err := validateMonitorFilter(filter); err != nil {
 		return filter, err
 	}
+	if filter.Limit < 0 {
+		return filter, fmt.Errorf("%w: negative limit", domain.ErrInvalidCenterQuery)
+	}
 	filter = defaultMonitorWindow(filter)
 	if filter.Limit == 0 {
 		filter.Limit = constants.EvalMonitorResourceLimitDefault

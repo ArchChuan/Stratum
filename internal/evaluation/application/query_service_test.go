@@ -137,6 +137,7 @@ func TestQueryServiceMonitorRejectsBadFilters(t *testing.T) {
 		{ResourceKind: "invalid"},
 		{ResourceID: "only-id"},
 		{From: &after, To: &before},
+		{Limit: -1},
 	}
 	for _, filter := range cases {
 		if _, err := svc.MonitorResources(context.Background(), "tenant-1", filter); !errors.Is(err, domain.ErrInvalidCenterQuery) {
