@@ -94,13 +94,15 @@ func gateObs() domain.EvalObservation {
 	}
 }
 
-// gateResourceObs 构造一条资源源观测（kind=skill、resourceID=s1、version=rev-9）。
+// gateResourceObs 构造一条资源源观测（kind=skill、resourceID=s1、ref=rev-9 已执行
+// revision、version=canary-v1 变体标签）。Ref 与 Version 分离：台账 RevisionID 落 Ref
+// （与生产 buildObservation 的填充一致），绝不落变体标签。
 func gateResourceObs() domain.EvalObservation {
 	return domain.EvalObservation{
 		Resource: domain.ObservationResourceRef{Kind: "skill", ResourceID: "s1"},
 		Param: domain.ParamVersion{
 			Source:   domain.ParamSourceResource,
-			Resource: domain.ResourceParamVersion{Ref: "rev-9", Version: "rev-9"},
+			Resource: domain.ResourceParamVersion{Ref: "rev-9", Version: "canary-v1"},
 		},
 	}
 }
@@ -203,58 +205,96 @@ func TestHandleObservationCooldownSuppressesRapidRepeats(t *testing.T) {
 }
 
 func TestGateTargetForObservation(t *testing.T) {
-	// 纯平台锚点（无资源版本）→ 平台组目标（与 buildObservation 纯平台观测一致：
-	// Source unknown、Platform.GroupKey+seq 已填）。
-	platform := domain.EvalObservation{
-		Resource: domain.ObservationResourceRef{Kind: "agent", ResourceID: "a1"},
-		Param: domain.ParamVersion{Source: domain.ParamSourceUnknown,
-			Platform: domain.PlatformParamVersion{GroupKey: "agent", VersionSeq: 3}},
+	cases := []struct {
+		name   string
+		obs    domain.EvalObservation
+		wantOK bool
+		want   domain.GateTarget
+	}{
+		{
+			name: "platform anchor only maps to platform group target",
+			obs: domain.EvalObservation{
+				Resource: domain.ObservationResourceRef{Kind: "agent", ResourceID: "a1"},
+				Param: domain.ParamVersion{Source: domain.ParamSourceUnknown,
+					Platform: domain.PlatformParamVersion{GroupKey: "agent", VersionSeq: 3}},
+			},
+			wantOK: true,
+			want:   domain.GateTarget{Scope: domain.ScopePlatform, GroupKey: "agent", VersionSeq: 3},
+		},
+		{
+			// 非变体产品资源观测（执行 revision 在 Ref、Version 空）→ 资源目标，
+			// RevisionID 必须落 Ref（修复前该 case 漏判为非锚点/误判平台）。
+			name: "resource ref without variant anchors resource target",
+			obs: domain.EvalObservation{
+				Resource: domain.ObservationResourceRef{Kind: "skill", ResourceID: "s1"},
+				Param: domain.ParamVersion{Source: domain.ParamSourceResource,
+					Resource: domain.ResourceParamVersion{Ref: "rev-9"}},
+			},
+			wantOK: true,
+			want:   domain.GateTarget{Scope: domain.ScopeResource, Kind: "skill", ResourceID: "s1", RevisionID: "rev-9"},
+		},
+		{
+			// 变体观测携带 Ref 与 Version（canary-v1）→ RevisionID 落 Ref，绝不落变体标签。
+			name: "resource revision is the executed ref not the variant label",
+			obs: domain.EvalObservation{
+				Resource: domain.ObservationResourceRef{Kind: "skill", ResourceID: "s1"},
+				Param: domain.ParamVersion{Source: domain.ParamSourceResource,
+					Resource: domain.ResourceParamVersion{Ref: "rev-9", Version: "canary-v1"}},
+			},
+			wantOK: true,
+			want:   domain.GateTarget{Scope: domain.ScopeResource, Kind: "skill", ResourceID: "s1", RevisionID: "rev-9"},
+		},
+		{
+			// 只有变体标签、无已执行 revision（Ref 空）→ 非锚点（修复前被误判资源并
+			// 把变体标签当 RevisionID 落库）。
+			name: "resource variant without executed ref is not anchored",
+			obs: domain.EvalObservation{
+				Resource: domain.ObservationResourceRef{Kind: "skill", ResourceID: "s1"},
+				Param: domain.ParamVersion{Source: domain.ParamSourceResource,
+					Resource: domain.ResourceParamVersion{Version: "canary-v1"}},
+			},
+			wantOK: false,
+		},
+		{
+			// 双锚点（平台+资源 Ref，Source both）→ 资源优先（回滚被测资源以恢复行为）。
+			name: "both platform and resource ref anchors resource target",
+			obs: domain.EvalObservation{
+				Resource: domain.ObservationResourceRef{Kind: "agent", ResourceID: "a1"},
+				Param: domain.ParamVersion{Source: domain.ParamSourceBoth,
+					Platform: domain.PlatformParamVersion{GroupKey: "agent", VersionSeq: 3},
+					Resource: domain.ResourceParamVersion{Ref: "rev-9", Version: "canary-v1"}},
+			},
+			wantOK: true,
+			want:   domain.GateTarget{Scope: domain.ScopeResource, Kind: "agent", ResourceID: "a1", RevisionID: "rev-9"},
+		},
+		{
+			name: "platform group without published seq is not anchored",
+			obs: domain.EvalObservation{
+				Resource: domain.ObservationResourceRef{Kind: "agent", ResourceID: "a1"},
+				Param: domain.ParamVersion{
+					Platform: domain.PlatformParamVersion{GroupKey: "agent", VersionSeq: 0}},
+			},
+			wantOK: false,
+		},
+		{
+			name: "observation without any anchor is not anchored",
+			obs: domain.EvalObservation{
+				Resource: domain.ObservationResourceRef{Kind: "agent", ResourceID: "a1"},
+				Param:    domain.ParamVersion{},
+			},
+			wantOK: false,
+		},
 	}
-	tgt, ok := domain.GateTargetForObservation(platform)
-	if !ok || tgt.Scope != domain.ScopePlatform || tgt.GroupKey != "agent" || tgt.VersionSeq != 3 {
-		t.Fatalf("platform mapping = %+v ok=%v", tgt, ok)
-	}
-
-	// 资源版本锚点 → 资源目标（Kind+ResourceID+RevisionID=Version）。
-	resource := domain.EvalObservation{
-		Resource: domain.ObservationResourceRef{Kind: "skill", ResourceID: "s1"},
-		Param: domain.ParamVersion{Source: domain.ParamSourceResource,
-			Resource: domain.ResourceParamVersion{Ref: "rev-9", Version: "rev-9"}},
-	}
-	tgt, ok = domain.GateTargetForObservation(resource)
-	if !ok || tgt.Scope != domain.ScopeResource || tgt.Kind != "skill" || tgt.ResourceID != "s1" || tgt.RevisionID != "rev-9" {
-		t.Fatalf("resource mapping = %+v ok=%v", tgt, ok)
-	}
-
-	// 双锚点（平台+资源都带版本，Source both）→ 资源优先（回滚被测资源以恢复行为）。
-	both := domain.EvalObservation{
-		Resource: domain.ObservationResourceRef{Kind: "agent", ResourceID: "a1"},
-		Param: domain.ParamVersion{Source: domain.ParamSourceBoth,
-			Platform: domain.PlatformParamVersion{GroupKey: "agent", VersionSeq: 3},
-			Resource: domain.ResourceParamVersion{Ref: "rev-9", Version: "rev-9"}},
-	}
-	tgt, ok = domain.GateTargetForObservation(both)
-	if !ok || tgt.Scope != domain.ScopeResource || tgt.ResourceID != "a1" || tgt.RevisionID != "rev-9" {
-		t.Fatalf("both mapping = %+v ok=%v", tgt, ok)
-	}
-
-	// 平台组带 key 但 seq 0（未发布 unknown）→ 非锚点，不可评估。
-	noSeq := domain.EvalObservation{
-		Resource: domain.ObservationResourceRef{Kind: "agent", ResourceID: "a1"},
-		Param: domain.ParamVersion{
-			Platform: domain.PlatformParamVersion{GroupKey: "agent", VersionSeq: 0}},
-	}
-	if _, ok := domain.GateTargetForObservation(noSeq); ok {
-		t.Fatal("platform anchor without seq must not map to a gate target")
-	}
-
-	// 无任何锚点 → 不可评估。
-	unversioned := domain.EvalObservation{
-		Resource: domain.ObservationResourceRef{Kind: "agent", ResourceID: "a1"},
-		Param:    domain.ParamVersion{},
-	}
-	if _, ok := domain.GateTargetForObservation(unversioned); ok {
-		t.Fatal("unversioned observation must not map to a gate target")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tgt, ok := domain.GateTargetForObservation(tc.obs)
+			if ok != tc.wantOK {
+				t.Fatalf("mapping ok = %v, want %v (target=%+v)", ok, tc.wantOK, tgt)
+			}
+			if tc.wantOK && tgt != tc.want {
+				t.Fatalf("mapping = %+v, want %+v", tgt, tc.want)
+			}
+		})
 	}
 }
 

@@ -17,7 +17,8 @@ const (
 
 // GateTarget 标识一次门禁评估的目标参数集（平台键组或被测资源）。
 // 平台：GroupKey（evaluation/agent/memory/trace）+ 生效 VersionSeq；
-// 资源：Kind + ResourceID + RevisionID（obs.Param.Resource.Version 映射，裁决 R15 关联）。
+// 资源：Kind + ResourceID + RevisionID（obs.Param.Resource.Ref 映射：Ref 是观测携带的
+// 被测资源已执行 revision；Version 只是变体标签，不作为 revision 锚点）。
 type GateTarget struct {
 	Scope      Scope  `json:"scope"`
 	GroupKey   string `json:"group_key,omitempty"` // 平台分组；资源空
@@ -152,16 +153,18 @@ type GateActionRecord struct {
 	ApprovalID string         // 人工审批 agent_tool_approvals id（后续卡回填）
 }
 
-// GateTargetForObservation 从一条观测推导门禁目标。锚点判定与 buildObservation 的
-// 实际填充一致（纯平台观测 Source 多为 unknown/platform，resource 锚点看
-// ResourceParamVersion.Version 而非 Ref）：平台锚点（Platform.GroupKey 非空且
-// VersionSeq>0）且无资源版本锚点 → 平台组目标；否则资源版本锚点存在
-// （obs.Resource.ResourceID + Param.Resource.Version）→ 资源目标（RevisionID 取
-// Param.Resource.Version）；两者皆无 → 不可评估（裁决 R7：mapping 只认锚点）。
+// GateTargetForObservation 从一条观测推导门禁目标。资源观测的锚点是已执行的资源
+// revision（Param.Resource.Ref，来自执行证据 Assignments 的 RevisionID）：观测携带
+// Ref 即锚定被测资源，RevisionID 取 Ref。Version 只表示变体标签（canary 等，普通
+// 资源运行恒空），不能参与锚定判定，否则非变体产品资源观测会被漏判、变体标签会
+// 被当 revision 落库。平台锚点（Platform.GroupKey 非空且 VersionSeq>0）且无资源
+// Ref 锚点 → 平台组目标；资源 Ref 锚点存在（obs.Resource.ResourceID + Resource.Ref）
+// → 资源目标（有平台锚点时资源优先：回滚被测资源才可能恢复行为）；两者皆无 →
+// 不可评估（mapping 只认锚点）。
 func GateTargetForObservation(obs EvalObservation) (GateTarget, bool) {
 	p := obs.Param
 	platformAnchored := p.Platform.GroupKey != "" && p.Platform.VersionSeq > 0
-	resourceAnchored := obs.Resource.ResourceID != "" && p.Resource.Version != ""
+	resourceAnchored := obs.Resource.ResourceID != "" && p.Resource.Ref != ""
 	switch {
 	case platformAnchored && !resourceAnchored:
 		return GateTarget{
@@ -170,13 +173,11 @@ func GateTargetForObservation(obs EvalObservation) (GateTarget, bool) {
 			VersionSeq: p.Platform.VersionSeq,
 		}, true
 	case resourceAnchored:
-		// 双锚点（Source both）也归资源：观测反映被测资源行为，回滚资源版本
-		// 才可能恢复行为；平台版本写回只用于纯平台观测。
 		return GateTarget{
 			Scope:      ScopeResource,
 			Kind:       string(obs.Resource.Kind),
 			ResourceID: obs.Resource.ResourceID,
-			RevisionID: p.Resource.Version,
+			RevisionID: p.Resource.Ref,
 		}, true
 	default:
 		return GateTarget{}, false
