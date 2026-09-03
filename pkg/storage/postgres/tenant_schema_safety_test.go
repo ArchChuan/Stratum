@@ -170,3 +170,51 @@ func TestTenantSchemaEvaluationDeleteCreatedByColumns(t *testing.T) {
 		}
 	}
 }
+
+// TestTenantSchemaContainsGateActionDDL 守护分层门禁台账 DDL（spec §4.1.2）：
+// eval_gate_actions 幂等创建 + verdict 时间索引 + 门禁双索引 + behavior_anomaly 枚举升级。
+func TestTenantSchemaContainsGateActionDDL(t *testing.T) {
+	ddl, err := os.ReadFile("tenant_schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(ddl)
+
+	start := strings.Index(text, "CREATE TABLE IF NOT EXISTS eval_gate_actions (")
+	if start == -1 {
+		t.Fatal("tenant schema missing eval_gate_actions")
+	}
+	if strings.Contains(text, "CREATE TABLE eval_gate_actions") {
+		t.Fatal("tenant schema has non-idempotent eval_gate_actions DDL")
+	}
+	end := strings.Index(text[start:], ");")
+	if end == -1 {
+		t.Fatal("tenant schema has unterminated eval_gate_actions DDL")
+	}
+	body := strings.ToLower(text[start : start+end])
+	for _, col := range []string{
+		"scope text not null check (scope in ('platform','resource'))",
+		"target jsonb not null", "layer text not null", "decision text not null",
+		"evidence jsonb not null", "host_tenant_id text not null",
+	} {
+		if !strings.Contains(body, col) {
+			t.Fatalf("eval_gate_actions missing %s", col)
+		}
+	}
+
+	for _, idx := range []string{
+		"idx_eval_observations_verdict_time", "idx_eval_gate_actions_target_time",
+		"idx_eval_gate_actions_decision",
+	} {
+		if !strings.Contains(text, "CREATE INDEX IF NOT EXISTS "+idx) {
+			t.Fatalf("tenant schema missing idempotent index %s", idx)
+		}
+	}
+	// behavior_anomaly 必须出现在 CREATE 约束体与 DROP/ADD 升级块（历史租户）。
+	if strings.Count(text, "'behavior_anomaly'") < 2 {
+		t.Fatal("behavior_anomaly must appear in both CREATE constraint and DROP/ADD upgrade")
+	}
+	if !strings.Contains(text, "DROP CONSTRAINT IF EXISTS eval_review_items_trigger_reason_check") {
+		t.Fatal("tenant schema missing idempotent trigger_reason DROP/ADD upgrade")
+	}
+}

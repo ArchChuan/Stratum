@@ -74,4 +74,13 @@ type PlatformStore interface {
 	// first), including each version's immutable snapshot — the version history
 	// view and the diff against base_version_id both read from here.
 	ListVersions(ctx context.Context, groupKey string) ([]PlatformVersion, error)
+
+	// GetVersion returns one historical published version by group+version_seq
+	// (the gate writes eval_state onto a version the observation anchored to).
+	// Returns domain.ErrVersionNotFound when the version does not exist.
+	GetVersion(ctx context.Context, groupKey string, versionSeq int64) (PlatformVersion, error)
+	// UpdateEvalState records the gate's evaluation state on a version
+	// (e.g. "rollback_recommended"). Returns domain.ErrVersionNotFound when the
+	// version does not exist. eval_state_updated_at/by are stamped server-side.
+	UpdateEvalState(ctx context.Context, groupKey string, versionSeq int64, state, actor string) error
 }

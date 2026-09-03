@@ -44,9 +44,10 @@ type CreateEvaluationSuiteRequest struct {
 }
 
 type EnqueueEvaluationRunRequest struct {
-	Resource        EvaluationResourceRef `json:"resource" binding:"required"`
-	SuiteRevisionID string                `json:"suite_revision_id" binding:"required"`
-	IdempotencyKey  string                `json:"idempotency_key" binding:"required,max=255"`
+	Resource             EvaluationResourceRef `json:"resource" binding:"required"`
+	SuiteRevisionID      string                `json:"suite_revision_id" binding:"required"`
+	IdempotencyKey       string                `json:"idempotency_key" binding:"required,max=255"`
+	PlatformSeqOverrides map[string]int64      `json:"platform_seq_overrides"`
 }
 
 type EvaluationJobResponse struct {
