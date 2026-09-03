@@ -449,6 +449,60 @@ func (r *PlatformRepository) ListVersions(
 	return out, nil
 }
 
+// GetVersion 读一个历史版本的元数据（门禁写 eval_state 前校验存在性 / 取 seq 用）。
+// 按 group_key + version_seq 寻址；命中 0 行 → ErrVersionNotFound。
+func (r *PlatformRepository) GetVersion(
+	ctx context.Context,
+	groupKey string,
+	versionSeq int64,
+) (port.PlatformVersion, error) {
+	const q = `SELECT id, group_key, version_seq, status, snapshot
+		FROM public.platform_config_versions WHERE group_key = $1 AND version_seq = $2`
+	var (
+		v        port.PlatformVersion
+		snapshot []byte
+	)
+	if err := r.pool.QueryRow(ctx, q, groupKey, versionSeq).
+		Scan(&v.ID, &v.GroupKey, &v.VersionSeq, &v.Status, &snapshot); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return port.PlatformVersion{}, domain.ErrVersionNotFound
+		}
+		return port.PlatformVersion{}, fmt.Errorf("get platform version %s seq %d: %w", groupKey, versionSeq, err)
+	}
+	if len(snapshot) > 0 {
+		if err := json.Unmarshal(snapshot, &v.Snapshot); err != nil {
+			return port.PlatformVersion{}, fmt.Errorf(
+				"get platform version %s seq %d: decode snapshot: %w", groupKey, versionSeq, err)
+		}
+	}
+	return v, nil
+}
+
+// UpdateEvalState 写门禁状态（分层门禁 P1）：命中 0 行说明版本不存在 → ErrVersionNotFound。
+// 注入的 pool 无 Exec，沿用 SetValue 的 QueryRow+RETURNING 单语句写模式；eval_state 三列
+// （eval_state/eval_state_updated_at/eval_state_updated_by）由 044 迁移提供。
+func (r *PlatformRepository) UpdateEvalState(
+	ctx context.Context,
+	groupKey string,
+	versionSeq int64,
+	state, actor string,
+) error {
+	err := r.pool.QueryRow(ctx,
+		`UPDATE public.platform_config_versions
+		 SET eval_state = $3, eval_state_updated_at = NOW(), eval_state_updated_by = $4
+		 WHERE group_key = $1 AND version_seq = $2
+		 RETURNING group_key`,
+		groupKey, versionSeq, state, actor,
+	).Scan(new(string))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ErrVersionNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("update platform version %s seq %d eval_state: %w", groupKey, versionSeq, err)
+	}
+	return nil
+}
+
 // lockGroup serializes all per-group version/label operations on one FOR
 // UPDATE row so MAX(version_seq)+1 and label moves never race.
 func lockGroup(ctx context.Context, tx pgx.Tx, groupKey string) error {

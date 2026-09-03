@@ -60,6 +60,7 @@ func NewParametersRegistry() *ParametersRegistry {
 	r.registerOptimizerParams()
 	r.registerObservationParams()
 	r.registerRuleGuardParams()
+	r.registerGateParams()
 	r.registerJudgeParams()
 	r.registerFactCheckParams()
 	r.registerTraceParams()
@@ -502,6 +503,27 @@ func (r *ParametersRegistry) registerRuleGuardParams() {
 		DisplayName: "规则护栏 Denylist", Description: "逗号分隔的禁止工具名列表(命中即拦截)",
 		ValueType: TypeString, Default: "",
 		VisualHint:  VisualHint{Control: ControlTextarea},
+		Optimizable: true,
+	})
+}
+
+// registerGateParams 是分层门禁（spec §2/§4.2.2）的平台级参数。enabled 默认 false：
+// 平台未显式开启时观测链路不评估门禁（fail open 于门禁层，开启后规则才生效）。
+// auto_rollback_resources 只影响资源 scope 决策（平台 scope 恒 rollback_manual）。
+// 仅注册不播种：PlatformValues 对快照缺失 key 回退 registry default（false）。
+func (r *ParametersRegistry) registerGateParams() {
+	_ = r.Register(ParameterDefinition{
+		Key: "evaluation.gate.enabled", Scope: ScopePlatform, Category: "evaluation",
+		DisplayName: "启用分层门禁", Description: "运行态评测门禁评估与回滚建议(默认关)",
+		ValueType: TypeBool, Default: false,
+		VisualHint:  VisualHint{Control: ControlToggle},
+		Optimizable: true,
+	})
+	_ = r.Register(ParameterDefinition{
+		Key: "evaluation.gate.auto_rollback_resources", Scope: ScopePlatform, Category: "evaluation",
+		DisplayName: "资源自动回滚", Description: "资源 scope 劣化允许自动回滚(平台 scope 恒人工)",
+		ValueType: TypeBool, Default: false,
+		VisualHint:  VisualHint{Control: ControlToggle},
 		Optimizable: true,
 	})
 }
