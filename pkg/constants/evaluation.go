@@ -147,3 +147,15 @@ const (
 	GateAutoRollbackMaxPerDay   = 3
 	RunRegressionDeltaThreshold = -0.05
 )
+
+// 评测指标监控面板（EvaluationCenterPage「监控」tab，spec 2026-09-03 §4.3）行为边界：
+// 默认监控窗口天数与资源行 limit 默认/上限。前端 web/src/constants 各持默认窗口天数
+// （spec §4.3：两端各持有默认值并在 UI 明示，后端为权威兜底）。
+const (
+	// EvalMonitorWindowDays 面板默认监控窗口（近 N 天，含端点）。
+	EvalMonitorWindowDays = 7
+	// EvalMonitorResourceLimitDefault 资源行摘要默认返回条数（按观测样本数降序）。
+	EvalMonitorResourceLimitDefault = 20
+	// EvalMonitorResourceLimitMax 资源行 limit 上限。
+	EvalMonitorResourceLimitMax = 100
+)
