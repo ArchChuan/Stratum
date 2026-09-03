@@ -383,8 +383,8 @@ type AgentExecutionCheckpoint struct {
 	ExpiresAt     time.Time `json:"expires_at"`
 }
 
-// RuleBlock 记录一次规则护栏即时拦截（§4.1）。仅信号级：进观测事件供评测侧
-// 归集，不改变执行错误语义（拦截走 RuleBlockedError 返回）。
+// RuleBlock 记录一次规则护栏命中（拦截或仅检测，O4 检测恒开：denylist 命中不论 enabled
+// 均写入 ctx 累积器供观测产出 rule 信号）。
 type RuleBlock struct {
 	Rule    string `json:"rule"`
 	Tool    string `json:"tool"`

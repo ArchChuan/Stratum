@@ -709,6 +709,23 @@ spec:
               T4 红线级：按 runbook 立即人工确认并处置。
             dashboard_url: https://stratum.grafana/d/evaluation
             runbook_url: /docs/operations/alerts/stratum-evaluation.md#stratum-eval-rule-blocked
+        - alert: StratumEvalRuleDisabled
+          expr: |
+            increase(eval_rule_hit_total{verdict="detected"}[15m]) > 0
+          for: 5m
+          labels:
+            severity: warning
+            service: evaluation
+            component: runtime-observation
+            environment: remote-test
+          annotations:
+            summary: 规则护栏命中但未拦截
+            description: >-
+              检测到规则护栏命中但未拦截：evaluation.ruleguard.enabled=false 但 denylist 非空，
+              命中 verdict=detected 持续 5 分钟。护栏当前只检测不拦截，命中工具照常执行。若该
+              工具应禁用，请开启 evaluation.ruleguard.enabled；否则收紧 denylist 移除误报。
+            dashboard_url: https://stratum.grafana/d/evaluation
+            runbook_url: /docs/operations/alerts/stratum-evaluation.md#stratum-eval-rule-disabled
         - alert: StratumEvalJudgeDegraded
           # 事件计数阈值而非瞬时 rate>0：任一 30 分钟窗口内 judge_unavailable 累计 ≥ 3 次
           # 且持续 15 分钟才告警，隔离单次瞬时抖动。恢复后需等失败事件滚出窗口自动消除。

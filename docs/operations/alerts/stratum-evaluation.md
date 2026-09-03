@@ -92,3 +92,21 @@ run 级回归劣化判异（相对基线 run 的维度 delta 跌破 `RunRegressi
   run 的 `metrics.by_dimension`（纯函数 `application.CompareRunRegression`；基线为同 suite
   revision 的同 resource 最近 completed run）。
 - 处置：真回归 → 走门禁流程（人工确认/回滚候选）；误报 → 核对基线选择与维度 delta 阈值。
+
+<a id="stratum-eval-rule-disabled"></a>
+
+## StratumEvalRuleDisabled
+
+规则护栏命中但未拦截：`evaluation.ruleguard.enabled=false` 但 `denylist` 非空（O4 检测恒开 + 执行受控的提示告警）。
+
+- 语义：任一 15 分钟窗口内 `eval_rule_hit_total{verdict="detected"}` 命中且持续 5 分钟触发。
+  verdict=detected 表示护栏「检测到但未拦截」；`StratumEvalRuleBlocked`（critical，verdict=block）
+  不受污染——disabled 命中不会误触 critical。
+- 定位：查询 `eval_rule_hit_total{verdict="detected"}` 按 `rule`/`resource` 分组，确认命中工具
+  是否本应禁用；比对平台参数 `evaluation.ruleguard.enabled` 与 `evaluation.ruleguard.denylist`
+  当前值（registry 平台级 low risk_tier）。
+- 确认：enabled=false 时 denylist 命中只产观测（评测侧判 VerdictBlock，属显式接受副作用），
+  不拦截执行——这与 O4「未启用规则 = 无规则可命中」语义一致，非执行故障。
+- 处置：命中工具应禁用 → 平台参数开启 `evaluation.ruleguard.enabled=true`，走平台参数发布审批，
+  随后回归验证命中即拦截；误报 → 收紧 `evaluation.ruleguard.denylist`。禁止远端手改（变更走
+  操作台/CD 流程）。

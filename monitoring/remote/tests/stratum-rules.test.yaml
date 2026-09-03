@@ -1283,6 +1283,38 @@ tests:
               dashboard_url: https://stratum.grafana/d/evaluation
               runbook_url: /docs/operations/alerts/stratum-evaluation.md#stratum-eval-rule-blocked
 
+  - name: evaluation rule disabled alert fires after its for duration
+    interval: 1m
+    input_series:
+      - series: 'eval_rule_hit_total{rule="tool_denylist", resource="agent", verdict="detected"}'
+        values: '0+30x25'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: StratumEvalRuleDisabled
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: StratumEvalRuleDisabled
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: StratumEvalRuleDisabled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: evaluation
+              environment: remote-test
+              component: runtime-observation
+              rule: tool_denylist
+              resource: agent
+              verdict: detected
+            exp_annotations:
+              summary: 规则护栏命中但未拦截
+              description: >-
+                检测到规则护栏命中但未拦截：evaluation.ruleguard.enabled=false 但 denylist 非空，
+                命中 verdict=detected 持续 5 分钟。护栏当前只检测不拦截，命中工具照常执行。若该
+                工具应禁用，请开启 evaluation.ruleguard.enabled；否则收紧 denylist 移除误报。
+              dashboard_url: https://stratum.grafana/d/evaluation
+              runbook_url: /docs/operations/alerts/stratum-evaluation.md#stratum-eval-rule-disabled
+
   - name: evaluation review backlog alert fires after its for duration
     interval: 1m
     input_series:
