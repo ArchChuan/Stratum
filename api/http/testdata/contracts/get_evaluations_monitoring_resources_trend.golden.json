@@ -9,36 +9,6 @@
       "resource_id": "resource-1",
       "series": [
         {
-          "bucket_at": "2026-09-02T00:00:00Z",
-          "sample_count": 20,
-          "quality": [
-            {
-              "dimension": "relevance",
-              "pass_rate": 0.9,
-              "avg_score": 0.9,
-              "avg_confidence": 0.8,
-              "samples": 20
-            }
-          ],
-          "behavior": {
-            "rule_hits": 2,
-            "retry_count": 0,
-            "escalation_count": 0,
-            "abandonment_count": 0,
-            "verdict": {
-              "pass": 19,
-              "flag": 1,
-              "block": 0
-            }
-          },
-          "cost": {
-            "total_tokens": 24000,
-            "total_cost_usd": 0.06,
-            "avg_latency_ms": 1600,
-            "p95_latency_ms": 4100
-          }
-        },
-        {
           "bucket_at": "2026-09-01T00:00:00Z",
           "sample_count": 12,
           "quality": [
@@ -73,6 +43,36 @@
             "total_cost_usd": 0.04,
             "avg_latency_ms": null,
             "p95_latency_ms": null
+          }
+        },
+        {
+          "bucket_at": "2026-09-02T00:00:00Z",
+          "sample_count": 20,
+          "quality": [
+            {
+              "dimension": "relevance",
+              "pass_rate": 0.9,
+              "avg_score": 0.9,
+              "avg_confidence": 0.8,
+              "samples": 20
+            }
+          ],
+          "behavior": {
+            "rule_hits": 2,
+            "retry_count": 0,
+            "escalation_count": 0,
+            "abandonment_count": 0,
+            "verdict": {
+              "pass": 19,
+              "flag": 1,
+              "block": 0
+            }
+          },
+          "cost": {
+            "total_tokens": 24000,
+            "total_cost_usd": 0.06,
+            "avg_latency_ms": 1600,
+            "p95_latency_ms": 4100
           }
         }
       ],

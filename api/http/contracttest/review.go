@@ -65,12 +65,6 @@ func (contractQueryRepo) MonitorTrend(context.Context, string, port.MonitorFilte
 		ResourceKind: domain.ResourceKindSkill, ResourceID: "resource-1",
 		Series: []domain.MonitorTrendPoint{
 			{
-				BucketAt: time.Date(2026, 9, 2, 0, 0, 0, 0, time.UTC), SampleCount: 20,
-				Quality:  []domain.QualityDim{{Dimension: "relevance", PassRate: 0.9, AvgScore: 0.9, AvgConfidence: 0.8, Samples: 20}},
-				Behavior: domain.BehaviorStats{RuleHits: 2, Verdict: domain.VerdictDistribution{Pass: 19, Flag: 1}},
-				Cost:     costPtr(24000, 0.06, 1600, 4100),
-			},
-			{
 				BucketAt: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), SampleCount: 12,
 				Quality: []domain.QualityDim{
 					{Dimension: "relevance", PassRate: 0.83, AvgScore: 0.83, AvgConfidence: 0.75, Samples: 12},
@@ -78,6 +72,12 @@ func (contractQueryRepo) MonitorTrend(context.Context, string, port.MonitorFilte
 				},
 				Behavior: domain.BehaviorStats{Verdict: domain.VerdictDistribution{Pass: 10, Flag: 2}},
 				Cost:     domain.CostStats{TotalTokens: 15000, TotalCostUSD: 0.04},
+			},
+			{
+				BucketAt: time.Date(2026, 9, 2, 0, 0, 0, 0, time.UTC), SampleCount: 20,
+				Quality:  []domain.QualityDim{{Dimension: "relevance", PassRate: 0.9, AvgScore: 0.9, AvgConfidence: 0.8, Samples: 20}},
+				Behavior: domain.BehaviorStats{RuleHits: 2, Verdict: domain.VerdictDistribution{Pass: 19, Flag: 1}},
+				Cost:     costPtr(24000, 0.06, 1600, 4100),
 			},
 		},
 		Runs: []domain.RunProcessPoint{{RunID: "run-9", ProcessPassRate: 0.67, RunCreatedAt: time.Date(2026, 9, 2, 8, 0, 0, 0, time.UTC)}},
