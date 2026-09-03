@@ -431,3 +431,53 @@ func TestFactCheckCitationAndTemperatureRegistered(t *testing.T) {
 		}
 	}
 }
+
+// TestRegistryEveryKeyHasRiskTier 守护 O3 不变量：每个注册键都必须有非空 RiskTier，
+// 且与 DefaultRiskTierForKey 一致（显式声明不允许漂移出分类表）。
+func TestRegistryEveryKeyHasRiskTier(t *testing.T) {
+	r := NewParametersRegistry()
+	for _, def := range r.Schema() {
+		switch def.RiskTier {
+		case RiskTierHigh, RiskTierMedium, RiskTierLow:
+		default:
+			t.Fatalf("key %s risk tier %q must be one of high/medium/low", def.Key, def.RiskTier)
+		}
+		if want := DefaultRiskTierForKey(def.Scope, def.Key); def.RiskTier != want {
+			t.Fatalf("key %s risk tier %q != DefaultRiskTierForKey %q", def.Key, def.RiskTier, want)
+		}
+	}
+}
+
+// TestRegistryRiskTierClassifiesGateRelevantKeys 守护 O3 high 名单与关键 medium/low 归类。
+func TestRegistryRiskTierClassifiesGateRelevantKeys(t *testing.T) {
+	r := NewParametersRegistry()
+	cases := []struct {
+		key  string
+		want RiskTier
+	}{
+		{"agent.model", RiskTierHigh},         // 资源 high（§7.2）
+		{"mcp.enabled_tools", RiskTierHigh},   // 资源 high（§7.2）
+		{"agent.system_prompt", RiskTierHigh}, // 平台 high（§7.2）
+		{"evaluation.judge.model", RiskTierHigh},
+		{"evaluation.optimizer.model", RiskTierHigh},
+		{"agent.factcheck.judge.model", RiskTierHigh},
+		{"memory.embedding_model", RiskTierHigh},
+		{"memory.extraction_model", RiskTierHigh},
+		{"memory.reflection_model", RiskTierHigh},
+		{"rag.top_k", RiskTierMedium},                    // 资源 medium
+		{"agent.reasoning_effort", RiskTierMedium},       // 资源 medium
+		{"agent.compaction_temperature", RiskTierMedium}, // 平台 medium（_temperature 后缀）
+		{"agent.factcheck.judge.prompt", RiskTierMedium}, // 平台 medium（_prompt 后缀）
+		{"agent.temperature", RiskTierLow},               // 资源采样键不落平台后缀规则
+		{"evaluation.judge.enabled", RiskTierLow},        // 开关默认 low
+	}
+	for _, tc := range cases {
+		def, ok := r.Get(tc.key)
+		if !ok {
+			t.Fatalf("key %s not registered", tc.key)
+		}
+		if def.RiskTier != tc.want {
+			t.Fatalf("key %s risk tier = %q, want %q", tc.key, def.RiskTier, tc.want)
+		}
+	}
+}

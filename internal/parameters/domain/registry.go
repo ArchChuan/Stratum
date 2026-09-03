@@ -81,6 +81,10 @@ func (r *ParametersRegistry) Register(def ParameterDefinition) error {
 	if def.Scope == ScopePlatform && def.GroupKey == "" {
 		def.GroupKey = GroupForKey(def.Key)
 	}
+	// 风险分级自动默认（O3，spec §4.2.1）：显式声明保留，空值按键名/scope 自动填充。
+	if def.RiskTier == "" {
+		def.RiskTier = DefaultRiskTierForKey(def.Scope, def.Key)
+	}
 	if _, exists := r.byKey[def.Key]; exists {
 		return fmt.Errorf("parameter registry: duplicate key %s", def.Key)
 	}
