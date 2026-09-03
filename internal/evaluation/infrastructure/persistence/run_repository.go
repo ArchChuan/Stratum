@@ -165,6 +165,54 @@ func (r *PgRunRepository) GetRun(
 	return run, found, err
 }
 
+// FindLatestCompletedRunForResource 返回该 resource（kind+id）+ suite revision 最近一条
+// 已完成（succeeded）run（无 → (nil, nil)）。供 run 级回归对照与发布哨兵定位基线 run。
+// 只读 run 行（Metrics/ContextSnapshot/版本锚点），不加载 case results——基线对照只消费
+// metrics.by_dimension，明细查询属 GetRun 语义。按 created_at DESC, id DESC 取最近。
+func (r *PgRunRepository) FindLatestCompletedRunForResource(
+	ctx context.Context,
+	tenantID string,
+	ref domain.ResourceRef,
+	suiteRevisionID string,
+) (*domain.EvalRun, error) {
+	ctx = postgres.WithTenant(ctx, &postgres.TenantContext{TenantID: tenantID})
+	var run *domain.EvalRun
+	err := execTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		run = &domain.EvalRun{Resource: ref}
+		var kind string
+		var metricsJSON []byte
+		var snapshotJSON []byte
+		err := tx.QueryRow(ctx,
+			`SELECT id, resource_kind, resource_id, revision_id, suite_revision_id,
+			        passed, total_cases, passed_cases, metrics, context_snapshot, created_by, created_at
+			 FROM eval_runs
+			 WHERE resource_kind=$1 AND resource_id=$2 AND suite_revision_id=$3 AND status='succeeded'
+			 ORDER BY created_at DESC, id DESC LIMIT 1`,
+			string(ref.Kind), ref.ResourceID, suiteRevisionID,
+		).Scan(&run.ID, &kind, &run.Resource.ResourceID, &run.Resource.RevisionID,
+			&run.SuiteRevisionID, &run.Passed, &run.TotalCases, &run.PassedCases, &metricsJSON,
+			&snapshotJSON, &run.CreatedBy, &run.CreatedAt)
+		if err == pgx.ErrNoRows {
+			run = nil
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		run.Resource.Kind = domain.ResourceKind(kind)
+		if len(metricsJSON) > 0 {
+			_ = json.Unmarshal(metricsJSON, &run.Metrics)
+		}
+		snap, derr := decodeContextSnapshot(snapshotJSON)
+		if derr != nil {
+			return derr
+		}
+		run.ContextSnapshot = snap
+		return nil
+	})
+	return run, err
+}
+
 // decodeContextSnapshot 解码 eval_runs.context_snapshot JSONB：空/'{}'（旧 run
 // 未捕获）→ (nil, nil)；损坏 JSON 显式报错而非静默丢快照。
 func decodeContextSnapshot(raw []byte) (*domain.EvaluationContextSnapshot, error) {

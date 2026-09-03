@@ -64,3 +64,31 @@ judge 外部依赖持续不可用（§11.2 judge 健康）。
 - 定位：查询 `eval_queue_backlog{queue="observation"}`，观察消费停滞来源（消费速率、落库链路）。
 - 确认：消费停滞将延迟观测落库与采样覆盖统计，先确认是消费端故障还是上游突发。
 - 处置：修复 observation consumer（重启/扩容/修落库），积压消化后告警自动恢复。
+
+<a id="stratum-eval-judge-below-threshold"></a>
+
+## StratumEvalJudgeBelowThreshold
+
+judge 单维度低于阈值（score < JudgeBelowThreshold）的跌阈判异升高。
+
+- 语义：`eval_gate_action_total{layer="detect",action="flag"}` 15 分钟 increase > 0，或
+  `eval_judge_score` 直方图 <0.5 尾部占比 > 30%（10 分钟窗口）触发；第一腿信号现网即燃
+  （applyAnomalyVerdict emit detect/flag，§3.2-①）。
+- 定位：查询 `eval_gate_action_total{layer="detect",action="flag"}` 与 `eval_judge_score`
+  直方图尾部，定位低分维度与 resource；到评测中心按 trace 下钻核对 judge 分数。
+- 处置：真能力退化 → 走参数/版本调整并回归验证；误报 → 复核 judge 阈值与评测量纲后调整
+  `evaluation.judge.*` 阈值。确认路径 = 评审池人工确认（§3.2-①）。
+
+<a id="stratum-eval-run-regression"></a>
+
+## StratumEvalRunRegression
+
+run 级回归劣化判异（相对基线 run 的维度 delta 跌破 `RunRegressionDeltaThreshold`）。
+
+- 语义：`eval_gate_action_total{layer="l2",action="regression"}` 15 分钟 increase > 0。
+  P2 该 label 值仅由发布哨兵判劣 emit（emit 点 Task 5），T13 确认 run 复用——规则先落、当前
+  只读待命；`{layer="l2",action="regression"}` 是 P2 新增 label 值，不新增 metric family。
+- 定位：查询该 counter 按 resource/suite_revision 分组定位劣化 run；对比 base vs current
+  run 的 `metrics.by_dimension`（纯函数 `application.CompareRunRegression`；基线为同 suite
+  revision 的同 resource 最近 completed run）。
+- 处置：真回归 → 走门禁流程（人工确认/回滚候选）；误报 → 核对基线选择与维度 delta 阈值。

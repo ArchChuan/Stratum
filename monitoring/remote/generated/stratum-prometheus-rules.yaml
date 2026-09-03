@@ -759,6 +759,41 @@ spec:
             description: "待评审条目持续 > 50 达 15 分钟，低置信/判异样本滞留，需人工介入。"
             dashboard_url: "{{ $externalURL }}"
             runbook_url: /docs/runbooks/stratum-eval-review-backlog.md#stratum-eval-review-backlog-high
+        - alert: StratumEvalJudgeBelowThreshold
+          expr: |
+            increase(eval_gate_action_total{layer="detect",action="flag"}[15m]) > 0 OR (sum(rate(eval_judge_score_bucket{le="0.5"}[10m])) / clamp_min(sum(rate(eval_judge_score_count[10m])), 1)) > 0.3
+          for: 10m
+          labels:
+            severity: warning
+            service: evaluation
+            component: runtime-observation
+            environment: remote-test
+          annotations:
+            summary: judge 跌阈判定升高（低分尾部占比超阈值）
+            description: >-
+              judge 单维度低于 JudgeBelowThreshold 的判异升高：detect/flag 计数 15 分钟
+              increase &gt; 0，或 eval_judge_score 直方图 &lt;0.5 尾部占比 &gt; 30%（10 分钟
+              窗口）。第一腿信号现网即燃（applyAnomalyVerdict emit layer=detect action=flag）。
+              到评测中心下钻对应 trace，人工确认真退化后走参数/版本调整。
+            dashboard_url: https://stratum.grafana/d/evaluation
+            runbook_url: /docs/operations/alerts/stratum-evaluation.md#stratum-eval-judge-below-threshold
+        - alert: StratumEvalRunRegression
+          expr: |
+            increase(eval_gate_action_total{layer="l2",action="regression"}[15m]) > 0
+          for: 10m
+          labels:
+            severity: warning
+            service: evaluation
+            component: runtime-observation
+            environment: remote-test
+          annotations:
+            summary: run 级回归劣化判异
+            description: >-
+              run 级回归判异出现（layer=l2 action=regression，15 分钟 increase &gt; 0）。
+              P2 该 label 值仅由发布哨兵判劣 emit（Task 5），T13 确认 run 复用；规则先落、当前
+              只读待命。到评测中心对比 base vs current run 的 by_dimension 并人工确认。
+            dashboard_url: https://stratum.grafana/d/evaluation
+            runbook_url: /docs/operations/alerts/stratum-evaluation.md#stratum-eval-run-regression
     - name: stratum-http-recording
       interval: 1m
       rules:

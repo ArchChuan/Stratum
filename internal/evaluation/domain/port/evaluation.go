@@ -73,6 +73,12 @@ type ResourceAdapter interface {
 type RunRepository interface {
 	SaveRun(ctx context.Context, tenantID string, run domain.EvalRun) error
 	GetRun(ctx context.Context, tenantID, runID string) (domain.EvalRun, bool, error)
+	// FindLatestCompletedRunForResource 返回该 resource（kind+id）+ suite revision 最近一条
+	// 已完成（status='succeeded'）run；无 → (nil, nil)。供 run 级回归对照与发布哨兵定位基线
+	// run（T8 定义、T12 消费）。
+	FindLatestCompletedRunForResource(
+		ctx context.Context, tenantID string, ref domain.ResourceRef, suiteRevisionID string,
+	) (*domain.EvalRun, error)
 }
 
 type SuiteRepository interface {
