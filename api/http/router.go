@@ -356,6 +356,9 @@ func registerParameterWriteRoutes(adminGroup *gin.RouterGroup, c *wiring.Contain
 		return
 	}
 	paramHandler := handler.NewParameterHandler(c.Parameters.Service, c.Logger)
+	// Task 5 Sub-commit B：装配发布闸协调器 seam（wiring.PublishGateFunc → handler
+	// PublishGateFunc 显式转换）。nil（未装配/参数服务缺失）→ handler 保持裸发布语义。
+	paramHandler.SetPublishGate(handler.PublishGateFunc(c.PublishGate))
 	adminGroup.PUT("/parameters", paramHandler.Update)
 	adminGroup.POST("/parameters/versions/:groupKey", paramHandler.CreateDraft)
 	hostWrite := adminGroup.Group("", middleware.InjectTenantContext(), middleware.RequireDefaultTenant())
