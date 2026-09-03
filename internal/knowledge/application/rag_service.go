@@ -229,7 +229,8 @@ type RAGService struct {
 	docRepo      knowledgeport.DocRepo
 	roleResolver knowledgeport.TenantRoleResolver
 	// judgeResolver 按请求中的 judge 模型解析证据充分性 judge（仅 evidence 路径
-	// 消费，Plain Query/API 面板零接触）；nil/解析失败 = fail-closed 放行。
+	// 消费，Plain Query/API 面板零接触）；nil/解析失败 = fail-open 放行（judge
+	// 门关或不判定时结果原样通过，与不配置一致，绝不误杀检索）。
 	judgeResolver SufficiencyJudgeResolver
 	// semanticReranker 是 builtin-score-v1 的 LLM 语义重排器；nil = 未装配
 	// （fail-open，builtin 走纯召回分数排序）。semanticTopN 是精排候选上限
@@ -282,7 +283,8 @@ func (rs *RAGService) resolveEmbedder(ctx context.Context, req RAGQueryRequest) 
 }
 
 // SufficiencyJudgeResolver 按请求中的 judge 模型解析证据充分性 judge；模型未知/
-// 目录校验失败返回 error（fail-closed 放行）。wiring 注入闭包，application 不
+// 目录校验失败返回 error（judge 实现契约 fail-closed：错误向上传播，由调用方
+// judgeSufficiencyGate 按 fail-open 原样放行）。wiring 注入闭包，application 不
 // import llmgateway（跨 context 接口定义在消费方）。
 type SufficiencyJudgeResolver func(ctx context.Context, model string) (knowledgeport.SufficiencyJudge, error)
 
@@ -1386,7 +1388,7 @@ func searchWorkspaceWithEvidence(ctx context.Context, rs *RAGService, tenantID, 
 	}
 	// 充分性门（仅 evidence 路径）：判 INSUFFICIENT 时本 workspace 按无内容
 	// 处理（Sources 置空 + NoAnswer=insufficient_evidence），聚合按严重度
-	// 上报；fail-closed 降级原样放行。
+	// 上报；gate 无法判定时 fail-open 降级原样放行（不误杀检索）。
 	out = rs.judgeSufficiencyGate(ctx, tenantID, ws, query, rw.judgeModel, rw.judgeScoringInstructions, out)
 	titles := rs.documentTitles(ctx, tenantID, rw.workspaceID)
 	sources := make([]RAGSearchSource, 0, len(out.Sources))
