@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现本计划。Steps 用 `- [ ]` 跟踪。本文件是 P2 唯一权威实现计划，由五个独立 section（Task 1-5）按编译次序 **T8→T9→T11→T10→T12**（即 Task 1→2→3→4→5）组装而成；跨节冲突已由协调者按真实代码 seam 逐项裁决并就地统一（见「任务依赖与次序」的跨任务绑定、各 Task 内 `> 主会话裁决` 注释、末尾「主要风险与对策 / 开放问题」）。任务在隔离 worktree `/home/yang/go-projects/stratum-card-c-gate-p2`（分支 `feat/card-c-gate-p2`）内执行，每 Task 一个独立 commit（标题 `type(scope): description`，body 带 `Co-Authored-By: Claude <noreply@anthropic.com>`），禁止 main 直提交。**硬红线**：零 DDL / 零 proto / 零新 metric family（R32）；禁止 magic string（共享字面量进既有 domain 常量或 `pkg/constants/evaluation.go`）；`domain` 仅 stdlib + `pkg/constants`；`application` 不 import pgx/Redis/NATS/Gin/兄弟 context；改 port 后立即 grep 同步全部 test mock/stub；**监控规则单一源 = `monitoring/remote/rules/*.yaml`**（environment: remote-test），`monitoring/local/rules/*.yml`（production）与 `monitoring/remote/generated/stratum-prometheus-rules.yaml`（CRD）是渲染产物、禁止手编、必须同 commit，改源后两端重渲 + `--check` 防漂移。
 
-**Goal:** 在 P1 地基（门禁 domain `Decide`/`GateTarget`/`port.GateStore` 契约/eval_state 列/常量）之上落地分层门禁 P2 深化：L2 run 级回归对照纯函数 + 评审池 behavior 判异分支 + 两条 L2 告警（Task 1）；L1 检测/执行分离（O4，检测恒开）+ `StratumEvalRuleDisabled`（Task 2）；L3 资源回滚 planner/executor + 窄 port + wiring ACL（agent/knowledge/skill/experiment/canary）（Task 3）；审批执行器三操作分支（rollback_platform / rollback_resource / publish_platform_version）+ platform auto 拒绝不变量 + eval_state 读路径（Task 4）；L3+ 发布哨兵协调 + memory 组 fail-closed 拒发 + 多租户验证 worker + 分化/未恢复告警（Task 5）。
+**Goal:** 在 P1 地基（门禁 domain `Decide`/`GateTarget`/`port.GateStore` 契约/eval_state 列/常量）之上落地分层门禁 P2 深化：L2 run 级回归对照纯函数 + 评审池 behavior 判异分支 + 两条 L2 告警（Task 1）；L1 检测/执行分离（O4，检测恒开）+ `StratumEvalRuleDisabled`（Task 2）；L3 资源回滚 planner/executor + 窄 port + wiring ACL（agent/knowledge/skill/experiment/canary）（Task 3）；审批执行器三操作分支（rollback_platform / rollback_resource / publish_platform_version）+ platform auto 拒绝不变量 + eval_state 读路径（Task 4）；L3+ 发布哨兵协调 + memory 组纳入快照 capture（R30，用户 09-03 决定：P2 扩范围无条件并入 Execution）+ 多租户验证 worker + 分化/未恢复告警（Task 5）。
 
-**Architecture:** 门禁判定继续是硬编码确定性规则阶梯（禁 LLM），本次把判定收敛到**纯函数/纯编排 + wiring 薄装配**：`regression_compare.go` 是零 IO 的 run 级回归纯函数（Task 1 定义、Task 5 哨兵与验证 worker 经 deps 注入复用）；`RuleGuard.Check` 把「检测」与「执行」解耦为同一热路径内两个判定点（只改 agent 侧，evaluation 侧 R21/E8 零改动）；L3 资源回滚以 planner 纯函数 + executor 分派（`domain/port/rollback.go` 窄面 + `api/wiring/resource_rollback.go` ACL 适配器，经 `Evaluation.ResourceRollbackExecutor` seam 供 Task 4/T13 复用）；审批执行器在 `evaluationOperations` map 上新增三个写 op，`publish_platform_version` 消费 Task 4 接线的 `eval_state` 读路径并前置断言 `sentinel_passed`；L3+ 发布哨兵是编排层产物——`publishGateCoordinator` 不调低层 `store.Publish`，只产出决策（直通/待审批/拒发/memory 拒发/未接线拒发），HTTP handler 据决策渲染，fail-closed 绝不静默直发。监控告警统一走 `monitoring/remote/rules/*.yaml` 单一源 → render 出本地 `.yml` 与远端 CRD 双产物（同 commit，`--check` 防漂移）；runbook anchor 同 commit 进 `docs/operations/alerts/stratum-evaluation.md`。
+**Architecture:** 门禁判定继续是硬编码确定性规则阶梯（禁 LLM），本次把判定收敛到**纯函数/纯编排 + wiring 薄装配**：`regression_compare.go` 是零 IO 的 run 级回归纯函数（Task 1 定义、Task 5 哨兵与验证 worker 经 deps 注入复用）；`RuleGuard.Check` 把「检测」与「执行」解耦为同一热路径内两个判定点（只改 agent 侧，evaluation 侧 R21/E8 零改动）；L3 资源回滚以 planner 纯函数 + executor 分派（`domain/port/rollback.go` 窄面 + `api/wiring/resource_rollback.go` ACL 适配器，经 `Evaluation.ResourceRollbackExecutor` seam 供 Task 4/T13 复用）；审批执行器在 `evaluationOperations` map 上新增三个写 op，`publish_platform_version` 消费 Task 4 接线的 `eval_state` 读路径并前置断言 `sentinel_passed`；L3+ 发布哨兵是编排层产物——`publishGateCoordinator` 不调低层 `store.Publish`，只产出决策（直通/待审批/拒发/未接线拒发——memory 组与 agent/evaluation/trace 同路径，无特判），HTTP handler 据决策渲染，fail-closed 绝不静默直发。监控告警统一走 `monitoring/remote/rules/*.yaml` 单一源 → render 出本地 `.yml` 与远端 CRD 双产物（同 commit，`--check` 防漂移）；runbook anchor 同 commit 进 `docs/operations/alerts/stratum-evaluation.md`。
 
 **Tech Stack:** Go 1.25.12（module `github.com/byteBuilderX/stratum`）、pgx v5、Gin、zap、go-redis / NATS / Milvus 仅既有消费、`observability.MetricsProvider`（CounterVec label 开放）、`promtool`（告警规则测试）、`scripts/quality/render-monitoring-rules.sh` + `monitoring-runbook-test.go`（监控质量闸）。本 P2 **零 DDL、零 proto、零新 metric family**。
 
@@ -25,7 +25,7 @@
 | R27 | T10 wiring：`newApprovalActionExecutor`（L36-53）注入 parameters `*parametersapp.Service`（public，无 tenant）+ T11 resource rollback executor（`c.Evaluation.ResourceRollbackExecutor` seam）；装配点 `api/wiring/evaluation.go:1386-1390`（parameters 先就绪），paramSvc 注入前做 typed-nil 判定。 |
 | R28 | auto 不变量（spec §3.4 L255）：`ErrAutoRollbackForbidden` 新增于 `domain/port/gate.go`。`executePlatformRollback` 首行 guard：请求意图为 auto（Arguments 显式 `auto=true`）→ 返回 sentinel + `IncEvalGateAction("l3_platform","auto_refused")`；测试守护；wiring 不提供平台 auto 分支。 |
 | R29 | T12 宿主租户（O2）：参数 `/admin` 写链（Publish/Rollback）补 `InjectTenantContext` + `RequireDefaultTenant` → reqctx tenantID = host tenant，固化到哨兵 suite 载荷与后续验证 job 载荷。宿主租户解析失败 → 拒绝发布（fail-closed）。 |
-| R30 | **memory 组边界（spec O1-范围 vs 代码现实，需用户复核——作者在 plan「开放问题/风险」标注，master 交用户，非静默决定）**：快照 capture 只覆盖 evaluation/agent/trace 且 evaldomain 快照常量**无 `GroupMemory`**（parameters registry 有全部 4 组）；memory 平台参数由 memory service 运行期读活值、评测快照固定不了 → memory 组发布无法跑哨兵。P2 coordinator 对 memory 组 **fail-closed 拒绝发布**（typed 错误 `ErrMemoryGroupSentinelUnsupported`「memory 组哨兵未接入」防静默直发破坏 O1 仪式），evaluation/agent/trace 组走完整哨兵门。memory capture 扩展 + 门禁台归 T13。 |
+| R30 | **memory 组偏差（用户 09-03 已决：P2 扩范围，无条件纳入 memory 组入快照 capture；不再 fail-closed 拒发、不再归 T13）**：代码现实 = capture 原只覆盖 evaluation/agent/trace、evaldomain 快照常量无 `GroupMemory`（parameters registry 有全部 4 组）。决定：`internal/evaluation/domain/snapshot.go` 加 `GroupMemory="memory"`；`api/wiring/evaluation_snapshot.go` Capture 无条件捕获 memory 组、后置追加进 `Execution`（恒 `[agent, trace, memory]` 三组）；`publishGateCoordinator` 对 memory 组**不再特判**（删 `GroupMemoryPlatform`/`DecisionRefusedMemory`/`ErrMemoryGroupSentinelUnsupported`），与 agent/evaluation/trace 同路径——enabled=false 直通（默认，行为不变）；enabled=true 时经 ResolveVersion→draft 检查→SentinelSpec nil → `refused_not_wired`（全组一致）。零 DDL（memory 组 + 22 个 memory.* 平台键迁移 043 已 seed；context_snapshot JSONB 追加合法）。哨兵对 draft 的真实执行消费属 T13 完成环（所有组一致），P2 只建归因基座 + 门骨架 + fail-closed。 |
 | R31 | T12 验证 worker：复用 review `RefreshBacklog` 的租户枚举模式（`TenantIDs` = IAM `ListActiveTenantIDs`，wiring evaluation.go:585-590；IAM nil→仅宿主租户）+ dedupe + per-tenant fail-open + bounded worker 骨架（`worker.go` `NewWorker/PollOnce` + 租户 lister `evaluationTenantLister`）。宿主租户来自动作载荷。计数：哨兵 `eval_gate_action_total{layer="l3_sentinel",action="block"|"pass"}`；门`{layer="l3_platform",action="publish_gated"|"publish_blocked"|"auto_refused"|"rollback_manual"}`；多租户`{layer="l3_multitenant_verify",action="queued"|"recovered"|"not_recovered"}`；run 级劣化`{layer="l2",action="regression"}`（哨兵判劣时与 l3_sentinel block 同发）。 |
 | R32 | 指标纪律（dict B）：全 P2 **不新增 metric family**（不加 prometheus.go 注册）；全消费现有 `eval_rule_hit_total`/`eval_gate_action_total`/`eval_judge_score`/`eval_behavior_anomaly_total` + 新 label 值（CounterVec label 开放，无需注册）。 |
 
@@ -73,7 +73,7 @@
   }
   ```
 
-- **B. `l3_platform` / `auto_refused` / `sentinel_passed` Go 常量单一归属 = `pkg/constants/evaluation.go`（Task 4 定义；Task 5 消费，不重复定义）**：compile order 决定 Task 4（T10）先于 Task 5（T12）合入，故这三个值由 Task 4 Step 4 在 `pkg/constants/evaluation.go` 定义（`GateLayerL3Platform`/`GateActionAutoRefused`/`PlatformEvalStateSentinelPassed`）；Task 5 的 `domain/publish_gate_const.go` **不重复定义** `LayerL3Platform` 与 `EvalStateSentinelPassed`，其编排代码引用 `constants.GateLayerL3Platform` / `constants.PlatformEvalStateSentinelPassed`（见 Task 5 B1/B2 inline 修正）。Task 5 独有的 `l2`/`l3_sentinel`/`l3_multitenant_verify`/全部 action/`sentinel_failed`/`GroupMemoryPlatform` 仍在 domain const 文件。此点**与裁决 A7.2「T12 拥有常量」的偏差是 compile order 强制**，已在「开放问题」标注。
+- **B. `l3_platform` / `auto_refused` / `sentinel_passed` Go 常量单一归属 = `pkg/constants/evaluation.go`（Task 4 定义；Task 5 消费，不重复定义）**：compile order 决定 Task 4（T10）先于 Task 5（T12）合入，故这三个值由 Task 4 Step 4 在 `pkg/constants/evaluation.go` 定义（`GateLayerL3Platform`/`GateActionAutoRefused`/`PlatformEvalStateSentinelPassed`）；Task 5 的 `domain/publish_gate_const.go` **不重复定义** `LayerL3Platform` 与 `EvalStateSentinelPassed`，其编排代码引用 `constants.GateLayerL3Platform` / `constants.PlatformEvalStateSentinelPassed`（见 Task 5 B1/B2 inline 修正）。Task 5 独有的 `l2`/`l3_sentinel`/`l3_multitenant_verify`/全部 action/`sentinel_failed` 仍在 domain const 文件。此点**与裁决 A7.2「T12 拥有常量」的偏差是 compile order 强制**，已在「开放问题」标注。另：`GroupMemoryPlatform` 已删除——memory 组常量唯一 home = `internal/evaluation/domain/snapshot.go` `GroupMemory`（Sub-commit A0 定义，与 parameters 域同值）。
 - **C. `FindLatestCompletedRunForResource` 过滤语义（A5.2，Task 1 定义、Task 5 消费）**：按 `Kind + ResourceID + suiteRevisionID` 过滤、**不含 `ref.RevisionID`**，取最近一条 `status='succeeded'` run（无 → nil,nil）。Task 5 哨兵比较的是「当前 published seq run vs 草案 seq run」——跨 `version_seq`、同 resource+suite revision，而非跨资源 revision。
 - **D. 多租户验证入队调用点（开放问题 #2）**：spec §3.4-3「平台回滚成功后自动入队 `EnqueueMultiTenantVerify`」的调用点本应在 Task 4 `executePlatformRollback` 成功路径，但 Task 4 先于 Task 5 合入、无法引用 Task 5 交付的函数；且生产 wiring 中 `executePlatformRollback` 仅经审批流（T13 `GateApprovalRequester` 创建）可达。**裁决：入队调用点延迟到 T13**；Task 5 交付幂等 enqueue 函数 + worker + 判定 + 计数供 T13 接线，P2 无调用者属安全（无副作用、无生产者）。
 - **E. 告警规则单一源 = remote yaml（A1）**：Task 1/2/5 三节中所有「改 yml」表述一律以「改 `monitoring/remote/rules/stratum-evaluation.yaml`（environment: remote-test）+ render 双产物」为准；渲染产物（`monitoring/remote/generated/stratum-prometheus-rules.yaml`、`monitoring/local/rules/stratum-evaluation.yml`）同 commit，禁止手编。
@@ -2575,11 +2575,11 @@ commit（单 task 独立 commit，标题含 type/scope）：`feat(evaluation): �
 >
 > 属 spec：§3.4（四件事 1/3/4 的编排层 + R29/R30/R31）；§5 T12。
 > 裁决：R29-R32 + recon T12（R-N/R-O/R-P）；Consumes dict E5/E6/Task 1(E1 RunComparison + `regression_compare.go`)/Task 4(`executePlatformPublishGated` 的 eval_state 写回语义)。
-> 目的：把 §3.4「发布哨兵前置门 → 判异人工回滚 → 事后多租户验证 → 分化告警」四件事中**可由 P2 组件化交付的部分**落到 HTTP/wiring 编排层：宿主租户固化（O2/R29）、memory 组 fail-closed 拒发（R30/O1-范围偏差）、哨兵编排器与判定、多租户验证 bounded worker（R31/E9）、两条分化/未恢复告警（F）。低层 `store.Publish/Rollback` 内部、`GateStore` DB 投影、`buildGateService` 生产 wiring、门禁操作台 UI/proto 一律不碰（dict A，归 T13）。
+> 目的：把 §3.4「发布哨兵前置门 → 判异人工回滚 → 事后多租户验证 → 分化告警」四件事中**可由 P2 组件化交付的部分**落到 HTTP/wiring 编排层：宿主租户固化（O2/R29）、memory 组纳入快照 capture（R30 用户 09-03 已决：Sub-commit A0 无条件并入 Execution）、哨兵编排器与判定、多租户验证 bounded worker（R31/E9）、两条分化/未恢复告警（F）。低层 `store.Publish/Rollback` 内部、`GateStore` DB 投影、`buildGateService` 生产 wiring、门禁操作台 UI/proto 一律不碰（dict A，归 T13）。
 
-**需用户/协调者复核的偏差（先读，非静默决定）**
+**需用户复核的偏差（用户 09-03 已复核 R30，处置为已解决记录，见下；其余偏差见末尾「开放问题」）**
 
-> ⚠ **R30 memory 组偏差（spec O1「严格全组」 vs 代码现实）**：spec O1 已裁「合一」——发布哨兵对全部平台组一律生效（§3.4 L239）。但代码现实：`EvaluationContextSnapshot` capture 只覆盖 evaluation/agent/trace 三组（`api/wiring/evaluation_snapshot.go` capture L62-75），eval 域快照常量**无 `GroupMemory`**（`snapshot.go` L8-13），memory 平台参数由 memory service 运行期读活值、评测快照固化不了 → **memory 组无法跑哨兵 run**。P2 处置：`publishGateCoordinator` 对 memory 组 **fail-closed 拒发**（typed 错误 `ErrMemoryGroupSentinelUnsupported`，明确文案「memory 组哨兵未接入，禁止裸发布（O1 仪式）」），evaluation/agent/trace 走完整哨兵门；绝不静默直发。memory 组入快照 capture + 门禁台 = T13（dict A）。此偏差请协调者/用户在 master 标注，非 P2 静默收编（见「开放问题 #1」）。
+> ✅ **R30 memory 组偏差（用户 09-03 已决：P2 扩范围，无条件纳入 memory capture；处置完结）**：spec O1「严格全组」（§3.4 L239）vs 代码现实（capture 原只覆盖 evaluation/agent/trace、eval 域快照常量原无 `GroupMemory`）的偏差，用户选择**扩 P2 范围**：把 memory 组纳入快照 capture、**无条件并入 `Execution`**（恒 `[agent, trace, memory]` 三组），不再 fail-closed 拒发、不再归 T13。落地见 **Sub-commit A0**（`snapshot.go` 加 `GroupMemory="memory"`；`api/wiring/evaluation_snapshot.go` Capture 捕获 memory 组并后置追加；测试 len 2→3 + memory 用例）。据此删除原拒发方案全部产物（`GroupMemoryPlatform`/`DecisionRefusedMemory`/`ErrMemoryGroupSentinelUnsupported`/memory guard/`refused_memory` 映射），memory 组与 agent/evaluation/trace 同路径：enabled=false 直通（默认，行为不变）；enabled=true 时 ResolveVersion→draft 检查→SentinelSpec nil → `refused_not_wired`（全组一致，A7.6 前提）。零 DDL（memory 组 + `memory.*` 平台键迁移 043 已 seed；context_snapshot JSONB 追加合法）。哨兵对 draft 的真实执行消费仍属 T13 完成环（所有组一致）。
 
 ---
 
@@ -2589,7 +2589,7 @@ commit（单 task 独立 commit，标题含 type/scope）：`feat(evaluation): �
 
 责任归属（与 Task 4/T13 的边界）：
 
-- **Task 5 新产**：/admin Publish/Rollback 宿主租户加固（R29）；`publishGateCoordinator`（编排 + 哨兵判定 + memory 拒发）；`RunSentinelForDraft`/`DecideSentinel`；多租户验证 worker（enqueue/claim/判定/计数）；两条告警（remote 单一源）+ runbook；`FindLatestCompletedRunForPlatformSeq` run 查询（哨兵基线与验证共用）。
+- **Task 5 新产**：/admin Publish/Rollback 宿主租户加固（R29）；**Sub-commit A0：快照 capture 纳入 memory 组（R30 用户 09-03 已决，前置改动）**；`publishGateCoordinator`（编排 + 哨兵判定，memory 组与全平台组同路径）；`RunSentinelForDraft`/`DecideSentinel`；多租户验证 worker（enqueue/claim/判定/计数）；两条告警（remote 单一源）+ runbook；`FindLatestCompletedRunForPlatformSeq` run 查询（哨兵基线与验证共用）。
 - **Consumes（不重实现）**：Task 1(T8) run 级回归对照（`regression_compare.go` 纯函数，dict E1 `RunComparison`）+ `FindLatestCompletedRunForResource`（E6）；Task 4(T10) 平台发布/回滚审批分支的 eval_state 语义（`sentinel_passed`，Go 常量在 `pkg/constants`）；parameters E5 `Versions/GetVersion/UpdateEvalState`（经 wiring ACL，见 Interfaces）。
 - **明确留给 T13**：handler 侧「哨兵通过 → 建 `ToolApproval(publish_platform_version)` → approve 后由系统 actor 调 `store.Publish`」的完整 gated 流、`GateStore` DB 投影/台账、`buildGateService` 生产 wiring、哨兵 suite 真实解析源（§3.6 tier）、门禁台 UI/proto。Task 5 只做「编排器 + 判定 + 拒发 + 验证 worker + 告警」，`gate.enabled=true` 在 P2 的通过路径返回 **待审批/待接线** 语义（见下），不静默直发。
 
@@ -2597,11 +2597,14 @@ commit（单 task 独立 commit，标题含 type/scope）：`feat(evaluation): �
 
 **Files**
 
+- Modify `api/wiring/evaluation_snapshot.go`（Sub-commit A0：Capture 捕获 memory 组并入 Execution）
+- Modify `internal/evaluation/domain/snapshot.go`（Sub-commit A0：加 `GroupMemory` const + Execution 注释）
+- Modify `api/wiring/evaluation_snapshot_test.go`（Sub-commit A0：`TestSnapshotCapturerCaptureFull` len 2→3 + memory 断言；新增 memory 用例）
 - Modify `api/http/router.go`（`registerParameterWriteRoutes`：Publish/Rollback 挂 `InjectTenantContext`+`RequireDefaultTenant`）
 - Modify `api/http/handler/parameter_handler.go`（nil-safe 发布闸 seam + 决策渲染）
-- Create `internal/evaluation/application/publish_gate.go`（编排器 + 哨兵判定 + memory 拒发；纯编排）
+- Create `internal/evaluation/application/publish_gate.go`（编排器 + 哨兵判定；纯编排，memory 组与全平台组同路径）
 - Create `internal/evaluation/application/publish_gate_test.go`
-- Create `internal/evaluation/domain/publish_gate_const.go`（本 task 独有 layer/action/eval_state/组字面量共享常量；**`l3_platform`/`sentinel_passed` 不在此定义**——见跨任务常量单一归属 B1）
+- Create `internal/evaluation/domain/publish_gate_const.go`（本 task 独有 layer/action/eval_state 共享常量；**`l3_platform`/`sentinel_passed` 不在此定义**——见跨任务常量单一归属 B1；memory 组常量唯一 home = `snapshot.go` `GroupMemory`，Sub-commit A0）
 - Create `internal/evaluation/application/multitenant_verify.go`（验证 payload + enqueue + runner）
 - Create `internal/evaluation/application/multitenant_verify_test.go`
 - Modify `internal/evaluation/infrastructure/persistence/run_repository.go`（新增 `FindLatestCompletedRunForPlatformSeq`）
@@ -2635,7 +2638,6 @@ commit（单 task 独立 commit，标题含 type/scope）：`feat(evaluation): �
 - `internal/evaluation/domain/publish_gate_const.go`（**跨任务常量单一归属：`l3_platform` 与 `sentinel_passed` 由 Task 4 定义于 `pkg/constants/evaluation.go`（`GateLayerL3Platform`/`PlatformEvalStateSentinelPassed`），本文件不重复定义，引用方统一写 `constants.*`**；下列为本文件保留常量）：
   - layer/action：`LayerL2="l2"`、`LayerL3Sentinel="l3_sentinel"`、`LayerL3MultiTenantVerify="l3_multitenant_verify"`；`ActionRegression="regression"`、`ActionBlock="block"`、`ActionPass="pass"`、`ActionPublishGated="publish_gated"`、`ActionPublishBlocked="publish_blocked"`、`ActionQueued="queued"`、`ActionRecovered="recovered"`、`ActionNotRecovered="not_recovered"`（R31 精确值）。`LayerL3Platform`（= `l3_platform`）引用 `constants.GateLayerL3Platform`。
   - eval_state：`EvalStateSentinelFailed="sentinel_failed"`（block 写回）；`EvalStateSentinelPassed`（= `sentinel_passed`）引用 `constants.PlatformEvalStateSentinelPassed`。
-  - 组：`GroupMemoryPlatform="memory"`（镜像 parameters 域，哨兵不可捕获组判定用）。
 - `internal/evaluation/application/publish_gate.go`：
 
   ```go
@@ -2670,7 +2672,6 @@ commit（单 task 独立 commit，标题含 type/scope）：`feat(evaluation): �
       DecisionPassThrough    PublishGateDecision = iota // gate 关闭 → 调用方直通裸发布（默认）
       DecisionApprovalPending                            // 哨兵通过 → 待人工审批（T13 完成）
       DecisionBlocked                                    // 哨兵 block/失败 → 拒发（eval_state=sentinel_failed）
-      DecisionRefusedMemory                              // memory 组哨兵未接入（R30）→ 拒发
       DecisionRefusedNotWired                            // 哨兵 suite 解析源未接线（T13）→ fail-closed 拒发
   )
 
@@ -2702,8 +2703,8 @@ commit（单 task 独立 commit，标题含 type/scope）：`feat(evaluation): �
   }
 
   func NewPublishGateCoordinator(deps PublishGateDeps) *PublishGateCoordinator
-  // GatePublish 是 handler 调用的单一入口：关闭→PassThrough；memory→RefusedMemory；
-  // 其余组→ResolveVersion 失败拒发 / SentinelSpec 未接线→RefusedNotWired / 有 spec→
+  // GatePublish 是 handler 调用的单一入口：关闭→PassThrough；enabled=true 下→
+  // ResolveVersion 失败拒发 / SentinelSpec 未接线→RefusedNotWired / 有 spec→
   // RunSentinelForDraft 入队（run 未完成前返回 DecisionApprovalPending，携带 RunID）。
   func (c *PublishGateCoordinator) GatePublish(ctx context.Context, hostTenantID string, req PublishGateRequest) (PublishGateResult, error)
   // RunSentinelForDraft 对草案 seq 入队哨兵 run（EnqueueRun + PlatformSeqOverrides），返回 runID。
@@ -2714,8 +2715,6 @@ commit（单 task 独立 commit，标题含 type/scope）：`feat(evaluation): �
   // 在此方法内：pass → {l3_sentinel,pass}+{l3_platform,publish_gated}+UpdateEvalState(sentinel_passed)；
   // block → {l3_sentinel,block}+{l2,regression}+UpdateEvalState(sentinel_failed)。
   func (c *PublishGateCoordinator) DecideSentinel(ctx context.Context, hostTenantID string, groupKey string, baseline, sentinel *domain.EvalRun) (SentinelDecision, error)
-  // ErrMemoryGroupSentinelUnsupported 定义于本文件实现（B2 单一定义，Interfaces 不再重复声明）：
-  // GatePublish 返回它（经 PublishGateResult.Message + 无 error）供 handler 渲染 409。
   ```
 
 - `api/http/handler/parameter_handler.go` seam（handler 自持最小接口，防 wiring/handler 环依赖；**类型导出**，因 wiring 需命名它做 Container 字段/返回类型）：
@@ -2723,7 +2722,7 @@ commit（单 task 独立 commit，标题含 type/scope）：`feat(evaluation): �
   ```go
   // PublishGateFunc 是 Publish 前置发布闸（nil = 未装配，保持裸发布；Task 5 装配编排器，
   // 行为默认不变——gate.enabled=false 返回 passthrough）。
-  // decision ∈ {"passthrough","approval_pending","blocked","refused_memory","refused_not_wired"}
+  // decision ∈ {"passthrough","approval_pending","blocked","refused_not_wired"}
   type PublishGateFunc func(ctx context.Context, groupKey string, versionID int64, actor string) (decision, message, runID string, err error)
   func (h *ParameterHandler) SetPublishGate(g PublishGateFunc)
   ```
@@ -2797,6 +2796,127 @@ commit（单 task 独立 commit，标题含 type/scope）：`feat(evaluation): �
 
 ---
 
+### Sub-commit A0：快照 capture 纳入 memory 组（R30 扩展前置，用户 09-03 已决）
+
+> 作用：把 memory 平台组**无条件并入**评测上下文快照 `Execution`（恒 `[agent, trace, memory]` 三组，与 agent/trace 现状一致），为 Task 5 发布哨兵/归因提供 memory 组固定值基座，coordinator 对 memory 不再特判（删 `GroupMemoryPlatform` 拒发路径，见 B1/B2）。**零 DDL、spec 零改动**：memory 组 + 22 个 `memory.*` 平台键迁移 043 已 seed `platform_config_groups('memory','Memory')`（parameters registry 全 4 组，spec §3.4 L241 同集合）；`context_snapshot` JSONB 追加一组合法，consumer 按 GroupKey 匹配（`injectExecutionSnapshot`/`projectExecutionSnapshot`），后置追加不破 `Execution[0..1]` 索引。哨兵对 draft 的真实执行消费仍属 T13 完成环（所有组一致）。
+
+- [ ] **Step A0-1：写失败测试**
+
+Modify `api/wiring/evaluation_snapshot_test.go` `TestSnapshotCapturerCaptureFull`（L198-201；fixture versions 无 memory 发布 → 空组 `{GroupKey:"memory"}` 后置追加，captureGroup 已覆盖）：
+
+```go
+	require.Equal(t, evaldomain.GroupEvaluation, snap.Evaluation.GroupKey)
+	require.Len(t, snap.Execution, 3)
+	require.Equal(t, evaldomain.GroupAgent, snap.Execution[0].GroupKey)
+	require.Equal(t, evaldomain.GroupTrace, snap.Execution[1].GroupKey)
+	require.Equal(t, evaldomain.GroupMemory, snap.Execution[2].GroupKey)
+```
+
+同文件新增用例（memory 组带 seq 历史，仿既有 agent override 用例 L211-251 结构；Snapshot 用空 map 仿 trace，不臆造 memory 键名）：
+
+```go
+func TestSnapshotCapturerCaptureOverridePinsHistoricalMemoryVersion(t *testing.T) {
+	capturer, _ := newSnapshotCapturerFixture(t)
+	capturer.params = parametersapp.NewService(parametersdomain.NewParametersRegistry(),
+		&fakePlatformStore{versions: map[string][]port.PlatformVersion{
+			evaldomain.GroupEvaluation: {
+				{GroupKey: evaldomain.GroupEvaluation, VersionSeq: 3, IsCurrent: true, Snapshot: map[string]json.RawMessage{
+					"evaluation.judge.enabled": json.RawMessage(`true`),
+				}},
+			},
+			evaldomain.GroupAgent: {
+				{GroupKey: evaldomain.GroupAgent, VersionSeq: 5, IsCurrent: true, Snapshot: map[string]json.RawMessage{}},
+			},
+			evaldomain.GroupTrace: {
+				{GroupKey: evaldomain.GroupTrace, VersionSeq: 1, IsCurrent: true, Snapshot: map[string]json.RawMessage{}},
+			},
+			evaldomain.GroupMemory: {
+				{GroupKey: evaldomain.GroupMemory, VersionSeq: 1, Snapshot: map[string]json.RawMessage{}},
+				{GroupKey: evaldomain.GroupMemory, VersionSeq: 2, IsCurrent: true, Snapshot: map[string]json.RawMessage{}},
+			},
+		}})
+
+	snap, err := capturer.Capture(context.Background(), "tenant-1", evalport.CaptureInput{
+		Resource: evaldomain.ResourceRef{
+			Kind: evaldomain.ResourceKindAgent, ResourceID: "agent-1", RevisionID: "revision-1",
+		},
+		SuiteRevisionID:      "suite-1",
+		RequestedBy:          "user-1",
+		PlatformSeqOverrides: map[string]int64{evaldomain.GroupMemory: 1},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, snap)
+	require.Len(t, snap.Execution, 3)
+	require.Equal(t, evaldomain.GroupAgent, snap.Execution[0].GroupKey)
+	require.Equal(t, evaldomain.GroupTrace, snap.Execution[1].GroupKey)
+	require.Equal(t, evaldomain.GroupMemory, snap.Execution[2].GroupKey)
+	require.Equal(t, int64(1), snap.Execution[2].VersionSeq) // override 命中历史 seq 1，非 IsCurrent 2
+}
+```
+
+Run: `go test ./api/wiring/ -run 'TestSnapshotCapturerCaptureFull|TestSnapshotCapturerCaptureOverridePinsHistorical' -v`
+Expected: FAIL（编译错误 `evaldomain.GroupMemory undefined` —— const 未加）。
+
+- [ ] **Step A0-2：实现（domain const + Capture append）**
+
+Modify `internal/evaluation/domain/snapshot.go` const 块（L8-13）：
+
+```go
+const (
+	SnapshotSchemaVersion = 1
+	GroupEvaluation       = "evaluation" // 与 parameters 域 PlatformGroupEvaluation 值一致
+	GroupAgent            = "agent"
+	GroupTrace            = "trace"
+	GroupMemory           = "memory" // 与 parameters 域 GroupMemory 值一致（R30 用户 09-03：无条件并入评测快照 capture）
+)
+```
+
+Modify `snapshot.go` L39 `Execution` 字段注释（`// agent + trace 组（被测启用 memory 时追加 memory 组）` →）：
+
+```go
+	Execution []GroupSnapshot // agent + trace + memory 组（全部注册平台组；R30 用户 09-03：无条件并入，恒三组）
+```
+
+Modify `api/wiring/evaluation_snapshot.go` `Capture()`（L71-75，traceGroup 后追加 memoryGroup）：
+
+```go
+	traceGroup, err := c.captureGroup(ctx, evaldomain.GroupTrace, overrideSeq(input, evaldomain.GroupTrace))
+	if err != nil {
+		return nil, err
+	}
+	memoryGroup, err := c.captureGroup(ctx, evaldomain.GroupMemory, overrideSeq(input, evaldomain.GroupMemory))
+	if err != nil {
+		return nil, err
+	}
+	snap.Execution = []evaldomain.GroupSnapshot{agentGroup, traceGroup, memoryGroup}
+```
+
+Run: `go build ./...`
+Expected: PASS
+
+- [ ] **Step A0-3：跑相关测试 + 全仓索引核对**
+
+Run: `go test ./api/wiring/ ./internal/evaluation/domain/ -run 'Capture|Snapshot' -v`
+Expected: 全 PASS。既有 `TestSnapshotCapturerCaptureOverridePinsHistoricalAgentVersion` 依赖 `Execution[0]` 索引稳定——后置追加不破；`TestSnapshotCapturerCaptureGroupUnpublishedReturnsEmptyGroup` 用 `"unpublished"` 裸串组，不受影响。
+
+随后核对无其它对 `Execution` 长度/索引的假设：
+Run: `grep -rn "snap.Execution\|Execution\[" api/ internal/ | grep -v _test.go`
+Expected: 生产代码仅 `evaluation_snapshot.go` 组装处构造 `snap.Execution`；消费侧（`injectExecutionSnapshot`/`projectExecutionSnapshot`）按 GroupKey 匹配，不按位置取第三组。
+
+- [ ] **Step A0-4：Commit**
+
+```bash
+git add internal/evaluation/domain/snapshot.go api/wiring/evaluation_snapshot.go api/wiring/evaluation_snapshot_test.go
+git commit -m "feat(evaluation): 卡C R30 扩展——评测快照 capture 无条件纳入 memory 组（Execution 恒 [agent, trace, memory]）
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+```
+
+Run: `go test ./api/wiring/ ./internal/evaluation/domain/ -short`
+Expected: PASS
+
+---
+
 ### Sub-commit A：宿主租户加固（R29）+ handler 发布闸 seam
 
 - [ ] **Step A1：路由挂宿主租户中间件**
@@ -2863,7 +2983,7 @@ func (h *ParameterHandler) Publish(c *gin.Context) {
 		case "approval_pending":
 			c.JSON(http.StatusAccepted, gin.H{"status": "sentinel_pending", "run_id": runID, "message": message})
 			return
-		case "blocked", "refused_memory", "refused_not_wired":
+		case "blocked", "refused_not_wired":
 			c.JSON(http.StatusConflict, gin.H{"error": message})
 			return
 		default:
@@ -2913,7 +3033,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 Run: `go test ./api/http/ ./api/middleware/ -run 'Publish|HostTenant|RequireDefaultTenant' -short`
 Expected: PASS
 
-### Sub-commit B：publishGateCoordinator + RunSentinelForDraft + DecideSentinel（含 memory 拒发）
+### Sub-commit B：publishGateCoordinator + RunSentinelForDraft + DecideSentinel
 
 - [ ] **Step B1：共享字面量常量（跨任务常量单一归属修正）**
 
@@ -2926,7 +3046,9 @@ package domain
 // 跨任务常量单一归属（compile order 强制）：`l3_platform` 与 `sentinel_passed` 由
 // Task 4 定义于 pkg/constants/evaluation.go（GateLayerL3Platform / PlatformEvalStateSentinelPassed），
 // 本文件不重复定义；编排代码引用 constants.GateLayerL3Platform / constants.PlatformEvalStateSentinelPassed。
-// 本文件只保留 Task 5 独有常量（l2/l3_sentinel/l3_multitenant_verify/全部 action/sentinel_failed/组）。
+// 本文件只保留 Task 5 独有常量（l2/l3_sentinel/l3_multitenant_verify/全部 action/sentinel_failed）。
+// 组常量唯一 home = internal/evaluation/domain/snapshot.go GroupMemory（Sub-commit A0 定义，
+// 与 parameters 域同值；本文件不再定义组字面量）。
 const (
 	LayerL2                  = "l2"
 	LayerL3Sentinel          = "l3_sentinel"
@@ -2948,9 +3070,6 @@ const (
 	EvalStateSentinelFailed = "sentinel_failed"
 )
 
-// GroupMemoryPlatform 镜像 parameters 域 GroupMemory：哨兵 capture 未覆盖 memory 组（R30），
-// coordinator 据此 fail-closed 拒发。取值必须与 internal/parameters/domain.GroupMemory 保持同步。
-const GroupMemoryPlatform = "memory"
 ```
 
 Run: `go build ./internal/evaluation/...`
@@ -2978,9 +3097,6 @@ import (
 // PublishGateDecision / PublishGateResult / NewPublishGateCoordinator 见 Interfaces 节，
 // 此处为关键方法实现。
 
-// ErrMemoryGroupSentinelUnsupported 是 R30 memory 组拒发的 typed 错误（handler 渲染 409）。
-// 单一定义于本文件（Interfaces 节不再重复声明 var，避免重复添加）。
-var ErrMemoryGroupSentinelUnsupported = errors.New("memory 组哨兵未接入：平台参数 memory 组发布无法跑发布哨兵（O1 仪式缺失），已拒绝发布。memory 组入快照 capture + 门禁台归 T13")
 
 // gateEnabled 判总开关：关闭（默认）→ 直通，不改动任何现状。
 func (c *PublishGateCoordinator) gateEnabled(ctx context.Context) bool {
@@ -2992,9 +3108,6 @@ func (c *PublishGateCoordinator) gateEnabled(ctx context.Context) bool {
 func (c *PublishGateCoordinator) GatePublish(ctx context.Context, hostTenantID string, req PublishGateRequest) (PublishGateResult, error) {
 	if !c.gateEnabled(ctx) {
 		return PublishGateResult{Decision: DecisionPassThrough}, nil
-	}
-	if req.GroupKey == domain.GroupMemoryPlatform {
-		return PublishGateResult{Decision: DecisionRefusedMemory, Message: ErrMemoryGroupSentinelUnsupported.Error()}, nil
 	}
 	seq, status, _, ok, err := c.deps.ResolveVersion(ctx, req.GroupKey, req.VersionID)
 	if err != nil {
@@ -3080,13 +3193,13 @@ func (c *PublishGateCoordinator) DecideSentinel(ctx context.Context, hostTenantI
 
 > 说明：eval run 仅在完成时落库（`SaveRun` 于 run 完成路径调用），故 `GetRun` 返回非 nil 即视为 completed 哨兵 run；`sentinel == nil` 视为未完成 → block。`sentinelSeq(groupKey, run)` 从 `run.ContextSnapshot` 取组 seq（helper 写于本文件；`ContextSnapshot.Evaluation.GroupKey` 与 `Execution[]` 各组的 GroupKey+VersionSeq 匹配 groupKey，nil 快照回退 0）。`emitGate`/`updateEvalState` 为私有 helper（`emitGate` 走 `deps.Metrics.IncEvalGateAction` nil-safe）。`Compare` nil 时 `DecideSentinel` 返回错误（fail-closed，不直发）。
 
-- [ ] **Step B3：判定单测（表驱动，覆盖 pass/block/无基线/哨兵失败/memory 拒发/关闭直通）**
+- [ ] **Step B3：判定单测（表驱动，覆盖 pass/block/无基线/哨兵失败/memory 组与全组同路径/关闭直通）**
 
 Create `internal/evaluation/application/publish_gate_test.go`：stub `Compare`/`SentinelSpec`/`ResolveVersion`/`UpdateEvalState`/`EnqueueSentinel`/`Metrics`（用 `observability.NoopMetrics` 或包内 metrics 桩）。用例名描述行为：
 
 ```go
 func TestPublishGateCoordinator_GateDisabled_PassThrough(t *testing.T)
-func TestPublishGateCoordinator_MemoryGroup_RefusedMemory(t *testing.T)
+func TestPublishGateCoordinator_MemoryGroup_UniformRefusedNotWired(t *testing.T) // R30 memory 组不再特判：enabled=true & SentinelSpec nil → RefusedNotWired，与全组一致
 func TestPublishGateCoordinator_SentinelBlock_RefusesAndWritesFailed(t *testing.T) // Compare.Regressed=true → 断言 UpdateEvalState 收到 sentinel_failed + l3_sentinel block + l2 regression
 func TestPublishGateCoordinator_SentinelPass_WritesPassed(t *testing.T)            // Regressed=false → sentinel_passed + l3_sentinel pass + l3_platform publish_gated
 func TestPublishGateCoordinator_SentinelRunFailed_Blocks(t *testing.T)             // sentinel 非 completed → block，不 Compare
@@ -3118,7 +3231,7 @@ func runCompareAdapter(baseline, current *evaldomain.EvalRun) (evaldomain.RunCom
 }
 ```
 
-`func (c *Container) newPublishGateCoordinator(ctx) handler.PublishGateFunc` 组装真实 deps（`GateEnabled` 读平台键 `evaluation.gate.enabled`，仿 `observationEnabled`；`ResolveVersion` 用 `c.Parameters.Service.Versions` 匹配 ID；`UpdateEvalState` 直连 parameters Service；`Compare` 绑 `runCompareAdapter`；`SentinelSpec`/`EnqueueSentinel`/`BaselineRun` 在 P2 绑 nil/占位——enabled=true 由 B2 拒发兜底），并在 `registerParameterWriteRoutes`（router.go）构造 handler 后 `paramHandler.SetPublishGate(...)`。router.go 组装处需要 gate func：Container 增字段 `PublishGate handler.PublishGateFunc`，wiring build 时经 `newPublishGateCoordinator` 赋值（参数 handler 构造在 router.go，经 container 取 `c.PublishGate`）。适配器把 `PublishGateResult.Decision` 整数决策翻译为 handler seam 字符串集合并封进 `(decision, message, runID string, err error)`：`DecisionPassThrough→"passthrough"`、`DecisionApprovalPending→"approval_pending"`（RunID 一并带出）、`DecisionBlocked→"blocked"`、`DecisionRefusedMemory→"refused_memory"`、`DecisionRefusedNotWired→"refused_not_wired"`；`err!=nil` 时返回原始 error（handler 走 500），否则 `err=nil`（handler 按 decision 渲染 409/202）。
+`func (c *Container) newPublishGateCoordinator(ctx) handler.PublishGateFunc` 组装真实 deps（`GateEnabled` 读平台键 `evaluation.gate.enabled`，仿 `observationEnabled`；`ResolveVersion` 用 `c.Parameters.Service.Versions` 匹配 ID；`UpdateEvalState` 直连 parameters Service；`Compare` 绑 `runCompareAdapter`；`SentinelSpec`/`EnqueueSentinel`/`BaselineRun` 在 P2 绑 nil/占位——enabled=true 由 B2 拒发兜底），并在 `registerParameterWriteRoutes`（router.go）构造 handler 后 `paramHandler.SetPublishGate(...)`。router.go 组装处需要 gate func：Container 增字段 `PublishGate handler.PublishGateFunc`，wiring build 时经 `newPublishGateCoordinator` 赋值（参数 handler 构造在 router.go，经 container 取 `c.PublishGate`）。适配器把 `PublishGateResult.Decision` 整数决策翻译为 handler seam 字符串集合并封进 `(decision, message, runID string, err error)`：`DecisionPassThrough→"passthrough"`、`DecisionApprovalPending→"approval_pending"`（RunID 一并带出）、`DecisionBlocked→"blocked"`、`DecisionRefusedNotWired→"refused_not_wired"`；`err!=nil` 时返回原始 error（handler 走 500），否则 `err=nil`（handler 按 decision 渲染 409/202）。
 
 Run: `go build ./... && go vet ./api/wiring/`
 Expected: PASS（wiring→handler 方向若已有依赖环，将 `PublishGate` 的 func 类型改为 wiring 本地定义、router 再适配，见既有 `dlqReplayAdapter` 同款 fallback）。
@@ -3127,7 +3240,7 @@ Expected: PASS（wiring→handler 方向若已有依赖环，将 `PublishGate` �
 
 ```bash
 git add internal/evaluation/domain/publish_gate_const.go internal/evaluation/application/publish_gate.go internal/evaluation/application/publish_gate_test.go api/wiring/publish_gate.go api/http/router.go
-git commit -m "feat(evaluation): 卡C L3+ 发布哨兵协调器 publishGateCoordinator + RunSentinelForDraft（R30 memory fail-closed 拒发 / R31 计数）
+git commit -m "feat(evaluation): 卡C L3+ 发布哨兵协调器 publishGateCoordinator + RunSentinelForDraft（memory 组与全平台组同路径 / R31 计数）
 
 Co-Authored-By: Claude <noreply@anthropic.com>"
 ```
@@ -3373,7 +3486,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 
 **主会话裁决（原「需协调者定夺」；协调者已定稿；未决项见末尾「开放问题」）**
 
-1. **R30 memory 组偏差（最高优先，需用户复核，非静默）**：spec O1「合一、全平台组哨兵」与代码现实（capture 仅 evaluation/agent/trace，eval 域快照无 `GroupMemory`）冲突。P2 已按 fail-closed 拒发（`ErrMemoryGroupSentinelUnsupported`）处置，但这是把「memory 组发布」整体关停到 T13 的实质产品决策。→ **master：保留本 Task 顶部 ⚠ 块 + 末尾「开放问题 #1」交用户显式确认**（spec §3.4 L241 明确列出 memory 组是平台组）。
+1. **R30 memory 组偏差（用户 09-03 已复核并决定，处置完结）**：spec O1「合一、全平台组哨兵」与代码现实（capture 仅 evaluation/agent/trace，eval 域快照无 `GroupMemory`）冲突，原按 fail-closed 拒发（`ErrMemoryGroupSentinelUnsupported`）处置。→ **用户 09-03 复核后定案：P2 扩范围，无条件纳入 memory capture**（Execution 恒 `[agent, trace, memory]`，落地见 Sub-commit A0）；据此删除拒发全部产物（`GroupMemoryPlatform`/`DecisionRefusedMemory`/`ErrMemoryGroupSentinelUnsupported`/memory guard/`refused_memory` 映射），memory 组与 agent/evaluation/trace 同路径。原「开放问题 #1」已归档为已解决，无待决项。
 2. **跨任务常量单一归属**：→ **master 定稿（compile order 强制，见「任务依赖与次序」跨任务绑定 B）**：`l3_platform`/`auto_refused`/`sentinel_passed` Go 常量单一 home = `pkg/constants/evaluation.go`（Task 4 Step 4 定义）；本 Task B1 已**删除** `domain/publish_gate_const.go` 中 `LayerL3Platform` 与 `EvalStateSentinelPassed` 重复定义，B2 引用 `constants.GateLayerL3Platform`/`constants.PlatformEvalStateSentinelPassed` 并加 `pkg/constants` import。此点**与裁决 A7.2「T12 拥有常量」的偏差为 compile order 强制**（见「开放问题 #3」）。
 3. **Task 1 regression_compare 导出名绑定**：→ **master 定稿（跨任务绑定 A）**：导出名 = `CompareRunRegression`（`func(baseline, current *domain.EvalRun) *domain.RunComparison`）；wiring 用 `runCompareAdapter` 包成 deps 的 `(RunComparison, error)` 签名，B4/C5 复用。
 4. **编排器装配位置 vs handler 环依赖**：→ **master 定稿**：`SetPublishGate` seam + wiring 把编排器适配成 handler 的 func 类型；若 `api/wiring → api/http/handler` 已存在依赖环，wiring 本地定义 func 类型、router.go 再适配（`dlqReplayAdapter` 同款 fallback）。
@@ -3415,7 +3528,7 @@ Expected：全绿；`make code-quality` 无新超标函数（编排器/runner �
 - §3.4-2 运行时判异强制人工（rollback_manual 审批流）→ Task 4/T13（`GateApprovalRequester` 生产 wiring）。
 - §3.4-3 回滚后自动入队的**调用点** → T13（本 section 交付 enqueue 函数 + worker + 判定 + 计数；见「开放问题 #2」）。
 - §3.4-4 分化检测的**租户分层聚合分析/归因视图**（防辛普森完整分层）→ T13+（P2 禁新 metric family + 无 DB 投影，分化告警由 recovered/not_recovered 并存信号近似）。
-- memory 组入快照 capture、`GateStore` DB 台账、`buildGateService`、门禁台 UI/proto → T13（dict A）。
+- `GateStore` DB 台账、`buildGateService`、门禁台 UI/proto → T13（dict A）。memory capture 已随 R30 决定（用户 09-03）纳入 P2 的 Sub-commit A0，不再归 T13。
 
 ---
 
@@ -3428,17 +3541,17 @@ Expected：全绿；`make code-quality` 无新超标函数（编排器/runner �
 | §3.2-③ 评审池 behavior 分支（enum/Valid/RiskLevel/TriggersForObservation） | Task 1 | R19；`reviewRiskOrderSQL` 两端镜像 |
 | §3.3 L3 资源回滚三路径 planner/executor/port/wiring | Task 3 | R24/R25；mcp→ErrRollbackUnsupported |
 | §3.4 无自动不变量 + 平台三操作审批执行 + eval_state 读路径 | Task 4 | R26-R28 + E5 读路径 |
-| §3.4 L3+ 发布哨兵编排 + memory fail-closed 拒发 + 多租户验证 worker | Task 5 | R29-R31（R30 待用户复核）；enqueue 调用点 T13 |
+| §3.4 L3+ 发布哨兵编排 + memory 组入快照 capture + 多租户验证 worker | Task 5 | R29-R32（R30 已决：用户 09-03，无条件并入 Sub-commit A0）；enqueue 调用点 T13 |
 | §4.1.1 eval_state（只读接线，无 DDL） | Task 4 | migration 044 列已在 |
 | §4.3.5 / §4.3.6（behavior 判异 + run 级回归 + E6 基线 run 查询） | Task 1 | `avg_score` 基准（A5.1）；不过滤 RevisionID（A5.2） |
 | §4.4 平台三操作行（rollback_platform/rollback_resource/publish_platform_version） | Task 4 | 消费 Task 3 executor + Task 5 哨兵语义 |
-| §5 T13/T14（台账 DB 投影、buildGateService 生产 wiring、门禁台 UI/proto、memory capture 扩展） | 不在 P2 | 全部留 T13/T14，P2 仅 stub/占位/拒发 |
+| §5 T13/T14（台账 DB 投影、buildGateService 生产 wiring、门禁台 UI/proto） | 不在 P2 | 全部留 T13/T14，P2 仅 stub/占位/拒发（memory capture 不在此列——已随 R30 决定入 P2 Sub-commit A0） |
 
-无占位符、无 TBD、无「see scratch / same as Task N」。跨任务共享符号全文一致：`CompareRunRegression`（Task 1 产出，Task 5 wiring 经 `runCompareAdapter` 消费）、`FindLatestCompletedRunForResource`（Task 1 定义、Task 5 消费）、`ResourceRollbackExecutor`/`ErrRollbackUnsupported`/`ErrAutoRollbackForbidden`（Task 3 定义、Task 4 消费）、`GateTarget.Kind`（Task 3/4 统一）、`ErrMemoryGroupSentinelUnsupported`（Task 5 单一定义）、`constants.GateLayerL3Platform`/`GateActionAutoRefused`/`PlatformEvalStateSentinelPassed`（Task 4 定义、Task 4/5 引用）、`monitoring-runbook-test.go` 一律两参、监控规则单一源 remote yaml + 双栈 render 产物。
+无占位符、无 TBD、无「see scratch / same as Task N」。跨任务共享符号全文一致：`CompareRunRegression`（Task 1 产出，Task 5 wiring 经 `runCompareAdapter` 消费）、`FindLatestCompletedRunForResource`（Task 1 定义、Task 5 消费）、`ResourceRollbackExecutor`/`ErrRollbackUnsupported`/`ErrAutoRollbackForbidden`（Task 3 定义、Task 4 消费）、`GateTarget.Kind`（Task 3/4 统一）、`snapshot.go` `GroupMemory`（Task 5 Sub-commit A0 单一定义，与 parameters 域同值）、`constants.GateLayerL3Platform`/`GateActionAutoRefused`/`PlatformEvalStateSentinelPassed`（Task 4 定义、Task 4/5 引用）、`monitoring-runbook-test.go` 一律两参、监控规则单一源 remote yaml + 双栈 render 产物。
 
 ## 主要风险与对策
 
-1. **R30 memory 组 fail-closed 拒发 = memory 组发布在 P2 被整体关停到 T13（产品级决策，需用户确认，非静默）**：P2 `publishGateCoordinator` 对 `GroupMemoryPlatform` 返回 `DecisionRefusedMemory`（typed 错误文案「哨兵未接入」）。若该行为不可接受（memory 组平台参数现网需经 /admin 发布），需在 P2 合入前决策：要么接受关停至 T13，要么扩 P2 范围（memory 组入快照 capture——属 T13，会破零 DDL/范围硬边界）。见「开放问题 #1」。
+1. **R30 memory 组偏差（已解决，用户 09-03 已复核，非开放项）**：原 fail-closed 拒发 = memory 组发布在 P2 被整体关停到 T13 的产品级关停，已随用户决定解除——**扩 P2 范围，无条件纳入 memory capture**（Sub-commit A0，见「开放问题 #1」归档）。memory 组与 agent/evaluation/trace 同路径（enabled=false 直通默认不变；enabled=true SentinelSpec nil → `refused_not_wired` 全组一致，A7.6 前提不破）；`publishGateCoordinator` 不再特判，无残留风险。
 2. **P2 合入后不得开启 `evaluation.gate.enabled`（A7.6）**：gate.enabled=true 的 P2 通过路径 = `refused_not_wired`/`approval_pending` 且无完成环（SentinelSpec 未接线、人工审批环未建），任何平台组发布都会被拒或悬挂。**registry 默认 false 不受影响**；T13 全链路 wiring（哨兵 suite 源 + GateApprovalRequester 生产接线）完成前禁止开启。风险节显著标注，runbook 亦注明。
 3. **Task 4 `publish_platform_version` 在 Task 5 合入前恒 fail-closed（预期安全中间态）**：master 顺序 T11→T10→T12；Task 4 合入后 `sentinel_passed` 无生产者写入，`executePlatformPublishGated` 恒 notExecuted。无副作用、无发布发生；Task 5 哨兵流落位后才放行（A6.6）。
 4. **`pkg/constants` 常量单一归属 vs 裁决 A7.2（compile order 偏差）**：A7.2 原本裁给「T12 拥有 layer/action 常量」，但 Task 4（T10）先于 Task 5（T12）合入且 Task 4 已 emit `{l3_platform,auto_refused}` → 这三个值的 Go home 必须是 `pkg/constants`（Task 4 定义）。Task 5 只消费、不重复定义。实现者若发现其它共享字面量需跨 Task 引用，一律进 `pkg/constants/evaluation.go` 或既有 domain 常量，禁止散写。见「开放问题 #3」。
@@ -3449,7 +3562,7 @@ Expected：全绿；`make code-quality` 无新超标函数（编排器/runner �
 
 ## 开放问题（需用户/协调者复核；非静默决定）
 
-1. **R30 memory 组偏差（最高优先）**：spec O1「发布哨兵对全部平台组一律生效」与代码现实冲突——快照 capture 只覆盖 evaluation/agent/trace、eval 域快照常量无 `GroupMemory`、memory 平台参数无法由评测快照固化。P2 处置 = coordinator 对 memory 组 **fail-closed 拒发**（`ErrMemoryGroupSentinelUnsupported`），等价把 memory 组 /admin 发布整体关停到 T13。**请用户显式确认此产品决策**（接受关停至 T13，或在 P2 扩范围把 memory 组纳入快照 capture——后者破坏 P2 零 DDL/范围硬边界，倾向 T13）。
+1. **R30 memory 组偏差（用户 09-03 已决，归档为已解决）**：spec O1「发布哨兵对全部平台组一律生效」与代码现实冲突——快照 capture 原只覆盖 evaluation/agent/trace、eval 域快照常量无 `GroupMemory`。**用户 09-03 复核后决定：P2 扩范围，无条件纳入 memory capture**（Execution 恒 `[agent, trace, memory]`，落地见 Sub-commit A0：`snapshot.go` 加 `GroupMemory`；`evaluation_snapshot.go` Capture 捕获 memory 组并后置追加；测试 len 2→3）。据此删除原拒发方案全部产物（`GroupMemoryPlatform`/`DecisionRefusedMemory`/`ErrMemoryGroupSentinelUnsupported`/memory guard/`refused_memory` 映射），memory 组不再 fail-closed 拒发、不再归 T13；哨兵对 draft 的真实执行消费仍属 T13 完成环（所有组一致）。零 DDL 边界不破。
 2. **平台回滚/发布成功后的多租户验证入队调用点（spec §3.4-3）**：`EnqueueMultiTenantVerify` 调用点应在 Task 4 `executePlatformRollback` 成功路径（回滚后）/ 发布 gate 通过后（T13 决策环）。compile order 使 Task 4 无法引用 Task 5 交付函数，且生产 wiring 中平台回滚仅经 T13 审批流可达。**master 裁决：调用点延迟到 T13**（P2 无调用者 = 安全中间态）。发布成功后是否也入队验证由 T13 决策环补（A7.5 倾向默认仅回滚后入队）。T13 若需真实 approval id 落 `GateActionRecord.ApprovalID`，亦在 ExecuteApprovedAction 透传请求字段。
 3. **常量单一归属与裁决 A7.2 的偏差（compile order 强制）**：A7.2 原裁「layer/action Go 常量由 T12（唯一 emit 侧）拥有」，但 Task 4（T10）先于 Task 5 合入且需 emit `{l3_platform, auto_refused}`、消费 `sentinel_passed` → 这三个值 home = `pkg/constants/evaluation.go`（Task 4 Step 4）。Task 5 删除 domain 文件中的重复定义并引用 `constants.*`。**请用户知悉此对 A7.2 的有意修正**；若坚持 T12 拥有，则需把 Task 4 中三个常量的引用改为等值字符串 + 常量迁移到 Task 5（不推荐，破坏禁 magic string）。
 4. **`evaluation.gate.enabled` 在 P2 的开启路径不完备（A7.6）**：P2 enabled=true 时所有平台组发布返回 `refused_not_wired`/`approval_pending` 且无完成环。**P2 合入后不得开启该开关**（默认 false 不受影响）；待 T13 全链路 wiring（哨兵 suite 源 + GateApprovalRequester + 人工审批环）完成后方可开启。此项已显著标注于风险节与本计划头部，非静默收编。
