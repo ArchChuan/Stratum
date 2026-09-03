@@ -170,18 +170,20 @@ export const executionArtifactSchema = z.object({
 export type ExecutionArtifact = z.infer<typeof executionArtifactSchema>;
 
 // ChatCitationSource is a retrieval provenance entry carried by the SSE done
-// payload (JSON field names are PascalCase: the backend serializes
-// domain.RAGSearchSource without tags). Each entry points at one chunk of a
-// source document the assistant grounded its answer on.
+// payload. Wire JSON is camelCase: the backend serializes domain.RAGSearchSource
+// with json tags (workspaceId/workspaceName/chunkId/documentId/documentTitle/
+// snippet/score/hasScore), and the same camelCase shape is replayed from the
+// persisted chat_messages.sources_json on history load — live and replay render
+// identically with no field remap.
 export interface ChatCitationSource {
-  WorkspaceID?: string;
-  WorkspaceName?: string;
-  ChunkID?: string;
-  DocumentID?: string;
-  DocumentTitle?: string;
-  Snippet?: string;
-  Score?: number;
-  HasScore?: boolean;
+  workspaceId?: string;
+  workspaceName?: string;
+  chunkId?: string;
+  documentId?: string;
+  documentTitle?: string;
+  snippet?: string;
+  score?: number;
+  hasScore?: boolean;
 }
 
 // NoAnswerReason 与后端 pkg/constants 的 NoAnswerReason 枚举逐值对齐
@@ -196,7 +198,8 @@ export const noAnswerReasons = [
 export type NoAnswerReason = (typeof noAnswerReasons)[number];
 
 // NoAnswerInfo 是 SSE done payload 的 noAnswer 信号（JSON 字段名 PascalCase：
-// 后端 domain.NoAnswerInfo 无 tag，与 ChatCitationSource 同一序列化规则）。
+// 后端 domain.NoAnswerInfo 无 tag）。注意与 sources 的 camelCase 规则不同：
+// sources 子字段带 json tag，noAnswer 子字段无 tag，二者并存于同一 done 帧。
 // nil=有答案（omitempty 不输出键）；非 nil=无答案且 reason 说明原因。
 export interface NoAnswerInfo {
   Reason: NoAnswerReason;

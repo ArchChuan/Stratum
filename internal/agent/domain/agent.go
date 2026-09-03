@@ -140,6 +140,11 @@ type ChatMessage struct {
 	SkipOutbox     bool
 	Visibility     string
 	Artifacts      []ExecutionArtifact
+	// Sources are the RAG citation sources an assistant answer was grounded on,
+	// persisted to chat_messages.sources_json and replayed on history load.
+	// Serialized camelCase via RAGSearchSource json tags — identical to the live
+	// SSE done frame's sources, so live and replay render the same cards.
+	Sources []RAGSearchSource
 	// TraceID links the message to its agent execution trace. Persisted so
 	// the evaluation case generator can pair (query, response) with
 	// evaluation_feedback rows; empty for manual messages.
