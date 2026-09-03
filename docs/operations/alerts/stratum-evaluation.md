@@ -110,3 +110,27 @@ run 级回归劣化判异（相对基线 run 的维度 delta 跌破 `RunRegressi
 - 处置：命中工具应禁用 → 平台参数开启 `evaluation.ruleguard.enabled=true`，走平台参数发布审批，
   随后回归验证命中即拦截；误报 → 收紧 `evaluation.ruleguard.denylist`。禁止远端手改（变更走
   操作台/CD 流程）。
+
+<a id="stratum-eval-multitenant-verify-not-recovered"></a>
+
+## StratumEvalMultiTenantVerifyNotRecovered
+
+平台版本回滚后，multi-tenant verify 判定存在未恢复租户（critical，T4 红线级）。
+
+- 定位：查询 `eval_gate_action_total{layer="l3_multitenant_verify",action="not_recovered"}` 按租户维度下钻；
+  确认回滚动作（group_key/from_seq/to_seq）与受影响租户。
+- 确认：到该租户核对回滚目标 seq 下的 run 表现（`FindLatestCompletedRunForPlatformSeq` 锚定 to_seq）；
+  not_recovered = 回滚后（好版本）run 仍劣于回滚前（坏版本）run（run 级回归 Regressed=true）。
+- 处置：平台参数影响全租户，恢复不达标需人工介入——复核回滚目标是否为真「上一好版本」，必要时继续回滚到更早
+  版本或调整配置；处置动作走参数操作台与 CD，禁止远端手改。恢复后 not_recovered 计数停止增长即自动消除。
+
+<a id="stratum-eval-platform-multitenant-divergence"></a>
+
+## StratumEvalPlatformMultiTenantDivergence
+
+平台版本多租户验证分化（多数恢复 / 少数未恢复，warning，仅信号不自动处置）。
+
+- 语义：同一验证窗口内 recovered 与 not_recovered 并存 = 分布效应（多数改善、少数劣化），
+  可能源于租户规模/tier/流量差异（防辛普森悖论需分层归因）。
+- 定位：把 not_recovered 的租户名单按 tier/行业/流量规模分层下钻，找出劣化集中段。
+- 处置：仅告警，不自动回滚；人工在归因视图确认劣化是否真实能力退化，走参数调整/定向回滚流程。

@@ -89,6 +89,7 @@ func BuildContainer(ctx context.Context, cfg *config.Config, logger *zap.Logger)
 		{"collab", c.buildCollab},
 		{"evaluation", c.buildEvaluation},
 		{"publish-gate", c.buildPublishGate},
+		{"platform-verify-worker", c.buildPlatformVerifyWorker},
 	}
 
 	for _, step := range steps {

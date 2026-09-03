@@ -79,6 +79,12 @@ type RunRepository interface {
 	FindLatestCompletedRunForResource(
 		ctx context.Context, tenantID string, ref domain.ResourceRef, suiteRevisionID string,
 	) (*domain.EvalRun, error)
+	// FindLatestCompletedRunForPlatformSeq 返回 tenant 下最近一条 completed run，其
+	// context_snapshot 中 groupKey 组 version_seq == seq（在指定平台配置版本下执行的最近
+	// run）；无 → (nil, nil)。多租户回滚验证与发布哨兵共用（spec §3.4-3）。
+	FindLatestCompletedRunForPlatformSeq(
+		ctx context.Context, tenantID, groupKey string, seq int64,
+	) (*domain.EvalRun, error)
 }
 
 type SuiteRepository interface {
@@ -133,6 +139,20 @@ type JobRepository interface {
 	Claim(ctx context.Context, tenantID, workerID string, lease time.Duration) (*domain.EvaluationJob, error)
 	Complete(ctx context.Context, tenantID, jobID, resultID string) error
 	Fail(ctx context.Context, tenantID, jobID, errorMessage string) error
+}
+
+// JobPlatformVerifyRepo 复用既有 evaluation_jobs 表（无 DDL；job_type 列无 CHECK）。
+type JobPlatformVerifyRepo interface {
+	// EnqueuePlatformVerify 幂等插入（job_type=domain.JobTypePlatformVerify，
+	// ON CONFLICT (idempotency_key) DO NOTHING）；返回是否新插入（已存在 → false，
+	// 调用方据此不重复 +queued）。
+	EnqueuePlatformVerify(
+		ctx context.Context, tenantID string, p domain.PlatformVerifyPayload, idempotencyKey, createdBy string,
+	) (bool, error)
+	// ClaimPlatformVerify 只取本租户 job_type='platform_verify' 的一条（queued/running 过期）。
+	ClaimPlatformVerify(
+		ctx context.Context, tenantID, workerID string, lease time.Duration,
+	) (*domain.PlatformVerifyJob, error)
 }
 
 type CandidateCreator interface {

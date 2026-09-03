@@ -213,6 +213,61 @@ func (r *PgRunRepository) FindLatestCompletedRunForResource(
 	return run, err
 }
 
+// FindLatestCompletedRunForPlatformSeq 返回 tenant 下最近一条 completed run，其
+// context_snapshot 中 groupKey 组 version_seq == seq。锚点可能在 evaluation 组
+// （context_snapshot->'evaluation'）或 execution 数组（context_snapshot->'execution'，
+// agent/trace/memory 组）——两处均匹配 group_key + version_seq。只读 run 行，不加载
+// case results；无匹配 run → (nil, nil)。
+func (r *PgRunRepository) FindLatestCompletedRunForPlatformSeq(
+	ctx context.Context,
+	tenantID, groupKey string,
+	seq int64,
+) (*domain.EvalRun, error) {
+	ctx = postgres.WithTenant(ctx, &postgres.TenantContext{TenantID: tenantID})
+	var run *domain.EvalRun
+	err := execTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		run = &domain.EvalRun{}
+		var kind string
+		var metricsJSON []byte
+		var snapshotJSON []byte
+		err := tx.QueryRow(ctx,
+			`SELECT id, resource_kind, resource_id, revision_id, suite_revision_id,
+			        passed, total_cases, passed_cases, metrics, context_snapshot, created_by, created_at
+			 FROM eval_runs
+			 WHERE status='succeeded'
+			   AND (
+			     (context_snapshot->'evaluation'->>'group_key' = $1
+			      AND (context_snapshot->'evaluation'->>'version_seq')::bigint = $2)
+			     OR EXISTS (
+			       SELECT 1 FROM jsonb_array_elements(context_snapshot->'execution') g
+			       WHERE g->>'group_key' = $1 AND (g->>'version_seq')::bigint = $2)
+			   )
+			 ORDER BY created_at DESC, id DESC LIMIT 1`,
+			groupKey, seq,
+		).Scan(&run.ID, &kind, &run.Resource.ResourceID, &run.Resource.RevisionID,
+			&run.SuiteRevisionID, &run.Passed, &run.TotalCases, &run.PassedCases, &metricsJSON,
+			&snapshotJSON, &run.CreatedBy, &run.CreatedAt)
+		if err == pgx.ErrNoRows {
+			run = nil
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		run.Resource.Kind = domain.ResourceKind(kind)
+		if len(metricsJSON) > 0 {
+			_ = json.Unmarshal(metricsJSON, &run.Metrics)
+		}
+		snap, derr := decodeContextSnapshot(snapshotJSON)
+		if derr != nil {
+			return derr
+		}
+		run.ContextSnapshot = snap
+		return nil
+	})
+	return run, err
+}
+
 // decodeContextSnapshot 解码 eval_runs.context_snapshot JSONB：空/'{}'（旧 run
 // 未捕获）→ (nil, nil)；损坏 JSON 显式报错而非静默丢快照。
 func decodeContextSnapshot(raw []byte) (*domain.EvaluationContextSnapshot, error) {

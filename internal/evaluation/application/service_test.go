@@ -241,6 +241,12 @@ func (f *fakeRunRepo) FindLatestCompletedRunForResource(
 	return nil, nil
 }
 
+func (f *fakeRunRepo) FindLatestCompletedRunForPlatformSeq(
+	_ context.Context, _, _ string, _ int64,
+) (*domain.EvalRun, error) {
+	return nil, nil
+}
+
 type fakeError string
 
 func (e fakeError) Error() string { return string(e) }

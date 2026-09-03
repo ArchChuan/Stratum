@@ -161,3 +161,9 @@ const (
 	// PlatformEvalStateSentinelPassed 表示草案已过发布前置哨兵，允许人工确认发布。
 	PlatformEvalStateSentinelPassed = "sentinel_passed"
 )
+
+// 多租户验证（spec §3.4-3）：回滚后验证窗口与未恢复判定门槛。
+const (
+	PlatformVerifyWindowMinutes   = 30 // 验证对比取 run 的窗口（分钟）
+	PlatformVerifyNotRecoveredMin = 1  // ≥1 租户未恢复即触发 StratumEvalMultiTenantVerifyNotRecovered
+)

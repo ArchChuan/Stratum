@@ -153,3 +153,37 @@ groups:
             只读待命。到评测中心对比 base vs current run 的 by_dimension 并人工确认。
           dashboard_url: https://stratum.grafana/d/evaluation
           runbook_url: /docs/operations/alerts/stratum-evaluation.md#stratum-eval-run-regression
+      - alert: StratumEvalMultiTenantVerifyNotRecovered
+        expr: |
+          increase(eval_gate_action_total{layer="l3_multitenant_verify",action="not_recovered"}[30m]) >= 1
+        for: 5m
+        labels:
+          severity: critical
+          service: evaluation
+          component: l3-plus-platform
+          environment: production
+        annotations:
+          summary: 平台回滚后多租户验证存在未恢复租户（当前 {{ $value }}）
+          description: >-
+            平台版本回滚后 multi-tenant verify 判定 ≥ 1 个租户 not_recovered（回滚后
+            该租户表现仍劣于回滚前），持续 5 分钟。平台参数影响全租户，属 T4 红线级；
+            按 runbook 立即人工确认并处置。
+          dashboard_url: https://stratum.grafana/d/evaluation
+          runbook_url: /docs/operations/alerts/stratum-evaluation.md#stratum-eval-multitenant-verify-not-recovered
+      - alert: StratumEvalPlatformMultiTenantDivergence
+        expr: |
+          increase(eval_gate_action_total{layer="l3_multitenant_verify",action="not_recovered"}[30m]) > 0
+            AND increase(eval_gate_action_total{layer="l3_multitenant_verify",action="recovered"}[30m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+          service: evaluation
+          component: l3-plus-platform
+          environment: production
+        annotations:
+          summary: 平台版本多租户验证出现分化（多数恢复 / 少数未恢复）
+          description: >-
+            同一平台版本窗口内 recovered 与 not_recovered 并存（多数改善少数劣化分布效应，
+            spec §3.4-4 / §9.4.2）。仅信号告警不做自动处置；劣化租户名单供人工在归因视图下钻。
+          dashboard_url: https://stratum.grafana/d/evaluation
+          runbook_url: /docs/operations/alerts/stratum-evaluation.md#stratum-eval-platform-multitenant-divergence
