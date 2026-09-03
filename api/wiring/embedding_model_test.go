@@ -80,7 +80,7 @@ func (s *fakePlatformStore) ListVersions(_ context.Context, groupKey string) ([]
 }
 
 // GetVersion/UpdateEvalState 补齐接口（分层门禁 P1）：eval_state 是 DB 独立列，
-// 桩里用 Snapshot["eval_state"] 占位；仅需要存在性 + ErrVersionNotFound 语义。
+// 桩用真实 EvalState 字段写（与 DB 独立列语义一致）；仅需要存在性 + ErrVersionNotFound 语义。
 func (s *fakePlatformStore) GetVersion(_ context.Context, groupKey string, versionSeq int64) (port.PlatformVersion, error) {
 	if s.err != nil {
 		return port.PlatformVersion{}, s.err
@@ -99,10 +99,7 @@ func (s *fakePlatformStore) UpdateEvalState(_ context.Context, groupKey string, 
 	}
 	for i := range s.versions[groupKey] {
 		if int64(s.versions[groupKey][i].VersionSeq) == versionSeq {
-			if s.versions[groupKey][i].Snapshot == nil {
-				s.versions[groupKey][i].Snapshot = make(map[string]json.RawMessage)
-			}
-			s.versions[groupKey][i].Snapshot["eval_state"] = json.RawMessage(`"` + state + `"`)
+			s.versions[groupKey][i].EvalState = state
 			return nil
 		}
 	}

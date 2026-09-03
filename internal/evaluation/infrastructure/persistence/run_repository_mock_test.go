@@ -177,3 +177,48 @@ func TestPgRunRepository_GetRun_notFound(t *testing.T) {
 	require.Empty(t, run.Results)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+func TestPgRunRepository_FindLatestCompletedRunForResource_found(t *testing.T) {
+	mock := newMockRepo(t)
+	repo := &PgRunRepository{pool: mock}
+	now := time.Now()
+
+	expectTenantTx(mock)
+	mock.ExpectQuery("SELECT id, resource_kind, resource_id, revision_id, suite_revision_id").
+		WithArgs("agent", "r-1", "s-1").
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "resource_kind", "resource_id", "revision_id", "suite_revision_id",
+			"passed", "total_cases", "passed_cases", "metrics", "context_snapshot", "created_by", "created_at",
+		}).AddRow("run-9", "agent", "r-1", "rev-0", "s-1", true, 1, 1,
+			[]byte(`{"by_dimension":{"faithfulness":{"avg_score":0.8,"pass_rate":1.0,"samples":1}}}`),
+			[]byte("{}"), "creator-1", now))
+	mock.ExpectCommit()
+
+	got, err := repo.FindLatestCompletedRunForResource(context.Background(), "t1",
+		domain.ResourceRef{Kind: domain.ResourceKindAgent, ResourceID: "r-1"}, "s-1")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Equal(t, "run-9", got.ID)
+	require.Equal(t, domain.ResourceKindAgent, got.Resource.Kind)
+	require.Equal(t, "rev-0", got.Resource.RevisionID)
+	require.Nil(t, got.ContextSnapshot)
+	require.Equal(t, 0.8, got.Metrics["by_dimension"].(map[string]any)["faithfulness"].(map[string]any)["avg_score"])
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPgRunRepository_FindLatestCompletedRunForResource_notFound(t *testing.T) {
+	mock := newMockRepo(t)
+	repo := &PgRunRepository{pool: mock}
+
+	expectTenantTx(mock)
+	mock.ExpectQuery("SELECT id, resource_kind, resource_id, revision_id, suite_revision_id").
+		WithArgs("agent", "r-1", "s-1").
+		WillReturnError(pgx.ErrNoRows)
+	mock.ExpectCommit()
+
+	got, err := repo.FindLatestCompletedRunForResource(context.Background(), "t1",
+		domain.ResourceRef{Kind: domain.ResourceKindAgent, ResourceID: "r-1"}, "s-1")
+	require.NoError(t, err)
+	require.Nil(t, got)
+	require.NoError(t, mock.ExpectationsWereMet())
+}

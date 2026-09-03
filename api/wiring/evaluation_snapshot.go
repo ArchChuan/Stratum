@@ -72,7 +72,11 @@ func (c snapshotCapturer) Capture(ctx context.Context, tenantID string, input ev
 	if err != nil {
 		return nil, err
 	}
-	snap.Execution = []evaldomain.GroupSnapshot{agentGroup, traceGroup}
+	memoryGroup, err := c.captureGroup(ctx, evaldomain.GroupMemory, overrideSeq(input, evaldomain.GroupMemory))
+	if err != nil {
+		return nil, err
+	}
+	snap.Execution = []evaldomain.GroupSnapshot{agentGroup, traceGroup, memoryGroup}
 	subject, pinnedID, err := c.loadSubject(ctx, tenantID, input.Resource)
 	if err != nil {
 		return nil, err

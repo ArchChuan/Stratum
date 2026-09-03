@@ -147,3 +147,23 @@ const (
 	GateAutoRollbackMaxPerDay   = 3
 	RunRegressionDeltaThreshold = -0.05
 )
+
+// 分层门禁计数 label 与平台版本门禁状态（spec §3.4/§4.1.1；P2 只消费
+// eval_gate_action_total 开放 label 与 eval_state 状态文本，不新增 metric family）。
+const (
+	// GateLayerL3Platform 是平台参数门禁动作层（rollback_manual/auto_refused/publish_gated/…）。
+	GateLayerL3Platform = "l3_platform"
+	// GateActionAutoRefused 是平台 auto 回滚被拒计数动作（§3.4 无自动不变量）。
+	GateActionAutoRefused = "auto_refused"
+)
+
+const (
+	// PlatformEvalStateSentinelPassed 表示草案已过发布前置哨兵，允许人工确认发布。
+	PlatformEvalStateSentinelPassed = "sentinel_passed"
+)
+
+// 多租户验证（spec §3.4-3）：回滚后验证窗口与未恢复判定门槛。
+const (
+	PlatformVerifyWindowMinutes   = 30 // 验证对比取 run 的窗口（分钟）
+	PlatformVerifyNotRecoveredMin = 1  // ≥1 租户未恢复即触发 StratumEvalMultiTenantVerifyNotRecovered
+)
