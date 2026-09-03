@@ -11,22 +11,25 @@ import (
 )
 
 // stubGateStore 内存版 GateStore（QueryWindow 预置证据；AppendAction 收台账）。
+// queryErr/appendErr 分开注入：QueryWindow 失败与台账写失败是不同 fail-open 路径，
+// 共用同一 err 无法独立断言。
 type stubGateStore struct {
-	evidence domain.GateEvidence
-	actions  []domain.GateActionRecord
-	err      error
+	evidence  domain.GateEvidence
+	actions   []domain.GateActionRecord
+	queryErr  error // QueryWindow 失败注入
+	appendErr error // AppendAction 失败注入
 }
 
 func (s *stubGateStore) AppendAction(_ context.Context, _ string, rec domain.GateActionRecord) error {
-	if s.err != nil {
-		return s.err
+	if s.appendErr != nil {
+		return s.appendErr
 	}
 	s.actions = append(s.actions, rec)
 	return nil
 }
 
 func (s *stubGateStore) QueryWindow(context.Context, string, domain.GateTarget, time.Time) (domain.GateEvidence, error) {
-	return s.evidence, s.err
+	return s.evidence, s.queryErr
 }
 
 // stubGatePolicy 固定返回策略；err 非 nil 模拟解析失败。
@@ -39,13 +42,16 @@ func (s *stubGatePolicy) Resolve(context.Context, domain.GateTarget) (domain.Gat
 	return s.policy, s.err
 }
 
-// stubPlatformOps 记录平台 eval_state 写回。
+// stubPlatformOps 记录平台 eval_state 写回；calls 计尝试次数（失败路径也计数，
+// 便于断言写回确实被尝试过），states 只收成功写入的 state。
 type stubPlatformOps struct {
 	states []string
+	calls  int
 	err    error
 }
 
 func (s *stubPlatformOps) UpdateEvalState(_ context.Context, _ string, _ int64, state, _ string) error {
+	s.calls++
 	if s.err != nil {
 		return s.err
 	}
@@ -443,4 +449,133 @@ func TestHandleObservationRoutesResourceScopeRollbackActions(t *testing.T) {
 			}
 		})
 	}
+}
+
+// rollbackGateService 装配一台会用平台 manual 决策的门禁服务：调用方提供回滚
+// 证据的 store 与平台 manual 策略，nil 依赖字段保持真 nil（fail-open 分支可测）。
+// 不能把 typed nil 具体指针赋给接口字段（接口非 nil、nil 守卫失效），故按 nil 条件填充。
+func rollbackGateService(cfg func(context.Context) domain.GateConfig, store *stubGateStore,
+	policy *stubGatePolicy, platform *stubPlatformOps,
+) *GateService {
+	deps := GateServiceDeps{
+		Cfg:  cfg,
+		Repo: store,
+	}
+	if policy != nil {
+		deps.Policy = policy
+	}
+	if platform != nil {
+		deps.Platform = platform
+	}
+	return newTestGate(deps, fixedNow())
+}
+
+func TestHandleObservationFailOpenOnDependencyErrors(t *testing.T) {
+	// T6 fail-open：依赖失败只日志，HandleObservation 恒返回 nil 不阻断观测主流程。
+	ctx := context.Background()
+	boom := errors.New("boom")
+	rollbackEvidence := domain.GateEvidence{RuleBlockCount: constants.GateRuleBlockRollbackMin}
+	platformManual := &stubGatePolicy{
+		policy: domain.GatePolicy{Scope: domain.ScopePlatform, RollbackSupported: true},
+	}
+	enabled := func(context.Context) domain.GateConfig { return domain.GateConfig{Enabled: true} }
+
+	t.Run("query window error returns nil and records no ledger", func(t *testing.T) {
+		store := &stubGateStore{evidence: rollbackEvidence, queryErr: boom}
+		svc := rollbackGateService(enabled, store, platformManual, nil)
+		if err := svc.HandleObservation(ctx, "t1", gateObs()); err != nil {
+			t.Fatalf("query error must not surface, got %v", err)
+		}
+		if len(store.actions) != 0 {
+			t.Fatalf("query error must not record ledger, got %d", len(store.actions))
+		}
+	})
+
+	t.Run("policy resolve error returns nil and records no ledger", func(t *testing.T) {
+		store := &stubGateStore{evidence: rollbackEvidence}
+		svc := rollbackGateService(enabled, store, &stubGatePolicy{err: boom}, nil)
+		if err := svc.HandleObservation(ctx, "t1", gateObs()); err != nil {
+			t.Fatalf("policy resolve error must not surface, got %v", err)
+		}
+		if len(store.actions) != 0 {
+			t.Fatalf("policy resolve error must not record ledger, got %d", len(store.actions))
+		}
+	})
+
+	t.Run("append action error returns nil and records no ledger", func(t *testing.T) {
+		store := &stubGateStore{evidence: rollbackEvidence, appendErr: boom}
+		svc := rollbackGateService(enabled, store, platformManual, nil)
+		if err := svc.HandleObservation(ctx, "t1", gateObs()); err != nil {
+			t.Fatalf("append error must not surface, got %v", err)
+		}
+		if len(store.actions) != 0 {
+			t.Fatalf("append error must not record ledger, got %d", len(store.actions))
+		}
+	})
+
+	t.Run("platform write-back error still records ledger", func(t *testing.T) {
+		// 写回失败只丢平台 eval_state 副作用；台账是决策事实源，仍须落 rollback_manual。
+		store := &stubGateStore{evidence: rollbackEvidence}
+		platform := &stubPlatformOps{err: boom}
+		svc := rollbackGateService(enabled, store, platformManual, platform)
+		if err := svc.HandleObservation(ctx, "t1", gateObs()); err != nil {
+			t.Fatalf("write-back error must not surface, got %v", err)
+		}
+		if len(store.actions) != 1 || store.actions[0].Decision != domain.GateRollbackManual {
+			t.Fatalf("write-back error must keep rollback_manual ledger, got %+v", store.actions)
+		}
+		if platform.calls != 1 {
+			t.Fatalf("write-back attempts = %d, want 1", platform.calls)
+		}
+		if len(platform.states) != 0 {
+			t.Fatalf("failed write-back must not record state, got %v", platform.states)
+		}
+	})
+}
+
+func TestHandleObservationNilDepsSkipGate(t *testing.T) {
+	// T6 剩余 nil 依赖分支：Cfg/Policy nil → 整段跳过不评估；Platform nil 只跳过
+	// 平台写回，rollback_manual 决策仍落台账（fail-open）。
+	ctx := context.Background()
+	rollbackEvidence := domain.GateEvidence{RuleBlockCount: constants.GateRuleBlockRollbackMin}
+	platformManual := &stubGatePolicy{
+		policy: domain.GatePolicy{Scope: domain.ScopePlatform, RollbackSupported: true},
+	}
+
+	t.Run("nil Cfg skips evaluation and records no ledger", func(t *testing.T) {
+		store := &stubGateStore{evidence: rollbackEvidence}
+		svc := rollbackGateService(nil, store, platformManual, nil)
+		if err := svc.HandleObservation(ctx, "t1", gateObs()); err != nil {
+			t.Fatalf("nil Cfg must not error, got %v", err)
+		}
+		if len(store.actions) != 0 {
+			t.Fatalf("nil Cfg must not record ledger, got %d", len(store.actions))
+		}
+	})
+
+	t.Run("nil Policy skips evaluation and records no ledger", func(t *testing.T) {
+		store := &stubGateStore{evidence: rollbackEvidence}
+		svc := rollbackGateService(
+			func(context.Context) domain.GateConfig { return domain.GateConfig{Enabled: true} },
+			store, nil, nil)
+		if err := svc.HandleObservation(ctx, "t1", gateObs()); err != nil {
+			t.Fatalf("nil Policy must not error, got %v", err)
+		}
+		if len(store.actions) != 0 {
+			t.Fatalf("nil Policy must not record ledger, got %d", len(store.actions))
+		}
+	})
+
+	t.Run("nil Platform keeps rollback_manual ledger and skips write-back", func(t *testing.T) {
+		store := &stubGateStore{evidence: rollbackEvidence}
+		svc := rollbackGateService(
+			func(context.Context) domain.GateConfig { return domain.GateConfig{Enabled: true} },
+			store, platformManual, nil)
+		if err := svc.HandleObservation(ctx, "t1", gateObs()); err != nil {
+			t.Fatalf("nil Platform must not error, got %v", err)
+		}
+		if len(store.actions) != 1 || store.actions[0].Decision != domain.GateRollbackManual {
+			t.Fatalf("nil Platform must keep rollback_manual ledger, got %+v", store.actions)
+		}
+	})
 }

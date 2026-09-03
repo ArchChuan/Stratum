@@ -76,13 +76,14 @@ func (s *GateService) HandleObservation(ctx context.Context, tenantID string, ob
 		// Repo nil（未装配证据源）→ 无法查窗口，跳过评估（fail-open）。
 		return nil
 	}
+	if s.deps.Policy == nil {
+		// Policy nil → 跳过决策（策略未装配不评估），免去无谓的窗口查询。
+		return nil
+	}
 	since := s.now().UTC().Add(-constants.GateObservationWindow)
 	ev, err := s.deps.Repo.QueryWindow(ctx, tenantID, target, since)
 	if err != nil {
 		s.warn("gate window query failed", zap.Error(err), zap.String("target", target.Key()))
-		return nil
-	}
-	if s.deps.Policy == nil {
 		return nil
 	}
 	policy, err := s.deps.Policy.Resolve(ctx, target)

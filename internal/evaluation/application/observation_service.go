@@ -262,6 +262,7 @@ func (s *ObservationService) resolvePlatformVersion(ctx context.Context) domain.
 
 // applyJudge 按三维度 rubric 调用 judge 并填充 signals；任一次失败返回错误
 // （上层降级），已完成维度不回滚（保留部分信号）。judge 关闭时跳过。
+// JudgeRequest 的预期输出当前留空：运行态观测无 golden（评测集才有 ExpectedOutput）。
 func (s *ObservationService) applyJudge(ctx context.Context, trace port.ObservedTrace, obs *domain.EvalObservation) error {
 	if s.deps.Judge == nil || !s.deps.Judge.Enabled(ctx) {
 		return nil
@@ -392,8 +393,6 @@ func (s *ObservationService) ApplyBehaviorSignals(
 	}
 	return s.deps.Repo.UpdateBehaviorSignals(ctx, tenantID, obs.ID, merged)
 }
-
-// JudgeRequest 的预期输出当前留空：运行态观测无 golden（评测集才有 ExpectedOutput）。
 
 // handleGateObservation 门禁内联评估（spec §2.5）：落库成功后由分层门禁评估观察
 // 窗口并路由决策。fail-open——未装配（Gate nil）或门禁内部失败只日志，不阻断
