@@ -8,6 +8,7 @@ import { CandidateDrawer } from '../components/CandidateDrawer';
 import { CandidateEvaluationModal } from '../components/CandidateEvaluationModal';
 import { CreateEvaluationModal } from '../components/CreateEvaluationModal';
 import { CreateSuiteModal } from '../components/CreateSuiteModal';
+import { EvaluationMonitorPanel } from '../components/EvaluationMonitorPanel';
 import { EvaluationOverview } from '../components/EvaluationOverview';
 import { EvolutionCommandModal } from '../components/EvolutionCommandModal';
 import { ExperimentDrawer } from '../components/ExperimentDrawer';
@@ -138,6 +139,8 @@ export const EvaluationCenterPage = () => {
         onDelete={(row) => confirmDelete(`删除套件「${row.name}」？`, () => center.deleteSuite(row.id))} /> },
       { key: 'health', label: '运行通过率趋势', children: <RuntimeHealthTrendPanel key={`health-${kind ?? 'all'}-${filterResourceId ?? 'none'}`}
         defaultKind={kind} defaultResourceId={filterResourceId} /> },
+      { key: 'monitor', label: '监控', children: <EvaluationMonitorPanel key={`monitor-${kind ?? 'all'}-${filterResourceId ?? 'none'}`}
+        defaultKind={kind} defaultResourceId={filterResourceId} isMobile={isMobile} /> },
       { key: 'review', label: '人工评审池', children: <ReviewPoolPanel canDelete={(item) => center.canDeleteEntity(item.created_by)} /> },
     ]} />
     <Drawer title="资源详情" open={!!resource} onClose={() => setResourceId('')} width={drawerWidth(isMobile)} destroyOnHidden>
