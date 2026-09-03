@@ -467,7 +467,8 @@ func TestRegistryRiskTierClassifiesGateRelevantKeys(t *testing.T) {
 		{"rag.top_k", RiskTierMedium},                    // 资源 medium
 		{"agent.reasoning_effort", RiskTierMedium},       // 资源 medium
 		{"agent.compaction_temperature", RiskTierMedium}, // 平台 medium（_temperature 后缀）
-		{"agent.factcheck.judge.prompt", RiskTierMedium}, // 平台 medium（_prompt 后缀）
+		{"agent.factcheck.judge.prompt", RiskTierMedium}, // 平台 medium（.prompt 类型叶，点号分层）
+		{"evaluation.judge.temperature", RiskTierMedium}, // 平台 medium（.temperature 类型叶，§7.2）
 		{"agent.temperature", RiskTierLow},               // 资源采样键不落平台后缀规则
 		{"evaluation.judge.enabled", RiskTierLow},        // 开关默认 low
 	}

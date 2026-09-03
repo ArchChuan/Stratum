@@ -180,6 +180,7 @@ func TestModelPolicyGovernanceMigration(t *testing.T) {
 // TestPlatformGateEvalStateMigration 守护分层门禁 public 迁移 044：up 幂等加
 // eval_state 三列，down 幂等删除（与 038 的 ADD/DROP IF EXISTS 模式一致）。
 func TestPlatformGateEvalStateMigration(t *testing.T) {
+	t.Parallel()
 	up, err := os.ReadFile("sql/044_platform_gate_eval_state.up.sql")
 	if err != nil {
 		t.Fatal(err)

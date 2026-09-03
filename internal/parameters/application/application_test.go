@@ -21,6 +21,8 @@ import (
 // exercised here, not just on the DB-backed repo).
 type memStore struct {
 	groups map[string]*memGroup
+	// lastEvalActor 记录最近一次 UpdateEvalState 收到的 actor，供 service 默认路径断言。
+	lastEvalActor string
 }
 
 type memGroup struct {
@@ -170,8 +172,10 @@ func (m *memStore) GetVersion(_ context.Context, groupKey string, versionSeq int
 }
 
 // UpdateEvalState 模拟列写：真实 DB 里 eval_state 是 platform_config_versions
-// 的独立列（非快照键），这里用 Snapshot["eval_state"] 占位以便断言命中。
-func (m *memStore) UpdateEvalState(_ context.Context, groupKey string, versionSeq int64, state, _ string) error {
+// 的独立列（非快照键），这里用 Snapshot["eval_state"] 占位以便断言命中；
+// actor 单独记录到 lastEvalActor，供 service 空 actor 默认 "api" 路径断言。
+func (m *memStore) UpdateEvalState(_ context.Context, groupKey string, versionSeq int64, state, actor string) error {
+	m.lastEvalActor = actor
 	g := m.group(groupKey)
 	for _, v := range g.versions {
 		if int64(v.VersionSeq) == versionSeq {
@@ -770,9 +774,11 @@ func TestServiceGateVersionOps(t *testing.T) {
 	})
 
 	t.Run("actor defaults to api when empty", func(t *testing.T) {
-		// memStore 忽略 actor，只验证空 actor 不被拒绝（service 侧默认补 "api"）。
 		if err := svc.UpdateEvalState(context.Background(), domain.GroupEvaluation, seq, "rollback_recommended", ""); err != nil {
 			t.Fatalf("empty actor must default to api, got error: %v", err)
+		}
+		if store.lastEvalActor != "api" {
+			t.Fatalf("empty actor default = %q, want \"api\"", store.lastEvalActor)
 		}
 	})
 
