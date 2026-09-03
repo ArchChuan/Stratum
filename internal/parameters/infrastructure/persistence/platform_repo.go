@@ -410,7 +410,7 @@ func (r *PlatformRepository) ListVersions(
 	groupKey string,
 ) ([]port.PlatformVersion, error) {
 	rows, err := r.pool.Query(ctx,
-		`SELECT v.id, v.group_key, v.version_seq, v.status, v.snapshot, v.base_version_id,
+		`SELECT v.id, v.group_key, v.version_seq, v.status, v.eval_state, v.snapshot, v.base_version_id,
 		        v.message, v.created_by, v.created_at,
 		        (prod.version_id IS NOT NULL) AS is_current
 		 FROM public.platform_config_versions v
@@ -433,7 +433,8 @@ func (r *PlatformRepository) ListVersions(
 			base      *int64
 			createdAt time.Time
 		)
-		if err := rows.Scan(&v.ID, &v.GroupKey, &v.VersionSeq, &v.Status, &snapshot, &base, &v.Message, &v.CreatedBy, &createdAt, &v.IsCurrent); err != nil {
+		if err := rows.Scan(&v.ID, &v.GroupKey, &v.VersionSeq, &v.Status, &v.EvalState,
+			&snapshot, &base, &v.Message, &v.CreatedBy, &createdAt, &v.IsCurrent); err != nil {
 			return nil, fmt.Errorf("platform repository: scan version: %w", err)
 		}
 		if err := json.Unmarshal(snapshot, &v.Snapshot); err != nil {
@@ -456,14 +457,14 @@ func (r *PlatformRepository) GetVersion(
 	groupKey string,
 	versionSeq int64,
 ) (port.PlatformVersion, error) {
-	const q = `SELECT id, group_key, version_seq, status, snapshot
+	const q = `SELECT id, group_key, version_seq, status, eval_state, snapshot
 		FROM public.platform_config_versions WHERE group_key = $1 AND version_seq = $2`
 	var (
 		v        port.PlatformVersion
 		snapshot []byte
 	)
 	if err := r.pool.QueryRow(ctx, q, groupKey, versionSeq).
-		Scan(&v.ID, &v.GroupKey, &v.VersionSeq, &v.Status, &snapshot); err != nil {
+		Scan(&v.ID, &v.GroupKey, &v.VersionSeq, &v.Status, &v.EvalState, &snapshot); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return port.PlatformVersion{}, domain.ErrVersionNotFound
 		}
