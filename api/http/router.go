@@ -348,6 +348,9 @@ func registerParameterReadRoutes(readGroup *gin.RouterGroup, c *wiring.Container
 
 // registerParameterWriteRoutes wires the unified parameter registry write
 // endpoints, which remain gated by the parent group's system_admin middleware.
+// R29/O2：Publish/Rollback 移动 production label（public 平台参数影响全租户），请求
+// 的 reqctx 宿主租户必须 = default(host) tenant：InjectTenantContext 由 auth.tenant_id
+// 填充 reqctx → RequireDefaultTenant 非 default 一律 403 fail-closed。
 func registerParameterWriteRoutes(adminGroup *gin.RouterGroup, c *wiring.Container) {
 	if c.Parameters == nil || c.Parameters.Service == nil {
 		return
@@ -355,8 +358,9 @@ func registerParameterWriteRoutes(adminGroup *gin.RouterGroup, c *wiring.Contain
 	paramHandler := handler.NewParameterHandler(c.Parameters.Service, c.Logger)
 	adminGroup.PUT("/parameters", paramHandler.Update)
 	adminGroup.POST("/parameters/versions/:groupKey", paramHandler.CreateDraft)
-	adminGroup.POST("/parameters/versions/:groupKey/:versionID/publish", paramHandler.Publish)
-	adminGroup.POST("/parameters/versions/:groupKey/:versionID/rollback", paramHandler.Rollback)
+	hostWrite := adminGroup.Group("", middleware.InjectTenantContext(), middleware.RequireDefaultTenant())
+	hostWrite.POST("/parameters/versions/:groupKey/:versionID/publish", paramHandler.Publish)
+	hostWrite.POST("/parameters/versions/:groupKey/:versionID/rollback", paramHandler.Rollback)
 }
 
 // dlqReplayAdapter 把 pipeline.ReplayService 适配到 handler 的消费方接口
