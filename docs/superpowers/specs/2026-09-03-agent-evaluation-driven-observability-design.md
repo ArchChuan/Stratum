@@ -69,9 +69,11 @@
 
 | # | 失真 | 证据 | 影响 |
 |---|---|---|---|
-| C1 | **token 双重计数（坐实）**：同一次 agent LLM 调用，gateway `invokeComplete/invokeStream` 打 `IncLLMTokenUsage + RecordLLMTokenHistogram`，agent 层 `react_llm.go:386` 经 `ledger.Record` **再打一次** | `gateway.go:407-412, 468-471`；`react_llm.go:386`；`token_ledger.go:40-49` | `llm_token_usage_total / llm_token_count` 对 agent 发起调用偏高约 2×；用量告警与成本对账失真 |
-| C2 | **`tenant_id` 标签空串**：`agent_task_completed_total` 有 `tenant_id` label 但写死为空；`agent_executions_total` 无 tenant 维度 | `prometheus.go:435-436`；`agent_executions_total` 注册 `:202-203` 无 tenant | 平台租户级用量/成本不可分——多租户评测对比（平台参数多租户效应）无数据支撑 |
-| C3 | **`agent_type` 语义被占用**：`recordFingerprintAndKPI` 调 `IncAgentTaskCompleted(agentID, taskKind, taskKind, status)`，第二参（agent_type 位）传入 taskKind | `agent.go:782` vs 注册 `:435-436` 五标签 | agent_type label 失真，分类统计被 taskKind 污染 |
+| C1 | **token 双重计数（坐实）**：同一次 agent LLM 调用，gateway `invokeComplete/invokeStream` 打 `IncLLMTokenUsage + RecordLLMTokenHistogram`，agent 层 `react_llm.go:386` 经 `ledger.Record` **再打一次** | `gateway.go:407-412, 468-471`；`react_llm.go:386`；`token_ledger.go:37-70` | `llm_token_usage_total / llm_token_count` 对 agent 发起调用偏高约 2×；用量告警与成本对账失真 |
+| C2 | **`tenant_id` 标签空串**：`agent_task_completed_total` 有 `tenant_id` label 但实现写死空串（`prometheus.go:734-736`），非注册缺位 | `prometheus.go:435-437`（注册含 tenant_id）、`:734-736`（写死 `""`） | 平台租户级用量/成本不可分——多租户评测对比（平台参数多租户效应）无数据支撑 |
+| C3 | **KPI 形参名误导**：`recordFingerprintAndKPI` 形参名 `taskKind` 实收 `string(snap.agentType)`，`IncAgentTaskCompleted(agentID, taskKind, taskKind, status)` 使 agent_type 与 task_kind 两槽同值为 agentType（命名错位，非值污染；平台暂无独立 task-kind 维度） | `agent.go:782`（旧）→ 拆分 `recordAgentKPI`；注册 `:435-437` 五标签 | task_kind 语义悬空，读者误以为存在独立 task-kind 分类 |
+
+> **P0 修复状态（2026-09-03）**：C1 已去重（ledger 撤回 usage 打点，见 §11 D2①）；C2 已接线（tenant 取自 `ExecutionConfig.TenantID`）；C3 已通过拆分 `recordAgentKPI` 正名。实现细节见计划 `2026-09-03-agent-eval-obs-p0-metrics-fix.md`。
 
 ### 1.4 监控与结论导出空白
 
@@ -173,7 +175,7 @@ process 维度（tool_pass 通过率、tool_cycle 多余循环、step_reasoning�
 
 - **来源**：评测结论（分层门禁/评测集结论，门禁 spec 落地后可得；观测 run 聚合先行提供过渡口径）。
 - **语义**：`score = 该评测口径下 resource 的维度分`（overall 通过率 + by-dimension）。
-- **label**：`{agent_id, dimension}`，dimension ∈ `overall|faithfulness|relevance|completeness|safety|format|cost_perf|process|behavior`。agent 量级（平台托管 + 租户自建）有限，基数可控。
+- **label**：沿用已注册 `{agent_id, metric}`（`prometheus.go:446-449`，P0 不改 schema——同名字段 label 集合变更会触发 Prometheus 拒收）。metric ∈ `overall|faithfulness|relevance|completeness|safety|format|cost_perf|process|behavior`。agent 量级（平台托管 + 租户自建）有限，基数可控。
 - **更新时点**：评测集/门禁判定收敛后写一次（事件驱动），**禁止 run 级高频写**，避免 gauge 语义模糊成瞬时值。
 - **无新结论时**：不更新旧值（保留上次判定），与 no-false-green 一致。
 
@@ -181,13 +183,13 @@ process 维度（tool_pass 通过率、tool_cycle 多余循环、step_reasoning�
 
 | # | 改动 |
 |---|---|
-| C-a | `MetricsProvider` 增加 `SetAgentEvalScore(agentID, dimension string, score float64)`，`PrometheusMetrics`/`NoopMetrics` 各一实现；`agent_eval_score` 注册 label 由 `{agent_id}` 扩为 `{agent_id, dimension}`（`prometheus.go:446-449`） |
+| C-a | 复用已注册 `RecordAgentEvalScore(agentID, metric string, score float64)`（`provider.go`，0 调用）与 `{agent_id, metric}` label（`prometheus.go:446-449`），只补写者接线；**不新增 `SetAgentEvalScore`、不改 label** |
 | C-b | 写者注入评测结论收敛点（门禁判定/评测集 run 收尾，参照 review_service / experiment_runner 事件位），非 agent 运行路径 |
 | C-c | **依赖次序**：门禁 spec（§8 落地）先于本设计全量接线；过渡期可用观测 run 聚合口径先行验证语义 |
 
 ### 5.4 成功标准
 
-- 评测集跑完 → `agent_eval_score{agent_id, dimension}` 出现，维度完整，Dashboard 可查；
+- 评测集跑完 → `agent_eval_score{agent_id, metric}` 出现，维度完整，Dashboard 可查；
 - 代码评审/生产对账能回答「某 agent 当前质量结论是什么、基于哪个评测口径、何时更新」。
 
 ---
@@ -203,11 +205,11 @@ process 维度（tool_pass 通过率、tool_cycle 多余循环、step_reasoning�
 - `IncEvalGateAction` / `IncEvalBehaviorAnomaly`：随门禁判定/观测判异接线；
 - `SetEvalReviewBacklog` / `IncEvalReviewEscalateFailure`：评审池处（review_service 已具备触发点）。
 
-### 6.2 agent KPI 修复（评测驱动的标签补正，随 P1b 一并落地）
+### 6.2 agent KPI 修复（P0 已落地）
 
-- C2 `tenant_id` 空串 → 补真实租户（`execTenant` 上下文取值），解锁租户级成本对比；
-- C3 `agent_type` 参数错位 → `IncAgentTaskCompleted` 调用修正为真实 agent_type/task_kind 两参数；
-- `agent_executions_total`（无 tenant）与 `agent_task_completed_total`（含 tenant）统一 label 语义，避免两套口径并存的歧义。
+- C2 `tenant_id` 空串 → 已接线：`IncAgentTaskCompleted` 增 `tenantID` 参贯通 interface/双实现，Execute 收尾取 `cfg.TenantID`（`ExecutionConfig.TenantID`，与内层 `newReActExecContext` 重注入同源），解锁租户级成本对比；
+- C3 形参误导 → 已收敛：`recordFingerprintAndKPI` 拆分出 `recordAgentKPI`（单一职责），形参正名 `agentType`；task_kind 槽镜像 agent_type，平台暂无独立 task-kind 维度（注释声明，预留接入）；
+- `agent_executions_total`（无 tenant，schema 锁）与 `agent_task_completed_total`（含 tenant）**口径分工**：前者是执行事件计数（不含租户，避免改已注册 schema），后者是租户级任务 KPI；跨租户评测对比统一查 `agent_task_completed_total`。
 
 ### 6.3 监控大盘与告警（P2）
 
@@ -230,9 +232,9 @@ process 维度（tool_pass 通过率、tool_cycle 多余循环、step_reasoning�
 
 | 期 | 内容 | 依赖 | 出口判据 |
 |---|---|---|---|
-| **P0（计数与语义收敛，最小独立）** | C1 计数去重裁决；C2/C3 标签修复；D1 `agent_eval_score` 语义与 label 定稿 | 无 | usage 双计消除；标签语义正确；score 语义有裁决 |
+| **P0（计数与语义收敛，已落地 2026-09-03）** | C1 计数去重（D2①）；C2/C3 标签修复；D1 `agent_eval_score` label 对齐已注册 `{agent_id, metric}`（语义写作留 P2） | 无 | usage 双计消除；tenant_id 落真实租户；task_kind 命名收敛；score label 与代码一致 |
 | **P1（证据保真）** | A1-A3 成本账本 + B1-B3 过程证据（Events 透传、工具正文、Opik 分页） | P0 | cost_perf/process 判定有据（§3.3/§4.3 成功标准过） |
-| **P2（结论导出）** | 设计 C：`SetAgentEvalScore` + 写者接线 | 门禁 spec（卡 C）判定可用或观测聚合口径 | `agent_eval_score` 有值、Dashboard 可查 |
+| **P2（结论导出）** | 设计 C：`RecordAgentEvalScore` 写者接线（复用已注册，不新增） | 门禁 spec（卡 C）判定可用或观测聚合口径 | `agent_eval_score` 有值、Dashboard 可查 |
 | **P3（能力健康）** | 设计 D：eval_* 调用点补齐 + Dashboard + 最小告警集 | P1/P2 指标真实存在 | 远端 Dashboard 常青、告警有效（monitoring-config-test 过） |
 
 > P0 独立可先行；P1 是评测判定质量的主干；P2/P3 依赖上游结论/指标真实出现，避免空接线。
@@ -268,7 +270,7 @@ process 维度（tool_pass 通过率、tool_cycle 多余循环、step_reasoning�
 
 1. 计数与标签修复（P0）：`token_ledger.go`、`gateway.go`（如裁决去 ledger）、`agent.go` `recordFingerprintAndKPI`、调用点、`prometheus.go` 标签。
 2. 证据透传（P1）：`ObservedTrace`（port）、wiring `mapEvaluationEvidence`、opik `mapper.go`/`client.go`（分页）、聚合单测。
-3. 结论导出（P2）：`MetricsProvider.SetAgentEvalScore` + 写者。
+3. 结论导出（P2）：`RecordAgentEvalScore` 写者接线。
 4. 健康接线 + 监控（P3）：eval_* 调用点、dashboard JSON、告警规则 + runbook、`monitoring-config-test` 通过。
 
 **成功标准**：
@@ -284,8 +286,8 @@ process 维度（tool_pass 通过率、tool_cycle 多余循环、step_reasoning�
 
 | # | 决策 | 候选 | 推荐默认 |
 |---|---|---|---|
-| D1 | `agent_eval_score` 语义/维度/label | ①run 级写 ②评测集/门禁结论写 ③两者分层 | **②为主，①仅过渡口径**；label `{agent_id, dimension}` |
-| D2 | 计数归属 | ①去 ledger 留 gateway ②去 gateway 留 ledger | **①**（网关出站为 token 唯一事实源） |
+| D1 | `agent_eval_score` 语义/维度/label | ①run 级写 ②评测集/门禁结论写 ③两者分层 | **②为主，①仅过渡口径**；label 沿用已注册 `{agent_id, metric}`（P0 定稿，语义写者留 P2） |
+| D2 | 计数归属 | ①去 ledger 留 gateway ②去 gateway 留 ledger | **①**（网关出站为 token 唯一事实源）——**P0 已落地** |
 | D3 | 工具正文上限与脱敏边界 | 4KB / 8KB / 引用截断策略 | **4KB + 既有脱敏链**，超限截断标 unknown |
 | D4 | cache_read 缺失策略 | ①暴露 input:output ②全标 unknown | **①为主、缺失显式标注**，不记 0 |
 | D5 | P0-P3 是否四期并行度 | 串行 / 部分并行 | **P0 先独立，P1 主干，P2/P3 后置**（依赖真实数据） |
@@ -296,8 +298,8 @@ process 维度（tool_pass 通过率、tool_cycle 多余循环、step_reasoning�
 
 - agent 收尾上报：`agent.go:773-797`（`recordFingerprintAndKPI`）；`agent.go:613-626`（`evalSpanAttrs` 挂 eval_*）
 - 观测事件：`agent_service.go:124-143`（`emitObservation`）；`:147-157`（`ruleSignalsFromBlocks`）；`:162-174`（`behaviorFromResult`）；`agent_execution.go:300,361`（调用点）
-- token 账本 / 计数：`token_ledger.go:37-70`（`Record` 双计）；`graph/react_llm.go:386`（ledger.Record 调用）；`gateway.go:407-412,468-471`（usage）；`:403,460`（duration）
-- agent 指标注册：`prometheus.go:202-216`（executions/duration/step）；`:435-436`（task_completed 含 tenant_id）；`:446-449`（agent_eval_score 0 调用）
+- token 账本 / 计数：`token_ledger.go:37-70`（Record：cost+span 属性+日志，**无 usage 打点**——C1 后）；`graph/react_llm.go:386`（ledger.Record 调用）；`gateway.go:407-412,468-471`（usage，唯一记账）；`:403,460`（duration）；`api/wiring/agent.go`（`wireTokenLedger` 不注入 metrics）
+- agent 指标注册：`prometheus.go:202-216`（executions/duration/step，无 tenant）；`:435-437`（task_completed 五标签含 tenant_id）；`:734-736`（实现落真实 tenant）；`:446-449`（agent_eval_score `{agent_id, metric}` 0 调用）；`agent.go`（`recordAgentKPI` 打点 + `recordFingerprintAndKPI` 指纹）
 - eval_* 接口与注册：`provider.go:132-142`；`prometheus.go:339-386`（registerEvalObservationMetrics）
 - Opik mapper/client：`opik/mapper.go:15-51`（mapEvidence）、`:65-78`（mapTool 无正文）、`:80-95`（mapEvent 有明细）、`:175`（textOf）；`opik/client.go:42-54`（Resolve size=100 单页）、`:56`（ResolveBatch）
 - wiring 投影：`api/wiring/evaluation.go:1136-1178`（adapter + mapEvaluationEvidence 丢 Events）、`:1180`（mapToolObservations）
