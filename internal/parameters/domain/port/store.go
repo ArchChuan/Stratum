@@ -36,6 +36,11 @@ type PlatformVersion struct {
 	Message     string                     `json:"message"`
 	CreatedBy   string                     `json:"created_by"`
 	CreatedAt   time.Time                  `json:"created_at"`
+	// EvalState 是平台门禁对该版本的评测结论（spec §4.1.1：unknown|sentinel_failed|
+	// sentinel_passed|anomaly_flag|anomaly_block|rollback_recommended|rollback_executed）。
+	// 044 迁移已建列，P2 只接读路径；写路径 UpdateEvalState 已存在。JSON tag 无
+	// omitempty：DB 列 NOT NULL，读回恒有值（未过门禁的历史行 = 'unknown'）。
+	EvalState string `json:"eval_state"`
 }
 
 // PlatformStore persists platform-scope parameter values in the public

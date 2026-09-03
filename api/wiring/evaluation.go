@@ -53,6 +53,9 @@ type Evaluation struct {
 	ObservationService   *evalapp.ObservationService
 	ReviewService        *evalapp.ReviewService
 	DeleteService        *evalapp.DeleteService
+	// ResourceRollbackExecutor L3 资源回滚执行器（agent/knowledge/skill/canary）。
+	// nil = 无任何可回滚后端（未装配）；Task 4 executeResourceRollback / T13 gate auto 消费。
+	ResourceRollbackExecutor evalport.ResourceRollbackExecutor
 }
 
 type evaluationResourceRouter struct {
@@ -1313,6 +1316,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	}
 	c.applyAgentRevisionResolvers(experimentService, runtimeAgentAdapter, runtimeMCPAdapter, runtimeKnowledgeAdapter)
 	c.applySkillEvaluationReader(experimentRepo)
+	c.Evaluation.ResourceRollbackExecutor = c.buildResourceRollbackExecutor(experimentRepo) // L3 资源回滚执行器（Task 3/T11；Task 4/T13 消费）
 	c.buildApprovalActionExecutor()
 	return nil
 }
@@ -1380,12 +1384,25 @@ func buildEvaluationFeedbackService(c *Container, repo evalport.FeedbackReposito
 		evaluationTraceEvidenceAdapter{provider: c.Agent.EvidenceProvider}, writer)
 }
 
-// buildApprovalActionExecutor 评测组件就绪后装配审批动作执行器
-// （agent 先于 evaluation 构建，放末尾；ActionExecutor 缺失时执行端点 fail closed）。
-// mcp 组件先于 evaluation 构建（wiring 顺序 mcp→…→agent→…→evaluation），可直接传入。
+// buildApprovalActionExecutor 评测组件就绪后装配审批动作执行器。paramSvc 注入前做
+// typed-nil 判定：nil *parametersapp.Service 装箱进接口后非 nil，会绕过分支的
+// nil 检查并在 nil 接收者方法上 panic；Parameters 未装配/Service nil 时显式传 nil
+// 接口（平台分支 fail closed）。ResourceRollbackExecutor 由 Task 3 在
+// Evaluation struct 装配（未装配 → nil，rollback_resource 分支 fail closed）。
 func (c *Container) buildApprovalActionExecutor() {
 	if c.Agent != nil {
-		c.Agent.ActionExecutor = newApprovalActionExecutor(c.Evaluation, c.MCP, c.Logger)
+		var paramSvc platformVersionOps
+		if c.Parameters != nil && c.Parameters.Service != nil {
+			paramSvc = c.Parameters.Service
+		}
+		c.Agent.ActionExecutor = newApprovalActionExecutor(
+			c.Evaluation,
+			paramSvc,
+			c.Evaluation.ResourceRollbackExecutor, // Task 3 seam：Evaluation struct 装配的 ACL 适配器
+			c.MCP,
+			c.platformMetrics(),
+			c.Logger,
+		)
 	}
 }
 

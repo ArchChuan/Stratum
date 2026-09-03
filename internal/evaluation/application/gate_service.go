@@ -176,7 +176,9 @@ func (s *GateService) execAutoRollback(ctx context.Context, tenantID string, tar
 	if s.deps.ResourceRollback == nil {
 		return
 	}
-	if err := s.deps.ResourceRollback.Rollback(ctx, tenantID, target); err != nil {
+	// auto 路径无审批人：actor 记为 gate（与台账 rec.Actor 同值，见 route()），
+	// decidedBy/approvalID 空串由 executor 语义消费。
+	if err := s.deps.ResourceRollback.Rollback(ctx, tenantID, target, "gate", "", ""); err != nil {
 		s.warn("gate resource auto rollback failed", zap.Error(err), zap.String("target", target.Key()))
 	}
 }

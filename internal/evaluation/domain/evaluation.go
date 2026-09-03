@@ -379,6 +379,26 @@ const (
 
 const JobTypeEvalRun = "eval_run"
 
+// JobTypePlatformVerify 平台版本回滚后的多租户验证任务（spec §3.4-3）。
+// evaluation_jobs.job_type 列无 CHECK 约束，新 job 类型零 DDL。
+const JobTypePlatformVerify = "platform_verify"
+
+// PlatformVerifyPayload 持久化于 evaluation_jobs.payload（JSONB）；host 租户来自动作
+// 载荷（O2/R29）。
+type PlatformVerifyPayload struct {
+	GroupKey string `json:"group_key"`
+	FromSeq  int64  `json:"from_seq"` // 回滚离开的坏版本 seq（曾为 production）
+	ToSeq    int64  `json:"to_seq"`   // 回滚到的目标 seq（当前 production）
+	Actor    string `json:"actor"`
+}
+
+// PlatformVerifyJob 是 ClaimPlatformVerify 返回的本地 job 视图（DB 行 → runner 消费）。
+type PlatformVerifyJob struct {
+	ID       string
+	TenantID string
+	Payload  PlatformVerifyPayload
+}
+
 type EvalRunJobPayload struct {
 	Resource        ResourceRef `json:"resource"`
 	SuiteRevisionID string      `json:"suite_revision_id"`

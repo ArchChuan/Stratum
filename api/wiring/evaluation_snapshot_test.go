@@ -196,9 +196,10 @@ func TestSnapshotCapturerCaptureFull(t *testing.T) {
 	require.Equal(t, "user-1", snap.CapturedBy)
 	require.False(t, snap.CapturedAt.IsZero())
 	require.Equal(t, evaldomain.GroupEvaluation, snap.Evaluation.GroupKey)
-	require.Len(t, snap.Execution, 2)
+	require.Len(t, snap.Execution, 3)
 	require.Equal(t, evaldomain.GroupAgent, snap.Execution[0].GroupKey)
 	require.Equal(t, evaldomain.GroupTrace, snap.Execution[1].GroupKey)
+	require.Equal(t, evaldomain.GroupMemory, snap.Execution[2].GroupKey)
 	// 窗口固化：modelCtx 32768 未触发 MaxContextWindowTokens 上限，agent 显式
 	// MaxContextTokens=8192 → ResolveAgentWindow 比例 clamp（32768×0.85=27852）
 	// 内保留显式值 8192；reserve 取显式 2048。
@@ -248,6 +249,44 @@ func TestSnapshotCapturerCaptureOverridePinsHistoricalAgentVersion(t *testing.T)
 	require.Equal(t, int64(1), snap.Execution[0].VersionSeq)
 	require.Equal(t, 0.2, snap.Execution[0].Values["agent.temperature"])
 	require.Equal(t, int64(3), snap.Evaluation.VersionSeq)
+}
+
+func TestSnapshotCapturerCaptureOverridePinsHistoricalMemoryVersion(t *testing.T) {
+	capturer, _ := newSnapshotCapturerFixture(t)
+	capturer.params = parametersapp.NewService(parametersdomain.NewParametersRegistry(),
+		&fakePlatformStore{versions: map[string][]port.PlatformVersion{
+			evaldomain.GroupEvaluation: {
+				{GroupKey: evaldomain.GroupEvaluation, VersionSeq: 3, IsCurrent: true, Snapshot: map[string]json.RawMessage{
+					"evaluation.judge.enabled": json.RawMessage(`true`),
+				}},
+			},
+			evaldomain.GroupAgent: {
+				{GroupKey: evaldomain.GroupAgent, VersionSeq: 5, IsCurrent: true, Snapshot: map[string]json.RawMessage{}},
+			},
+			evaldomain.GroupTrace: {
+				{GroupKey: evaldomain.GroupTrace, VersionSeq: 1, IsCurrent: true, Snapshot: map[string]json.RawMessage{}},
+			},
+			evaldomain.GroupMemory: {
+				{GroupKey: evaldomain.GroupMemory, VersionSeq: 1, Snapshot: map[string]json.RawMessage{}},
+				{GroupKey: evaldomain.GroupMemory, VersionSeq: 2, IsCurrent: true, Snapshot: map[string]json.RawMessage{}},
+			},
+		}})
+
+	snap, err := capturer.Capture(context.Background(), "tenant-1", evalport.CaptureInput{
+		Resource: evaldomain.ResourceRef{
+			Kind: evaldomain.ResourceKindAgent, ResourceID: "agent-1", RevisionID: "revision-1",
+		},
+		SuiteRevisionID:      "suite-1",
+		RequestedBy:          "user-1",
+		PlatformSeqOverrides: map[string]int64{evaldomain.GroupMemory: 1},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, snap)
+	require.Len(t, snap.Execution, 3)
+	require.Equal(t, evaldomain.GroupAgent, snap.Execution[0].GroupKey)
+	require.Equal(t, evaldomain.GroupTrace, snap.Execution[1].GroupKey)
+	require.Equal(t, evaldomain.GroupMemory, snap.Execution[2].GroupKey)
+	require.Equal(t, int64(1), snap.Execution[2].VersionSeq) // override 命中历史 seq 1，非 IsCurrent 2
 }
 
 func TestSnapshotCapturerCaptureFailsClosedWhenParamsNil(t *testing.T) {

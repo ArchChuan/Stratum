@@ -235,6 +235,18 @@ func (f *fakeRunRepo) GetRun(_ context.Context, _ string, runID string) (domain.
 	return f.saved, f.saved.ID == runID, nil
 }
 
+func (f *fakeRunRepo) FindLatestCompletedRunForResource(
+	_ context.Context, _ string, _ domain.ResourceRef, _ string,
+) (*domain.EvalRun, error) {
+	return nil, nil
+}
+
+func (f *fakeRunRepo) FindLatestCompletedRunForPlatformSeq(
+	_ context.Context, _, _ string, _ int64,
+) (*domain.EvalRun, error) {
+	return nil, nil
+}
+
 type fakeError string
 
 func (e fakeError) Error() string { return string(e) }

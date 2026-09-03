@@ -171,18 +171,14 @@ func (m *memStore) GetVersion(_ context.Context, groupKey string, versionSeq int
 	return port.PlatformVersion{}, domain.ErrVersionNotFound
 }
 
-// UpdateEvalState 模拟列写：真实 DB 里 eval_state 是 platform_config_versions
-// 的独立列（非快照键），这里用 Snapshot["eval_state"] 占位以便断言命中；
-// actor 单独记录到 lastEvalActor，供 service 空 actor 默认 "api" 路径断言。
+// UpdateEvalState 写平台版本真实 EvalState 字段（与 DB 独立列语义一致）；actor 单独
+// 记录到 lastEvalActor，供 service 空 actor 默认 "api" 路径断言。
 func (m *memStore) UpdateEvalState(_ context.Context, groupKey string, versionSeq int64, state, actor string) error {
 	m.lastEvalActor = actor
 	g := m.group(groupKey)
 	for _, v := range g.versions {
 		if int64(v.VersionSeq) == versionSeq {
-			if v.Snapshot == nil {
-				v.Snapshot = make(map[string]json.RawMessage)
-			}
-			v.Snapshot["eval_state"] = json.RawMessage(`"` + state + `"`)
+			v.EvalState = state
 			return nil
 		}
 	}
@@ -768,8 +764,8 @@ func TestServiceGateVersionOps(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if string(got.Snapshot["eval_state"]) != `"rollback_recommended"` {
-			t.Fatalf("eval_state marker = %s, want \"rollback_recommended\"", got.Snapshot["eval_state"])
+		if got.EvalState != "rollback_recommended" {
+			t.Fatalf("eval_state = %q, want %q", got.EvalState, "rollback_recommended")
 		}
 	})
 
