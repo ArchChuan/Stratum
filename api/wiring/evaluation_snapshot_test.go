@@ -208,6 +208,48 @@ func TestSnapshotCapturerCaptureFull(t *testing.T) {
 	require.Empty(t, snap.PinnedAssignments.SkillAgentRevision)
 }
 
+func TestSnapshotCapturerCaptureOverridePinsHistoricalAgentVersion(t *testing.T) {
+	capturer, _ := newSnapshotCapturerFixture(t)
+	// 替换参数服务为含 agent 历史 seq 1 的版本历史：对照重放（spec §4.3.4）
+	// 只有在历史版本仍存在时才能精确命中。
+	capturer.params = parametersapp.NewService(parametersdomain.NewParametersRegistry(),
+		&fakePlatformStore{versions: map[string][]port.PlatformVersion{
+			evaldomain.GroupEvaluation: {
+				{GroupKey: evaldomain.GroupEvaluation, VersionSeq: 3, IsCurrent: true, Snapshot: map[string]json.RawMessage{
+					"evaluation.judge.enabled": json.RawMessage(`true`),
+				}},
+			},
+			evaldomain.GroupAgent: {
+				{GroupKey: evaldomain.GroupAgent, VersionSeq: 1, IsCurrent: false, Snapshot: map[string]json.RawMessage{
+					"agent.temperature": json.RawMessage(`0.2`),
+				}},
+				{GroupKey: evaldomain.GroupAgent, VersionSeq: 5, IsCurrent: true, Snapshot: map[string]json.RawMessage{
+					"agent.max_iterations": json.RawMessage(`3`),
+				}},
+			},
+			evaldomain.GroupTrace: {
+				{GroupKey: evaldomain.GroupTrace, VersionSeq: 1, IsCurrent: true, Snapshot: map[string]json.RawMessage{}},
+			},
+		}})
+
+	// override agent→1：执行组锁定历史 seq 1（temperature 0.2），不取 IsCurrent seq 5；
+	// 无覆盖的 evaluation 组仍走 IsCurrent seq 3。
+	snap, err := capturer.Capture(context.Background(), "tenant-1", evalport.CaptureInput{
+		Resource: evaldomain.ResourceRef{
+			Kind: evaldomain.ResourceKindAgent, ResourceID: "agent-1", RevisionID: "revision-1",
+		},
+		SuiteRevisionID:      "suite-1",
+		RequestedBy:          "user-1",
+		PlatformSeqOverrides: map[string]int64{evaldomain.GroupAgent: 1},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, snap)
+	require.Equal(t, evaldomain.GroupAgent, snap.Execution[0].GroupKey)
+	require.Equal(t, int64(1), snap.Execution[0].VersionSeq)
+	require.Equal(t, 0.2, snap.Execution[0].Values["agent.temperature"])
+	require.Equal(t, int64(3), snap.Evaluation.VersionSeq)
+}
+
 func TestSnapshotCapturerCaptureFailsClosedWhenParamsNil(t *testing.T) {
 	capturer := &snapshotCapturer{logger: zap.NewNop()}
 
