@@ -130,3 +130,55 @@ func mapRollback(policy GatePolicy) GateAction {
 func runRegressed(ev GateEvidence) bool {
 	return ev.ConfirmationRun != nil && ev.ConfirmationRun.Regressed
 }
+
+// GateConfig 是门禁的实时生效开关（函数型依赖每次评估读取，平台键改动能实时生效，
+// 裁决：不缓存静态值）。Enabled 来自 evaluation.gate.enabled；ResourceAutoRollbackEnabled
+// 来自 evaluation.gate.auto_rollback_resources（仅资源 scope 决策，平台恒 manual）。
+type GateConfig struct {
+	Enabled                     bool
+	ResourceAutoRollbackEnabled bool
+}
+
+// GateActionRecord 是一条门禁台账行，字段映射 eval_gate_actions 列（spec §4.1.2）。
+// infra 写入时补 id/created_at/host_tenant_id；approval_id 由人工审批流回填。
+type GateActionRecord struct {
+	Scope      Scope
+	Target     GateTarget
+	Layer      string         // 触发层：observation（后续 optimization/casegen）
+	Decision   GateAction     // 台账 decision 列文本
+	Action     string         // 动作形态：rollback_recommended / escalate / ""
+	Evidence   map[string]any // 决策证据（窗口计数等），JSONB 落库
+	Actor      string         // 空由 infra 落默认（gate）
+	ApprovalID string         // 人工审批 agent_tool_approvals id（后续卡回填）
+}
+
+// GateTargetForObservation 从一条观测推导门禁目标。锚点判定与 buildObservation 的
+// 实际填充一致（纯平台观测 Source 多为 unknown/platform，resource 锚点看
+// ResourceParamVersion.Version 而非 Ref）：平台锚点（Platform.GroupKey 非空且
+// VersionSeq>0）且无资源版本锚点 → 平台组目标；否则资源版本锚点存在
+// （obs.Resource.ResourceID + Param.Resource.Version）→ 资源目标（RevisionID 取
+// Param.Resource.Version）；两者皆无 → 不可评估（裁决 R7：mapping 只认锚点）。
+func GateTargetForObservation(obs EvalObservation) (GateTarget, bool) {
+	p := obs.Param
+	platformAnchored := p.Platform.GroupKey != "" && p.Platform.VersionSeq > 0
+	resourceAnchored := obs.Resource.ResourceID != "" && p.Resource.Version != ""
+	switch {
+	case platformAnchored && !resourceAnchored:
+		return GateTarget{
+			Scope:      ScopePlatform,
+			GroupKey:   p.Platform.GroupKey,
+			VersionSeq: p.Platform.VersionSeq,
+		}, true
+	case resourceAnchored:
+		// 双锚点（Source both）也归资源：观测反映被测资源行为，回滚资源版本
+		// 才可能恢复行为；平台版本写回只用于纯平台观测。
+		return GateTarget{
+			Scope:      ScopeResource,
+			Kind:       string(obs.Resource.Kind),
+			ResourceID: obs.Resource.ResourceID,
+			RevisionID: p.Resource.Version,
+		}, true
+	default:
+		return GateTarget{}, false
+	}
+}

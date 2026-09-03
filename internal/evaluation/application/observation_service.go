@@ -34,6 +34,8 @@ type ObservationServiceDeps struct {
 	PlatformVersion func(ctx context.Context) (int64, bool, error)
 	// Review 是评审池升级入口（P1c §6.6）；nil 时评审升级静默跳过（fail-open）。
 	Review port.ReviewEscalator
+	// Gate 是分层门禁入口（spec §2.5）；nil 时门禁评估静默跳过（fail-open）。
+	Gate port.GateSink
 }
 
 type ObservationService struct {
@@ -114,6 +116,8 @@ func (s *ObservationService) Process(ctx context.Context, evt domain.Observation
 	}
 	s.recordSampled(evt.ResourceKind)
 	s.deps.Metrics.IncEvalObservation(evt.ResourceKind, obs.Stratum)
+	// 分层门禁内联评估（spec §2.5）：落库成功后评估窗口证据并路由决策（fail-open）。
+	s.handleGateObservation(ctx, evt, &obs)
 	// 评审池内联触发（P1c §6.6）：落库成功后按触发规则入池（fail-open，见 escalateToReview）。
 	s.escalateToReview(ctx, evt, &obs)
 	return nil
@@ -390,3 +394,18 @@ func (s *ObservationService) ApplyBehaviorSignals(
 }
 
 // JudgeRequest 的预期输出当前留空：运行态观测无 golden（评测集才有 ExpectedOutput）。
+
+// handleGateObservation 门禁内联评估（spec §2.5）：落库成功后由分层门禁评估观察
+// 窗口并路由决策。fail-open——未装配（Gate nil）或门禁内部失败只日志，不阻断
+// 观测主流程、不改 verdict（与 escalateToReview 同哲学）。
+func (s *ObservationService) handleGateObservation(
+	ctx context.Context, evt domain.ObservationReferenceEvent, obs *domain.EvalObservation,
+) {
+	if s.deps.Gate == nil {
+		return
+	}
+	if err := s.deps.Gate.HandleObservation(ctx, evt.TenantID, *obs); err != nil {
+		s.deps.Logger.Warn("observation gate evaluation failed", zap.Error(err),
+			zap.String("trace_id", evt.TraceID))
+	}
+}
