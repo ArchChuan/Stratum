@@ -69,11 +69,11 @@
 
 | # | 失真 | 证据 | 影响 |
 |---|---|---|---|
-| C1 | **token 双重计数（坐实）**：同一次 agent LLM 调用，gateway `invokeComplete/invokeStream` 打 `IncLLMTokenUsage + RecordLLMTokenHistogram`，agent 层 `react_llm.go:386` 经 `ledger.Record` **再打一次** | `gateway.go:407-412, 468-471`；`react_llm.go:386`；`token_ledger.go:37-70` | `llm_token_usage_total / llm_token_count` 对 agent 发起调用偏高约 2×；用量告警与成本对账失真 |
+| C1 | **token 双重计数（坐实）**：同一次 agent LLM 调用，gateway `invokeComplete`（非流式）打 `IncLLMTokenUsage + RecordLLMTokenHistogram`，`invokeStream`（流式）只打 `IncLLMTokenUsage`（histogram 缺口此前被 ledger 覆盖）；agent 层 `react_llm.go:386` 经 `ledger.Record` **再打一次** | `gateway.go:407-412`（complete 双打）、`:468-471`（stream 双打——Fix B 对称补齐）；`react_llm.go:386`；`token_ledger.go:37-70` | counter 对 agent 发起调用偏高约 2×；流式 `llm_token_count` 若仅去 ledger 将归零（Fix B 补网关双侧对称，覆盖流式+非流式）；用量告警与成本对账失真 |
 | C2 | **`tenant_id` 标签空串**：`agent_task_completed_total` 有 `tenant_id` label 但实现写死空串（`prometheus.go:734-736`），非注册缺位 | `prometheus.go:435-437`（注册含 tenant_id）、`:734-736`（写死 `""`） | 平台租户级用量/成本不可分——多租户评测对比（平台参数多租户效应）无数据支撑 |
 | C3 | **KPI 形参名误导**：`recordFingerprintAndKPI` 形参名 `taskKind` 实收 `string(snap.agentType)`，`IncAgentTaskCompleted(agentID, taskKind, taskKind, status)` 使 agent_type 与 task_kind 两槽同值为 agentType（命名错位，非值污染；平台暂无独立 task-kind 维度） | `agent.go:782`（旧）→ 拆分 `recordAgentKPI`；注册 `:435-437` 五标签 | task_kind 语义悬空，读者误以为存在独立 task-kind 分类 |
 
-> **P0 修复状态（2026-09-03）**：C1 已去重（ledger 撤回 usage 打点，见 §11 D2①）；C2 已接线（tenant 取自 `ExecutionConfig.TenantID`）；C3 已通过拆分 `recordAgentKPI` 正名。实现细节见计划 `2026-09-03-agent-eval-obs-p0-metrics-fix.md`。
+> **P0 修复状态（2026-09-03）**：C1 已去重（ledger 撤回 usage 打点，见 §11 D2①）；流式 histogram 由网关 `invokeStream` 对称补齐（Fix B）；C2 已接线（tenant 取自 `ExecutionConfig.TenantID`）；C3 已通过拆分 `recordAgentKPI` 正名。实现细节见计划 `2026-09-03-agent-eval-obs-p0-metrics-fix.md`。
 
 ### 1.4 监控与结论导出空白
 
@@ -298,7 +298,7 @@ process 维度（tool_pass 通过率、tool_cycle 多余循环、step_reasoning�
 
 - agent 收尾上报：`agent.go:773-797`（`recordFingerprintAndKPI`）；`agent.go:613-626`（`evalSpanAttrs` 挂 eval_*）
 - 观测事件：`agent_service.go:124-143`（`emitObservation`）；`:147-157`（`ruleSignalsFromBlocks`）；`:162-174`（`behaviorFromResult`）；`agent_execution.go:300,361`（调用点）
-- token 账本 / 计数：`token_ledger.go:37-70`（Record：cost+span 属性+日志，**无 usage 打点**——C1 后）；`graph/react_llm.go:386`（ledger.Record 调用）；`gateway.go:407-412,468-471`（usage，唯一记账）；`:403,460`（duration）；`api/wiring/agent.go`（`wireTokenLedger` 不注入 metrics）
+- token 账本 / 计数：`token_ledger.go:37-70`（Record：cost+span 属性+日志，**无 usage 打点**——C1 后）；`graph/react_llm.go:386`（ledger.Record 调用）；`gateway.go:407-412,468-471`（usage 唯一记账：counter+histogram，complete 与 stream 双侧对称）；`:403,460`（duration）；`api/wiring/agent.go`（`wireTokenLedger` 不注入 metrics）
 - agent 指标注册：`prometheus.go:202-216`（executions/duration/step，无 tenant）；`:435-437`（task_completed 五标签含 tenant_id）；`:734-736`（实现落真实 tenant）；`:446-449`（agent_eval_score `{agent_id, metric}` 0 调用）；`agent.go`（`recordAgentKPI` 打点 + `recordFingerprintAndKPI` 指纹）
 - eval_* 接口与注册：`provider.go:132-142`；`prometheus.go:339-386`（registerEvalObservationMetrics）
 - Opik mapper/client：`opik/mapper.go:15-51`（mapEvidence）、`:65-78`（mapTool 无正文）、`:80-95`（mapEvent 有明细）、`:175`（textOf）；`opik/client.go:42-54`（Resolve size=100 单页）、`:56`（ResolveBatch）

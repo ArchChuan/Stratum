@@ -57,7 +57,7 @@
 - Consumes: 现状 `NewTokenLedger(metrics, logger)`（唯一生产调用点 `api/wiring/agent.go:498`）
 - Produces: `NewTokenLedger(logger *zap.Logger) *TokenLedger`（后续 Task 依赖此签名）
 
-背景：`llm_token_usage_total / llm_token_count` 对 agent 发起调用偏高约 2× —— 网关 `invokeComplete/invokeStream`（`gateway.go:407-412, 468-471`）与 agent 侧 `ledger.Record`（`react_llm.go:386` → `token_ledger.go:40-49`）对同一 `resp.Usage` 各打一次。裁决（spec §11 D2①）：网关出站为 token 唯一事实源；ledger 只保留 cost 计算 + span 属性（Opik 证据）+ 日志。
+背景：`llm_token_usage_total / llm_token_count` 对 agent 发起调用偏高约 2× —— 网关 `invokeComplete`（非流式，`gateway.go:407-412`）打 `IncLLMTokenUsage + RecordLLMTokenHistogram` 双写，`invokeStream`（流式，`gateway.go:468-471`）只打 `IncLLMTokenUsage`（histogram 缺口此前由 ledger 覆盖，去 ledger 后由网关 `invokeStream` 对称补齐——Fix B）；agent 侧 `ledger.Record`（`react_llm.go:386` → `token_ledger.go:40-49`）对同一 `resp.Usage` 再打一次。裁决（spec §11 D2①）：网关出站为 token 唯一事实源；ledger 只保留 cost 计算 + span 属性（Opik 证据）+ 日志。
 
 - [ ] **Step 1：改写测试文件以编码新契约（无 metrics 打点、单参 constructor）**
 
