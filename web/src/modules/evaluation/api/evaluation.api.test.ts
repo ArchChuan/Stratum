@@ -2,11 +2,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { evaluationApi } from './evaluation.api';
 
-const client = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }));
+const client = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn() }));
 vi.mock('@/services/client', () => ({ default: client }));
 
 describe('evaluation center api', () => {
-  beforeEach(() => { client.get.mockReset(); client.post.mockReset(); });
+  beforeEach(() => { client.get.mockReset(); client.post.mockReset(); client.put.mockReset(); });
 
   it.each([
     ['getOverview', '/evaluations/overview', undefined, { resources: 0, suites: 0, runs: 0, candidates: 0, experiments: 0 }],
@@ -37,6 +37,21 @@ describe('evaluation center api', () => {
     await evaluationApi.createSuite({ name: 'Agent 基线', resourceKind: 'agent', cases: [] });
     expect(client.post).toHaveBeenCalledWith('/evaluations/suites', {
       name: 'Agent 基线', resource_kind: 'agent', cases: [],
+    });
+  });
+
+  it('updates a session draft case with the full script and omits single-turn input', async () => {
+    client.put.mockResolvedValue({ data: {
+      id: 'c4', name: '退货会话', expected_output: '已受理退款', assertion_mode: 'contains', enabled: true,
+      session: { goal: '处理退货', turns: [{ user: '快递没到' }] },
+    } });
+    await evaluationApi.updateDraftCase('s1', 'c4', {
+      name: '退货会话', expectedOutput: '已受理退款', assertionMode: 'contains', enabled: true,
+      session: { goal: '处理退货', turns: [{ user: '快递没到' }] },
+    });
+    expect(client.put).toHaveBeenCalledWith('/evaluations/suites/s1/draft/cases/c4', {
+      name: '退货会话', expected_output: '已受理退款', assertion_mode: 'contains', enabled: true,
+      session: { goal: '处理退货', turns: [{ user: '快递没到' }] },
     });
   });
 

@@ -3,12 +3,15 @@ import { useState } from 'react';
 
 import type { ResourceSummary } from '../model/evaluation';
 
-import { AssertionModeField, JudgeSpecFields, StepJudgeFields, ToolSpecFields, type CaseAssertionMode } from './CaseFields';
+import { AssertionModeField, CaseShapeField, JudgeSpecFields, StepJudgeFields, ToolSpecFields,
+  type CaseAssertionMode, type CaseShape } from './CaseFields';
+import { SessionScriptFields, type SessionTurnRow } from './SessionScriptFields';
 
 interface Values {
-  resource_id: string; name: string; description?: string; case_name: string; input: string; expected_output: string;
+  resource_id: string; name: string; description?: string; case_name: string; input?: string; expected_output: string;
   assertion_mode: CaseAssertionMode; judge_model?: string; judge_rubric?: string;
   must_call?: string[]; must_not_call?: string[]; tool_order?: string[]; max_calls?: number; step_criteria?: string;
+  case_shape?: CaseShape; session_goal?: string; session_turns?: SessionTurnRow[];
 }
 
 export const CreateEvaluationModal = ({ open, resources, onClose, onSubmit }: {
@@ -17,6 +20,7 @@ export const CreateEvaluationModal = ({ open, resources, onClose, onSubmit }: {
 }) => {
   const [form] = Form.useForm<Values>();
   const [loading, setLoading] = useState(false);
+  const shape = Form.useWatch('case_shape', form);
   const submit = async () => {
     const values = await form.validateFields();
     const resource = resources.find((item) => item.id === values.resource_id);
@@ -28,7 +32,7 @@ export const CreateEvaluationModal = ({ open, resources, onClose, onSubmit }: {
   };
   return <Modal title="新建评测" open={open} onCancel={onClose} onOk={() => void submit()} okText="创建并运行"
     cancelText="取消" confirmLoading={loading} destroyOnHidden>
-    <Form form={form} layout="vertical" initialValues={{ assertion_mode: 'contains' }}>
+    <Form form={form} layout="vertical" initialValues={{ assertion_mode: 'contains', case_shape: 'single' }}>
       <Form.Item name="resource_id" label="目标资源" rules={[{ required: true, message: '请选择目标资源' }]}>
         <Select aria-label="目标资源" options={resources.filter((item) => item.stable_revision_id)
           .map((item) => ({ value: item.id, label: `${String(item.safe_summary.name || item.resource_id)}（${item.resource_id}）` }))} />
@@ -36,7 +40,9 @@ export const CreateEvaluationModal = ({ open, resources, onClose, onSubmit }: {
       <Form.Item name="name" label="评测名称" rules={[{ required: true, message: '请输入评测名称' }]}><Input aria-label="评测名称" /></Form.Item>
       <Form.Item name="description" label="评测说明"><Input aria-label="评测说明" /></Form.Item>
       <Form.Item name="case_name" label="用例名称" rules={[{ required: true, message: '请输入用例名称' }]}><Input aria-label="用例名称" /></Form.Item>
-      <Form.Item name="input" label="测试输入" rules={[{ required: true, message: '请输入测试输入' }]}><Input aria-label="测试输入" /></Form.Item>
+      <CaseShapeField />
+      {shape === 'single' && <Form.Item name="input" label="测试输入" rules={[{ required: true, message: '请输入测试输入' }]}><Input.TextArea aria-label="测试输入" /></Form.Item>}
+      {shape === 'session' && <SessionScriptFields />}
       <Form.Item name="expected_output" label="期望输出" rules={[{ required: true, message: '请输入期望输出' }]}><Input.TextArea aria-label="期望输出" /></Form.Item>
       <AssertionModeField />
       <JudgeSpecFields />

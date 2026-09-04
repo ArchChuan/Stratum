@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
@@ -11,10 +12,32 @@ import (
 )
 
 var (
-	ErrSuiteNameRequired  = errors.New("evaluation suite name required")
-	ErrSuiteCasesRequired = errors.New("evaluation suite requires at least one enabled case")
-	ErrSuiteNotFound      = errors.New("evaluation suite not found")
+	ErrSuiteNameRequired      = errors.New("evaluation suite name required")
+	ErrSuiteCasesRequired     = errors.New("evaluation suite requires at least one enabled case")
+	ErrSuiteNotFound          = errors.New("evaluation suite not found")
+	ErrSuiteCaseInputRequired = errors.New("single-turn evaluation case requires a test input")
+	ErrSuiteCaseInvalidScript = errors.New("evaluation session script invalid")
 )
+
+// validateCaseShape 校验 draft case 形态结构（阶段 B §5.4 authoring）：会话剧本 case
+// （Session 非 nil）必须通过 EvalSessionScript.Validate（至少一轮、每轮 user 非空），
+// 让结构错误在 authoring 阶段即拦截，而不是拖到 runCaseSession 执行 preflight 才失败；
+// 单轮 case（Session nil）必须有测试输入——input 在请求层不再 binding required，缺
+// 字段时 Input==nil 在此拒绝，保持旧契约「单轮 case 缺 input → 400」不变。会话 case
+// 的 Input 无执行语义（多轮 runner 只读 Session），允许 nil。错误 wrap 哨兵供统一错误
+// 中间件映射 400。
+func validateCaseShape(testCase domain.EvalCase) error {
+	if testCase.Session == nil {
+		if testCase.Input == nil {
+			return ErrSuiteCaseInputRequired
+		}
+		return nil
+	}
+	if reason, ok := testCase.Session.Validate(); !ok {
+		return fmt.Errorf("%w: %s", ErrSuiteCaseInvalidScript, reason)
+	}
+	return nil
+}
 
 type CreateSuiteInput struct {
 	Name         string
@@ -38,6 +61,9 @@ func (s *SuiteService) Create(ctx context.Context, tenantID string, input Create
 	}
 	hasEnabled := false
 	for i := range input.Cases {
+		if err := validateCaseShape(input.Cases[i]); err != nil {
+			return domain.EvalSuite{}, domain.EvalSuiteRevision{}, err
+		}
 		if input.Cases[i].ID == "" {
 			input.Cases[i].ID = uuid.Must(uuid.NewV7()).String()
 		}
@@ -100,6 +126,9 @@ func (s *SuiteService) UpdateDraftCase(ctx context.Context, tenantID, suiteID, c
 	}
 	if !ok {
 		return domain.EvalCase{}, ErrSuiteNotFound
+	}
+	if err := validateCaseShape(testCase); err != nil {
+		return domain.EvalCase{}, err
 	}
 	if err := s.repo.UpdateDraftCase(ctx, tenantID, revision.ID, testCase); err != nil {
 		return domain.EvalCase{}, err

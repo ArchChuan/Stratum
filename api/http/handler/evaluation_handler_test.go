@@ -397,6 +397,7 @@ type fakeSuiteService struct {
 	createInput application.CreateSuiteInput
 	getDraftErr error
 	updated     domain.EvalCase
+	updatedReq  domain.EvalCase
 	updateErr   error
 	tenantID    string
 	suiteID     string
@@ -419,6 +420,7 @@ func (f *fakeSuiteService) GetDraft(_ context.Context, tenantID, suiteID string)
 
 func (f *fakeSuiteService) UpdateDraftCase(_ context.Context, tenantID, suiteID, caseID string, testCase domain.EvalCase) (domain.EvalCase, error) {
 	f.tenantID, f.suiteID, f.caseID = tenantID, suiteID, caseID
+	f.updatedReq = testCase
 	return f.updated, f.updateErr
 }
 
@@ -924,5 +926,78 @@ func TestEvaluationHandlerMonitorTrendPropagates(t *testing.T) {
 		"/evaluations/monitoring/resources/trend?resource_kind=skill", nil)) // 缺 id
 	if bad.Code != http.StatusBadRequest {
 		t.Fatalf("bad status=%d body=%s, want 400", bad.Code, bad.Body.String())
+	}
+}
+
+// TestEvaluationHandlerCreateSuiteCarriesSessionScriptToDomain verifies the
+// authoring contract (阶段 B §5.4): a create-suite request case carrying a
+// session script is converted into the domain EvalCase.Session verbatim
+// (goal + turns, per-turn tool_spec mapped like the case-level one), and a
+// session case may omit the single-turn input.
+func TestEvaluationHandlerCreateSuiteCarriesSessionScriptToDomain(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	suites := &fakeSuiteService{}
+	h := NewEvaluationHandler(suites, nil, nil, nil, nil, nil, nil, nil, zap.NewNop())
+	r := gin.New()
+	r.POST("/evaluations/suites", withTenantAndUser("tenant-1", "user-1"), h.CreateSuite)
+
+	rec := httptest.NewRecorder()
+	body := `{"name":"会话基线","resource_kind":"agent","cases":[{
+	  "name":"会话投诉","expected_output":"已给用户可执行处理","assertion_mode":"contains",
+	  "session":{"goal":"用户投诉快递未收到：定位物流状态并给出签收异常处理","turns":[
+	    {"user":"快递一直没到，帮我看看","probe":"识别物流查询意图"},
+	    {"user":"物流显示已签收但我没收到","probe":"进入签收异常处理",
+	     "tool_spec":{"must_call":["track_package"],"max_calls":2}}]}}]}`
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/evaluations/suites", strings.NewReader(body)))
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("unexpected status: %d body=%s", rec.Code, rec.Body.String())
+	}
+	cases := suites.createInput.Cases
+	if len(cases) != 1 || cases[0].Session == nil {
+		t.Fatalf("session not carried to domain: %+v", cases)
+	}
+	session := cases[0].Session
+	if session.Goal != "用户投诉快递未收到：定位物流状态并给出签收异常处理" || len(session.Turns) != 2 {
+		t.Fatalf("session goal/turns not preserved: %+v", session)
+	}
+	if session.Turns[1].ToolSpec == nil || len(session.Turns[1].ToolSpec.MustCall) != 1 ||
+		session.Turns[1].ToolSpec.MustCall[0] != "track_package" || session.Turns[1].ToolSpec.MaxCalls != 2 {
+		t.Fatalf("per-turn tool_spec not mapped: %+v", session.Turns[1])
+	}
+	if cases[0].Input != nil {
+		t.Fatalf("session case should carry no single-turn input, got %v", cases[0].Input)
+	}
+}
+
+// TestEvaluationHandlerUpdateDraftCaseCarriesSessionScriptToDomain verifies the
+// session authoring edit path: the draft-case update maps a session script into
+// the domain case (full replacement), and a session case update may omit input.
+func TestEvaluationHandlerUpdateDraftCaseCarriesSessionScriptToDomain(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	suites := &fakeSuiteService{updated: domain.EvalCase{ID: "case-1", Enabled: true}}
+	h := NewEvaluationHandler(suites, nil, nil, nil, nil, nil, nil, nil, zap.NewNop())
+	r := gin.New()
+	r.PUT("/evaluations/suites/:id/draft/cases/:caseId", withTenant("tenant-1"), h.UpdateDraftCase)
+
+	rec := httptest.NewRecorder()
+	body := `{"name":"会话投诉改","expected_output":"已给用户可执行处理","assertion_mode":"contains",
+	  "session":{"goal":"快递签收异常：先核实再给处理","turns":[
+	    {"user":"签收异常怎么处理","probe":"进入异常处理"}]}}`
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut,
+		"/evaluations/suites/suite-1/draft/cases/case-1", strings.NewReader(body)))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d body=%s", rec.Code, rec.Body.String())
+	}
+	got := suites.updatedReq
+	if got.Session == nil || got.Session.Goal != "快递签收异常：先核实再给处理" || len(got.Session.Turns) != 1 {
+		t.Fatalf("session not carried to domain: %+v", got.Session)
+	}
+	if got.Session.Turns[0].User != "签收异常怎么处理" {
+		t.Fatalf("turn user not preserved: %+v", got.Session.Turns[0])
+	}
+	if got.Input != nil {
+		t.Fatalf("session case update should carry no single-turn input, got %v", got.Input)
 	}
 }

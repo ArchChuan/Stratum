@@ -70,6 +70,34 @@ describe('SuiteDrawer', () => {
     expect(screen.getByText(/步骤判定：逐步评分/)).toBeInTheDocument();
   });
 
+  it('shows the session script summary and saves edits with the full script', async () => {
+    const sessionDraft = {
+      id: 'rev-s', suite_id: 's1', status: 'draft', resource_kind: 'skill',
+      cases: [{
+        id: 'c4', name: '退货退款会话', expected_output: '已受理退款', assertion_mode: 'contains', enabled: true,
+        session: { goal: '处理用户的退货退款诉求', turns: [{ user: '快递一直没更新', probe: '识别到退货意向' }] },
+      }],
+    };
+    apiMocks.getSuiteDraft.mockResolvedValue(sessionDraft);
+    apiMocks.updateDraftCase.mockResolvedValue(sessionDraft.cases[0]);
+    render(<SuiteDrawer suite={suite} open onClose={vi.fn()} canManage onChanged={vi.fn()} />);
+
+    expect(await screen.findByText('退货退款会话')).toBeInTheDocument();
+    expect(screen.getByText(/Goal：处理用户的退货退款诉求/)).toBeInTheDocument();
+    expect(screen.getByText('第 1 轮用户消息')).toBeInTheDocument();
+    expect(screen.queryByText('测试输入')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /编\s*辑/ }));
+    await waitFor(() => expect(screen.getByLabelText('会话目标')).toHaveValue('处理用户的退货退款诉求'));
+    fireEvent.change(screen.getByLabelText('会话目标'), { target: { value: '升级为优先处理' } });
+    fireEvent.click(screen.getByRole('button', { name: /保\s*存/ }));
+
+    await waitFor(() => expect(apiMocks.updateDraftCase).toHaveBeenCalledWith('s1', 'c4', expect.objectContaining({
+      name: '退货退款会话', assertionMode: 'contains', enabled: true,
+      session: expect.objectContaining({ goal: '升级为优先处理' }),
+    })));
+  });
+
   it('publishes after confirmation and closes with a refresh', async () => {
     let confirmOptions: { onOk: () => Promise<void> } | undefined;
     const confirmSpy = vi.spyOn(Modal, 'confirm').mockImplementation((options) => {
