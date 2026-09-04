@@ -108,3 +108,28 @@ it('member 非白名单只读，可见「申请编辑权限」并提交 grant_ed
   ));
   expect(await screen.findByText('已提交，等待管理员审批')).toBeInTheDocument();
 });
+
+it('版本详情：点「详情」按直父 revision 组装编辑面 diff，展示变更前后值', async () => {
+  // 两版：v2(revision-2) 自链 revision-1 直父，仅 description 改动；name/instructions
+  // 两版相同 → Drawer 只出 description 一行。列表行已带完整编辑面 + parentRevisionId。
+  skillApiMock.listRevisions.mockResolvedValue([
+    { id: 'revision-2', skillId: 'skill-1', status: 'published', revisionNo: 2, parentRevisionId: 'revision-1',
+      name: '测试 Skill', description: '更新后的描述(新)', instructions: '按照步骤完成测试',
+      isCurrent: true, contentHash: 'hash-v2', createdBy: 'user-1', createdByName: '管理员',
+      createdAt: '2026-02-01T00:00:00Z' },
+    { id: 'revision-1', skillId: 'skill-1', status: 'deprecated', revisionNo: 1, parentRevisionId: '',
+      name: '测试 Skill', description: '用于测试的描述(旧)', instructions: '按照步骤完成测试',
+      isCurrent: false, contentHash: 'hash-v1', createdBy: 'user-1', createdByName: '管理员',
+      createdAt: '2026-01-01T00:00:00Z' },
+  ]);
+  renderWorkspace();
+  fireEvent.click(await screen.findByRole('tab', { name: '版本历史' }));
+
+  await screen.findByText('当前生效');
+  // 首行 v2 的「详情」：before = 直父 revision-1 内容，after = v2 内容。
+  fireEvent.click((await screen.findAllByRole('button', { name: '详情' }))[0]);
+
+  expect(await screen.findByText('版本 v2 字段变更')).toBeInTheDocument();
+  expect(screen.getByText('用于测试的描述(旧)')).toBeInTheDocument();
+  expect(screen.getByText('更新后的描述(新)')).toBeInTheDocument();
+});
