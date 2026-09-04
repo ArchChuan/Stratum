@@ -240,13 +240,22 @@ func (r *PgSuiteRepository) UpdateDraftCase(ctx context.Context, tenantID, revis
 	if err != nil {
 		return fmt.Errorf("evaluation suite repository: marshal expected output: %w", err)
 	}
+	// session 与 input/expected 同属可编辑内容：会话剧本随编辑 full replacement
+	// （nil Session 写回 '{}'，语义回退单轮）。evaluator_config 仍刻意不动：provenance
+	// 与 judge spec 是 case 入 draft 时的事实。
+	sessionJSON := []byte("{}")
+	if testCase.Session != nil {
+		if sessionJSON, err = json.Marshal(testCase.Session); err != nil {
+			return fmt.Errorf("evaluation suite repository: marshal session script: %w", err)
+		}
+	}
 	return r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx,
 			`UPDATE eval_cases
-			 SET name=$3, input=$4, expected_output=$5, assertion_mode=$6, enabled=$7
+			 SET name=$3, input=$4, expected_output=$5, assertion_mode=$6, enabled=$7, session=$8
 			 WHERE id=$1 AND suite_revision_id=$2`,
 			testCase.ID, revisionID, testCase.Name, string(inputJSON), string(expectedJSON),
-			string(testCase.AssertionMode), testCase.Enabled,
+			string(testCase.AssertionMode), testCase.Enabled, string(sessionJSON),
 		)
 		if err != nil {
 			return fmt.Errorf("evaluation suite repository: update draft case: %w", err)
@@ -303,12 +312,20 @@ func insertEvalCase(ctx context.Context, tx pgx.Tx, revisionID string, testCase 
 			return fmt.Errorf("evaluation suite repository: marshal evaluator config: %w", err)
 		}
 	}
+	// session 列承载会话剧本（阶段 B）；'{}' = 旧单轮 case。
+	sessionJSON := []byte("{}")
+	if testCase.Session != nil {
+		sessionJSON, err = json.Marshal(testCase.Session)
+		if err != nil {
+			return fmt.Errorf("evaluation suite repository: marshal session script: %w", err)
+		}
+	}
 	_, err = tx.Exec(ctx,
 		`INSERT INTO eval_cases
-		 (id, suite_revision_id, name, input, expected_output, assertion_mode, enabled, evaluator_config)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+		 (id, suite_revision_id, name, input, expected_output, assertion_mode, enabled, session, evaluator_config)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
 		testCase.ID, revisionID, testCase.Name, string(inputJSON), string(expectedJSON),
-		string(testCase.AssertionMode), testCase.Enabled, string(evaluatorConfig),
+		string(testCase.AssertionMode), testCase.Enabled, string(sessionJSON), string(evaluatorConfig),
 	)
 	if err != nil {
 		return fmt.Errorf("evaluation suite repository: insert case: %w", err)
@@ -337,7 +354,7 @@ func loadSuiteRevision(
 	revision.ResourceKind = domain.ResourceKind(kind)
 	revision.CreatedBy = createdBy
 	rows, err := tx.Query(ctx,
-		`SELECT id, name, input, expected_output, assertion_mode, enabled, evaluator_config
+		`SELECT id, name, input, expected_output, assertion_mode, enabled, session, evaluator_config
 		 FROM eval_cases WHERE suite_revision_id=$1 ORDER BY created_at, id`, revision.ID)
 	if err != nil {
 		return domain.EvalSuiteRevision{}, false, err
@@ -345,14 +362,21 @@ func loadSuiteRevision(
 	defer rows.Close()
 	for rows.Next() {
 		var testCase domain.EvalCase
-		var inputJSON, expectedJSON, evaluatorConfig []byte
+		var inputJSON, expectedJSON, evaluatorConfig, sessionJSON []byte
 		var mode string
-		if err := rows.Scan(&testCase.ID, &testCase.Name, &inputJSON, &expectedJSON, &mode, &testCase.Enabled, &evaluatorConfig); err != nil {
+		if err := rows.Scan(&testCase.ID, &testCase.Name, &inputJSON, &expectedJSON, &mode, &testCase.Enabled, &sessionJSON, &evaluatorConfig); err != nil {
 			return domain.EvalSuiteRevision{}, false, err
 		}
 		testCase.AssertionMode = domain.AssertionMode(mode)
 		_ = json.Unmarshal(inputJSON, &testCase.Input)
 		_ = json.Unmarshal(expectedJSON, &testCase.ExpectedOutput)
+		// session '{}' = 旧单轮 case：保持 nil 走旧执行路径。
+		if len(sessionJSON) > 0 && string(sessionJSON) != "{}" {
+			var script domain.EvalSessionScript
+			if err := json.Unmarshal(sessionJSON, &script); err == nil {
+				testCase.Session = &script
+			}
+		}
 		// evaluator_config carries the judge spec and generation provenance;
 		// NULL for hand-authored rule cases stays empty.
 		testCase.ApplyConfig(evaluatorConfig)

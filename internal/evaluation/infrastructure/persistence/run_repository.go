@@ -74,38 +74,72 @@ func insertCaseResult(ctx context.Context, tx pgx.Tx, runID string, result domai
 	if err != nil {
 		return fmt.Errorf("evaluation run repository: marshal actual output: %w", err)
 	}
-	dimensionsJSON, err := json.Marshal(result.Dimensions)
+	dimensionsJSON, err := marshalJSONArray(result.Dimensions)
 	if err != nil {
 		return fmt.Errorf("evaluation run repository: marshal dimensions: %w", err)
-	}
-	if string(dimensionsJSON) == "null" {
-		dimensionsJSON = []byte("[]")
 	}
 	traceJSON, err := json.Marshal(result.TraceEvidence)
 	if err != nil {
 		return fmt.Errorf("evaluation run repository: marshal trace evidence: %w", err)
 	}
-	toolSequenceJSON, err := json.Marshal(domain.SanitizeTools(result.Tools))
+	toolSequenceJSON, err := marshalJSONArray(domain.SanitizeTools(result.Tools))
 	if err != nil {
 		return fmt.Errorf("evaluation run repository: marshal tool sequence: %w", err)
 	}
-	if string(toolSequenceJSON) == "null" {
-		toolSequenceJSON = []byte("[]")
+	// 会话剧本逐轮证据（阶段 B）：nil Turns = 旧单轮 case，落库 '[]'。落库前经
+	// sanitizeSessionTurns 脱敏——与单轮 actual/tool_sequence 同一道 spec §6.5 红线，
+	// 防逐轮证据绕过敏感数据覆盖直落 JSONB。GetRun 读回 nil 与 omitempty 序列化自洽
+	// （见 scanCaseResult 的 '[]' 守卫）。
+	turnsJSON, err := marshalJSONArray(sanitizeSessionTurns(result.Turns))
+	if err != nil {
+		return fmt.Errorf("evaluation run repository: marshal turns: %w", err)
 	}
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO eval_case_results
 		 (id, run_id, case_id, passed, actual_output, message, error_message, trace_id,
 		  tokens, cost_usd, duration_ms, dimensions, failure_reason, trace_evidence,
-		  process_pass, process_failure, tool_sequence)
-		 VALUES ($1,$2,NULLIF($3,''),$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+		  process_pass, process_failure, tool_sequence, turns)
+		 VALUES ($1,$2,NULLIF($3,''),$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
 		id, runID, result.CaseID, result.Passed, string(actualJSON),
 		result.Message, result.Error, result.TraceID, result.Tokens, result.CostUSD, result.DurationMs,
 		string(dimensionsJSON), result.FailureReason, string(traceJSON),
-		result.ProcessPass, result.ProcessFailure, string(toolSequenceJSON),
+		result.ProcessPass, result.ProcessFailure, string(toolSequenceJSON), string(turnsJSON),
 	); err != nil {
 		return fmt.Errorf("evaluation run repository: insert case result: %w", err)
 	}
 	return nil
+}
+
+// marshalJSONArray 序列化 JSON 数组列（dimensions/tool_sequence/turns）并做 nil
+// 回退：json.Marshal 对 nil/空切片产出 "null"，统一落库 '[]'，与 scanCaseResult
+// 读侧的 '[]' 守卫配合保持 nil ↔ '[]' round-trip 语义。
+func marshalJSONArray(value any) ([]byte, error) {
+	b, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	if string(b) == "null" {
+		return []byte("[]"), nil
+	}
+	return b, nil
+}
+
+// sanitizeSessionTurns 深拷贝会话逐轮证据并逐轮脱敏（Output → SanitizeValue、
+// Tools → SanitizeTools），与单轮 actual/tool_sequence 落库前的脱敏保持一致；
+// 不修改入参。空/ nil turns 原样返回（marshal "null" → '[]' 由调用方回退）。
+func sanitizeSessionTurns(turns []domain.SessionTurnEvidence) []domain.SessionTurnEvidence {
+	if len(turns) == 0 {
+		return turns
+	}
+	out := make([]domain.SessionTurnEvidence, len(turns))
+	for i, turn := range turns {
+		out[i] = turn
+		if sanitized, ok := domain.SanitizeValue(turn.Output).(string); ok {
+			out[i].Output = sanitized
+		}
+		out[i].Tools = domain.SanitizeTools(turn.Tools)
+	}
+	return out
 }
 
 func (r *PgRunRepository) GetRun(
@@ -147,7 +181,7 @@ func (r *PgRunRepository) GetRun(
 		rows, err := tx.Query(ctx,
 			`SELECT case_id, passed, actual_output, message, error_message, trace_id, tokens, cost_usd,
 			        duration_ms, dimensions, failure_reason, trace_evidence,
-			        process_pass, process_failure, tool_sequence
+			        process_pass, process_failure, tool_sequence, turns
 			 FROM eval_case_results WHERE run_id=$1 ORDER BY created_at, id`, runID)
 		if err != nil {
 			return err
@@ -282,17 +316,19 @@ func decodeContextSnapshot(raw []byte) (*domain.EvaluationContextSnapshot, error
 }
 
 // scanCaseResult 从一行 eval_case_results 读出 case 结果，并把 JSON 列反序列化
-// 到对应结构体字段（spec §6.2/§6.5）。
+// 到对应结构体字段（spec §6.2/§6.5/阶段 B turns）。空数组 '[]'（旧行/未捕获）跳过
+// 解码，turns 保持 nil，与 omitempty 序列化自洽。
 func scanCaseResult(row pgx.Row) (domain.EvalCaseResult, error) {
 	var result domain.EvalCaseResult
 	var actualJSON []byte
 	var dimensionsJSON []byte
 	var traceJSON []byte
 	var toolSequenceJSON []byte
+	var turnsJSON []byte
 	if err := row.Scan(&result.CaseID, &result.Passed, &actualJSON, &result.Message, &result.Error,
 		&result.TraceID, &result.Tokens, &result.CostUSD, &result.DurationMs,
 		&dimensionsJSON, &result.FailureReason, &traceJSON,
-		&result.ProcessPass, &result.ProcessFailure, &toolSequenceJSON); err != nil {
+		&result.ProcessPass, &result.ProcessFailure, &toolSequenceJSON, &turnsJSON); err != nil {
 		return result, err
 	}
 	_ = json.Unmarshal(actualJSON, &result.Actual)
@@ -304,6 +340,9 @@ func scanCaseResult(row pgx.Row) (domain.EvalCaseResult, error) {
 	}
 	if len(toolSequenceJSON) > 0 {
 		_ = json.Unmarshal(toolSequenceJSON, &result.Tools)
+	}
+	if len(turnsJSON) > 0 && string(turnsJSON) != "[]" {
+		_ = json.Unmarshal(turnsJSON, &result.Turns)
 	}
 	return result, nil
 }

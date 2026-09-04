@@ -79,6 +79,16 @@ type ResourceAdapter interface {
 	SafeSummary(context.Context, string, domain.ResourceRef) (map[string]any, error)
 }
 
+// SessionRunner 是可选能力接口：会话剧本 case（阶段 B §5.4）的 ResourceAdapter
+// 之上的能力接口。runCase 会话分支对 adapter 做类型断言分派；adapter 未实现
+// （单轮知识检索等）时 fail-close 报错，绝不静默退化为单轮执行。
+type SessionRunner interface {
+	RunSession(
+		ctx context.Context, tenantID, requestedBy string, ref domain.ResourceRef,
+		script domain.EvalSessionScript,
+	) ([]domain.SessionTurnEvidence, error)
+}
+
 type RunRepository interface {
 	SaveRun(ctx context.Context, tenantID string, run domain.EvalRun) error
 	GetRun(ctx context.Context, tenantID, runID string) (domain.EvalRun, bool, error)

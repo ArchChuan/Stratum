@@ -80,6 +80,35 @@ func TestChatStore_ListConversations(t *testing.T) {
 	}
 }
 
+// TestChatStore_ListConversations_FiltersOutWorkflowAndEvaluation 显式断言默认会话列表
+// 同时过滤 workflow 与 evaluation 两类非手动来源：评测受控会话（source=evaluation）
+// 与工作流自动会话都不应出现在生产默认会话列表，SQL 必须带
+// source NOT IN ('workflow', 'evaluation')。
+func TestChatStore_ListConversations_FiltersOutWorkflowAndEvaluation(t *testing.T) {
+	store, mock := newChatStoreWithMock(t)
+	defer mock.Close()
+
+	now := time.Now()
+	expectTenantTx(mock)
+	mock.ExpectQuery(`AND source NOT IN \('workflow', 'evaluation'\)`).
+		WithArgs("agent-1", "user-1").
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "agent_id", "user_id", "name", "created_at", "updated_at", "expires_at",
+		}).AddRow("c1", "agent-1", "user-1", "Chat A", now, now, now.AddDate(0, 0, 30)))
+	mock.ExpectCommit()
+
+	convs, err := store.ListConversations(context.Background(), "t1", "agent-1", "user-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(convs) != 1 {
+		t.Errorf("want 1 conversation, got %d", len(convs))
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet: %v", err)
+	}
+}
+
 func TestChatStore_RenameConversation_success(t *testing.T) {
 	store, mock := newChatStoreWithMock(t)
 	defer mock.Close()

@@ -208,6 +208,11 @@ func (s *Service) resolvePlatformSeq(ctx context.Context, tenantID string) int64
 func (s *Service) runCase(
 	ctx context.Context, tenantID, requestedBy string, ref domain.ResourceRef, runID string, testCase domain.EvalCase,
 ) domain.EvalCaseResult {
+	// 会话剧本 case（阶段 B §5.4）：adapter 实现 SessionRunner 才可执行，否则
+	// runCaseSession 内部 fail-close。nil Session 的单轮 case 走下方既有路径零改动。
+	if testCase.IsSession() {
+		return s.runCaseSession(ctx, tenantID, requestedBy, ref, runID, testCase)
+	}
 	execution, err := s.adapter.ExecuteRevision(ctx, tenantID, requestedBy, ref, testCase)
 	result := domain.EvalCaseResult{ID: uuid.Must(uuid.NewV7()).String(), CaseID: testCase.ID}
 	if err != nil {
@@ -257,6 +262,71 @@ func (s *Service) runCase(
 		return s.judgeCaseResult(ctx, tenantID, runID, ref, testCase, result)
 	}
 	return s.ruleCaseResult(ctx, tenantID, runID, ref, testCase, execution.Output, result)
+}
+
+// runCaseSession 执行会话剧本 case（阶段 B §5.4）：adapter 必须是 port.SessionRunner，
+// 否则 fail-close 报错（绝不静默退化为单轮）；剧本结构非法（Validate 不过）同样
+// fail-close，在驱动适配器开受控会话前即拒绝。RunSession 逐轮驱动执行并返回每轮
+// 证据；任一轮失败保留已收集 partial evidence 并返回 error。终态断言复用单轮既有
+// 规则/judge 分支（actual=末轮输出，零断言复制）；case 级过程断言作用于末轮工具
+// 序列。TraceID 取末轮（逐轮 trace 已留在 Turns 证据里）；Tokens/CostUSD/DurationMs
+// 聚合为逐轮之和（成败均计：partial evidence 的消耗如实入 case 级成本），run 级
+// Metrics 自然汇总整段会话消耗。
+func (s *Service) runCaseSession(
+	ctx context.Context, tenantID, requestedBy string, ref domain.ResourceRef, runID string,
+	testCase domain.EvalCase,
+) domain.EvalCaseResult {
+	result := domain.EvalCaseResult{ID: uuid.Must(uuid.NewV7()).String(), CaseID: testCase.ID}
+	runner, ok := s.adapter.(port.SessionRunner)
+	if !ok {
+		result.Error = "session evaluation not supported by this resource adapter"
+		result.FailureReason = "execution"
+		return result
+	}
+	// 剧本结构 preflight：非法剧本（零轮/空 user）在 RunSession 开 source='evaluation'
+	// 会话前即拒绝，不浪费一次受控会话。归因 execution 与其它「会话无法执行」路径
+	// 一致（FailureReason 语义集无独立 config 枚举）。
+	if reason, valid := testCase.Session.Validate(); !valid {
+		result.Error = reason
+		result.FailureReason = "execution"
+		return result
+	}
+	evidences, err := runner.RunSession(ctx, tenantID, requestedBy, ref, *testCase.Session)
+	result.Turns = evidences
+	// 逐轮消耗无论成败都聚合：中途失败带回 partial evidence 时 case/run 级
+	// tokens/cost/duration 如实反映真实消耗，避免 Turns 内为真实值而 case 级记 0。
+	for _, e := range evidences {
+		result.Tokens += e.Tokens
+		result.CostUSD += e.CostUSD
+		result.DurationMs += e.DurationMs
+	}
+	if err != nil {
+		result.Error = err.Error()
+		result.FailureReason = "execution"
+		return result
+	}
+	if len(evidences) == 0 {
+		result.Error = "session evaluation returned no turn evidence"
+		result.FailureReason = "execution"
+		return result
+	}
+	last := evidences[len(evidences)-1]
+	result.Actual = last.Output
+	result.TraceID = last.TraceID
+	result.Tools = last.Tools
+	verdict, err := s.evaluateProcess(ctx, testCase, result)
+	if err != nil {
+		result.Error = err.Error()
+		result.FailureReason = "execution"
+		return result
+	}
+	result.ProcessPass = verdict.Passed
+	result.ProcessFailure = verdict.Failure
+	result.Dimensions = verdict.Dimensions
+	if testCase.AssertionMode == domain.AssertionJudge {
+		return s.judgeCaseResult(ctx, tenantID, runID, ref, testCase, result)
+	}
+	return s.ruleCaseResult(ctx, tenantID, runID, ref, testCase, last.Output, result)
 }
 
 // judgeCaseResult 走 LLM judge 输出断言并把过程断言并入最终 Passed；随后内联
