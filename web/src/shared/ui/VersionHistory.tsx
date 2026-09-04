@@ -1,6 +1,7 @@
 import { Alert, Button, Modal, Space, Table, Tag, Typography, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useState } from 'react';
+import type { ReactNode } from 'react';
 
 import { VersionDiffDrawer } from './VersionDiffDrawer';
 
@@ -98,7 +99,7 @@ export const VersionHistory = ({ rows, loading = false, rollback, infoMessage, o
     { title: '操作者', dataIndex: 'createdBy', width: 140, render: (_: unknown, r: VersionRow) => r.createdByName || r.createdBy || <Text type="secondary">—</Text> },
     { title: '时间', dataIndex: 'createdAt', width: 180, render: (t: string) => (t ? new Date(t).toLocaleString('zh-CN', { hour12: false }) : <Text type="secondary">—</Text>) },
     { title: '操作', key: 'actions', width: 170, render: (_: unknown, r: VersionRow) => {
-      const actions = [];
+      const actions: ReactNode[] = [];
       if (r.canRollback && rollback) {
         actions.push(<Button key="rollback" type="link" size="small" danger onClick={() => confirmRollback(r)}>回滚</Button>);
       }
