@@ -1032,13 +1032,24 @@ type evaluationTenantLister struct {
 	pool *pgxpool.Pool
 }
 
+// skillScenarioExecutor 是 skill 场景评测的注入面：单轮场景执行
+// (ExecuteSkillScenarioRevision) + 评测受控会话打开 (OpenEvalConversation)。
+// *agentapp.AgentService 天然满足；窄接口注入让单测可用 fake 替代完整 AgentService，
+// 与 agentEvaluationAdapter 的 agentRevisionExecutor/evalConversationOpener 同模式。
+type skillScenarioExecutor interface {
+	ExecuteSkillScenarioRevision(context.Context, agentdomain.AgentRevision, agentapp.ExecRequest, agentapp.ExecMeta, []agentport.SkillActivation) (*agentapp.AgentResult, int, error)
+	OpenEvalConversation(ctx context.Context, tenantID, agentID, userID string) (string, error)
+}
+
 type agentScenarioEvaluationAdapter struct {
-	agents    *agentapp.AgentService
+	agents    skillScenarioExecutor
 	revisions agentRevisionService
 	skills    agentport.SkillActivationResolver
 	bindings  agentport.AgentSkillBinding
 	resources skillCandidateManager
 }
+
+var _ evalport.SessionRunner = agentScenarioEvaluationAdapter{}
 
 func (a agentScenarioEvaluationAdapter) ResolveRevision(
 	ctx context.Context, tenantID string, ref evaldomain.ResourceRef,
@@ -1064,30 +1075,10 @@ func (a agentScenarioEvaluationAdapter) validateSkillRef(ref evaldomain.Resource
 func (a agentScenarioEvaluationAdapter) ExecuteRevision(
 	ctx context.Context, tenantID, requestedBy string, ref evaldomain.ResourceRef, testCase evaldomain.EvalCase,
 ) (evalport.ExecutionResult, error) {
-	if err := a.validateSkillRef(ref); err != nil {
-		return evalport.ExecutionResult{}, err
-	}
-	if a.revisions == nil {
-		return evalport.ExecutionResult{}, errors.New("agent scenario evaluation: revision service unavailable")
-	}
 	// D7：执行时用 run 创建时锁定的承载 agent revision，不读 Registry 当前生产
 	// 配置，可重放。快照缺失/pin 缺失 → fail-closed，提示 recreate run。
 	snap := evaldomain.EvalSnapshotFromCtx(ctx)
-	if snap == nil {
-		return evalport.ExecutionResult{}, errors.New("agent scenario evaluation: evaluation context snapshot required")
-	}
-	// 评测后台 worker 路径 ctx 本无 tenant：一次性包裹并贯穿 bindings /
-	// ResolveSkills / ExecuteSkillScenarioRevision 调用（publishedSkillActivationResolver
-	// 与 skill repo 只从 ctx 读 tenant，缺失即 fail-closed）。resolvePinnedAgent 内的
-	// 局部包裹是幂等双保险，两处重复无害。
-	ctx = postgres.WithTenant(ctx, &postgres.TenantContext{
-		TenantID: tenantID, UserID: requestedBy, Role: postgres.RoleTenantAdmin,
-	})
-	agentRev, agentID, err := a.resolvePinnedAgent(ctx, tenantID, requestedBy, snap, ref)
-	if err != nil {
-		return evalport.ExecutionResult{}, err
-	}
-	activation, err := a.resolveSkillActivation(ctx, tenantID, ref)
+	ctx, agentRev, agentID, activation, err := a.resolveScenarioExecution(ctx, tenantID, requestedBy, ref, snap)
 	if err != nil {
 		return evalport.ExecutionResult{}, err
 	}
@@ -1095,28 +1086,132 @@ func (a agentScenarioEvaluationAdapter) ExecuteRevision(
 	if err != nil {
 		return evalport.ExecutionResult{}, err
 	}
-	traceID := uuid.Must(uuid.NewV7()).String()
-	result, duration, err := a.agents.ExecuteSkillScenarioRevision(ctx, agentRev,
-		agentapp.ExecRequest{Query: query, UserID: requestedBy},
-		agentapp.ExecMeta{
-			TenantID: tenantID,
-			TraceID:  traceID,
-			EvolutionTrace: agentapp.EvolutionTraceMetadata{
-				Evaluation: true,
-				ResourceManifest: map[string]string{
-					"skill:" + ref.ResourceID: ref.RevisionID,
-					// resolvePinnedAgent 已 fail-closed 保证 pin 非空。
-					"agent:" + agentID: snap.PinnedAssignments.SkillAgentRevision[ref.ResourceID],
-				},
-			},
-		},
-		[]agentport.SkillActivation{activation},
-	)
+	meta := a.scenarioExecutionMeta(tenantID, ref, agentID, snap.PinnedAssignments.SkillAgentRevision[ref.ResourceID])
+	result, duration, traceID, err := a.executeScenarioTurn(ctx, agentRev,
+		agentapp.ExecRequest{Query: query, UserID: requestedBy}, activation, meta)
 	if err != nil {
 		return evalport.ExecutionResult{}, err
 	}
 	return evalport.ExecutionResult{Output: result.Output, TraceID: traceID, Tokens: result.TokensUsed,
 		CostUSD: result.CostUSD, DurationMs: duration, Tools: mapToolObservations(result.ToolObservations)}, nil
+}
+
+// resolveScenarioExecution 解析并锁定一次 skill 场景评测（D7）：单轮 ExecuteRevision
+// 与会话 RunSession 共用的前置解析——校验 ref、要求 ctx 快照、一次性包裹租户 ctx、
+// 解析锁定承载 agent + skill 激活。任一步骤失败 fail-closed（pin 缺失/绑定 agent 缺失/
+// skill 不可用一律拒绝，绝不落到 Registry 当前生产配置）。评测后台 worker 路径 ctx 本无
+// tenant：此处包裹贯穿 bindings / ResolveSkills / OpenEvalConversation / 执行调用
+// (publishedSkillActivationResolver 与 skill repo 只从 ctx 读 tenant，缺失即 fail-closed)。
+// resolvePinnedAgent 内的局部包裹是幂等双保险，两处重复无害。
+func (a agentScenarioEvaluationAdapter) resolveScenarioExecution(
+	ctx context.Context, tenantID, requestedBy string, ref evaldomain.ResourceRef, snap *evaldomain.EvaluationContextSnapshot,
+) (context.Context, agentdomain.AgentRevision, string, agentport.SkillActivation, error) {
+	if err := a.validateSkillRef(ref); err != nil {
+		return nil, agentdomain.AgentRevision{}, "", agentport.SkillActivation{}, err
+	}
+	if a.revisions == nil {
+		return nil, agentdomain.AgentRevision{}, "", agentport.SkillActivation{}, errors.New("agent scenario evaluation: revision service unavailable")
+	}
+	if snap == nil {
+		return nil, agentdomain.AgentRevision{}, "", agentport.SkillActivation{}, errors.New("agent scenario evaluation: evaluation context snapshot required")
+	}
+	ctx = postgres.WithTenant(ctx, &postgres.TenantContext{
+		TenantID: tenantID, UserID: requestedBy, Role: postgres.RoleTenantAdmin,
+	})
+	agentRev, agentID, err := a.resolvePinnedAgent(ctx, tenantID, requestedBy, snap, ref)
+	if err != nil {
+		return nil, agentdomain.AgentRevision{}, "", agentport.SkillActivation{}, err
+	}
+	activation, err := a.resolveSkillActivation(ctx, tenantID, ref)
+	if err != nil {
+		return nil, agentdomain.AgentRevision{}, "", agentport.SkillActivation{}, err
+	}
+	if a.agents == nil {
+		return nil, agentdomain.AgentRevision{}, "", agentport.SkillActivation{}, errors.New("agent scenario evaluation: skill executor unavailable")
+	}
+	return ctx, agentRev, agentID, activation, nil
+}
+
+// scenarioExecutionMeta 构造 skill 场景评测共用的路由元数据：TraceID 每次执行在
+// executeScenarioTurn 内重新生成；EvolutionTrace 标注被测 skill revision 与锁定的
+// 承载 agent revision（manifest 键 agent:<agentID>，值来自 resolvePinnedAgent 已
+// fail-closed 保证非空的 pin）。
+func (a agentScenarioEvaluationAdapter) scenarioExecutionMeta(tenantID string, ref evaldomain.ResourceRef, agentID, pinnedAgentRev string) agentapp.ExecMeta {
+	return agentapp.ExecMeta{
+		TenantID: tenantID,
+		EvolutionTrace: agentapp.EvolutionTraceMetadata{
+			Evaluation: true,
+			ResourceManifest: map[string]string{
+				"skill:" + ref.ResourceID: ref.RevisionID,
+				"agent:" + agentID:        pinnedAgentRev,
+			},
+		},
+	}
+}
+
+// executeScenarioTurn 执行一次 skill 场景评测调用（单轮 case 与会话剧本逐轮共用）。
+// req.ConversationID 为空 = 一次性单轮；非空 = 以 ExecRequest.ConversationID 续跑同一
+// source='evaluation' 受控会话——assembleOptions 映射 WithConversationID +
+// loadConversationHistory 重载真实历史 → skill 场景逐轮与 agent 执行同语义真实多轮。
+// 每次调用生成独立 trace（逐轮证据各自可追溯）；执行错误与 nil result 都显式上抛。
+func (a agentScenarioEvaluationAdapter) executeScenarioTurn(
+	ctx context.Context, agentRev agentdomain.AgentRevision, req agentapp.ExecRequest,
+	activation agentport.SkillActivation, meta agentapp.ExecMeta,
+) (*agentapp.AgentResult, int, string, error) {
+	meta.TraceID = uuid.Must(uuid.NewV7()).String()
+	result, duration, err := a.agents.ExecuteSkillScenarioRevision(ctx, agentRev,
+		req, meta, []agentport.SkillActivation{activation})
+	if err != nil {
+		return nil, 0, "", fmt.Errorf("agent scenario evaluation: execute skill scenario revision: %w", err)
+	}
+	if result == nil {
+		return nil, 0, "", errors.New("agent scenario evaluation: provider returned no result")
+	}
+	return result, duration, meta.TraceID, nil
+}
+
+// RunSession 实现 evalport.SessionRunner（阶段 B §5.4）：skill 场景会话剧本与 agent
+// 会话同语义——先经 OpenEvalConversation 开一条 source='evaluation' 受控会话，再逐轮
+// 以 ExecuteSkillScenarioRevision 续跑同一会话（query=turn.User，历史自动重载）。任一轮
+// 失败返回已收集 partial evidence + error，绝不吞错；Output 是 AgentResult.Output
+// (string)，投影为逐轮证据供应用层末轮终态断言与 turns 落库。
+//
+// 离线审批默认策略：会话逐轮在评测 worker 中离线同步执行，无人工审批环。任一剧本轮次
+// 触发 RequireApproval 工具时，执行链在 tool guard 返回 ToolApprovalRequiredError 后以该
+// 轮 error 终止——runCaseSession 记该轮失败、case 失败（fail-close），绝不自动放行，也不
+// 把审批偷偷转成真人待办路径。显式「先批准再执行」剧本（需先人工放行再续跑验证批准路径）
+// 需要独立交互续跑机制，属后续子步，不在本阶段实现。
+func (a agentScenarioEvaluationAdapter) RunSession(
+	ctx context.Context, tenantID, requestedBy string, ref evaldomain.ResourceRef,
+	script evaldomain.EvalSessionScript,
+) ([]evaldomain.SessionTurnEvidence, error) {
+	if a.agents == nil {
+		return nil, errors.New("agent scenario evaluation: skill executor unavailable")
+	}
+	snap := evaldomain.EvalSnapshotFromCtx(ctx)
+	ctx, agentRev, agentID, activation, err := a.resolveScenarioExecution(ctx, tenantID, requestedBy, ref, snap)
+	if err != nil {
+		return nil, err
+	}
+	convID, err := a.agents.OpenEvalConversation(ctx, tenantID, agentID, requestedBy)
+	if err != nil {
+		return nil, fmt.Errorf("agent scenario evaluation: open evaluation conversation: %w", err)
+	}
+	meta := a.scenarioExecutionMeta(tenantID, ref, agentID, snap.PinnedAssignments.SkillAgentRevision[ref.ResourceID])
+	evidences := make([]evaldomain.SessionTurnEvidence, 0, len(script.Turns))
+	for i, turn := range script.Turns {
+		result, duration, traceID, err := a.executeScenarioTurn(ctx, agentRev,
+			agentapp.ExecRequest{Query: turn.User, UserID: requestedBy, ConversationID: convID}, activation, meta)
+		if err != nil {
+			return evidences, err
+		}
+		evidences = append(evidences, evaldomain.SessionTurnEvidence{
+			Index: i, User: turn.User, Output: result.Output,
+			TraceID: traceID, Tokens: result.TokensUsed, CostUSD: result.CostUSD,
+			DurationMs: duration, Tools: mapToolObservations(result.ToolObservations),
+		})
+	}
+	return evidences, nil
 }
 
 // resolvePinnedAgent 加载并解码 run 快照锁定的承载 agent revision（D7）：

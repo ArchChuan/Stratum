@@ -244,6 +244,49 @@ func TestServiceRunCaseSessionAggregatesTurnsAndProjectsLast(t *testing.T) {
 	}
 }
 
+// TestServiceRunCaseSessionForSkillResource 覆盖 skill 资源的会话剧本 case 跑通：
+// runCaseSession 按 IsSession() 分派（kind 无关），skill ResourceRef 与逐轮剧本透传
+// 给 SessionRunner，末轮投影/聚合语义与 agent 资源会话一致。
+func TestServiceRunCaseSessionForSkillResource(t *testing.T) {
+	adapter := &fakeSessionAdapter{fakeAdapter: &fakeAdapter{}}
+	svc := NewService(adapter, &fakeRunRepo{}, nil, nil)
+
+	run, err := svc.Run(snapshotCtx(), RunInput{
+		TenantID: "tenant-1", RequestedBy: "user-1",
+		Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "revision-1"},
+		Suite: domain.EvalSuiteRevision{ID: "sv-1", Cases: []domain.EvalCase{
+			{ID: "session-skill-1", Session: &domain.EvalSessionScript{Goal: "skill 会话目标",
+				Turns: []domain.SessionTurn{{User: "skill 开场"}, {User: "skill 追问"}}},
+				AssertionMode: domain.AssertionExact, ExpectedOutput: "skill 追问", Enabled: true},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if len(run.Results) != 1 {
+		t.Fatalf("expected 1 case result, got %d", len(run.Results))
+	}
+	got := run.Results[0]
+	if !got.Passed {
+		t.Fatalf("expected skill session run to pass, got result: %+v", got)
+	}
+	if len(got.Turns) != 2 {
+		t.Fatalf("expected 2 turn evidences, got %d", len(got.Turns))
+	}
+	// 末轮投影与资源 kind 无关：Actual 取末轮 Output。
+	if got.Actual != "skill 追问" || got.TraceID != "trace-session" {
+		t.Fatalf("last-turn projection wrong: actual=%v trace=%q", got.Actual, got.TraceID)
+	}
+	// 聚合：token/duration 为逐轮之和（cost 按"分"断言避免浮点尾差）。
+	if got.Tokens != 30 || got.DurationMs != 60 {
+		t.Fatalf("aggregated tokens/duration wrong: tokens=%d duration=%d", got.Tokens, got.DurationMs)
+	}
+	if adapter.runTenant != "tenant-1" || len(adapter.lastScript.Turns) != 2 {
+		t.Fatalf("adapter not driven with skill tenant/script: tenant=%q turns=%d",
+			adapter.runTenant, len(adapter.lastScript.Turns))
+	}
+}
+
 // TestServiceRunCaseSessionFailsClosedWhenAdapterLacksSessionRunner 覆盖 fail-close：
 // adapter 仅实现单轮 ResourceAdapter（不实现 SessionRunner）时，会话 case 报错并记
 // 执行失败，绝不静默退化为单轮执行。
