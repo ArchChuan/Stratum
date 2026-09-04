@@ -430,6 +430,14 @@ func (r *ParametersRegistry) registerOptimizerParams() {
 			VisualHint:  VisualHint{Control: ControlSlider, Min: f(256), Max: f(8192), Step: f(256), Unit: "tokens"},
 			Optimizable: true,
 		},
+		{
+			Key: "evaluation.optimizer.system_prompt", Scope: ScopePlatform, Category: "evaluation",
+			DisplayName: "优化器系统提示词",
+			Description: "提示词优化器的角色/任务设定；留空回退内置",
+			ValueType:   TypeString, Default: constants.EvaluationOptimizerSystemPrompt,
+			VisualHint:  VisualHint{Control: ControlTextarea},
+			Optimizable: false,
+		},
 	} {
 		_ = r.Register(def)
 	}
@@ -460,6 +468,14 @@ func (r *ParametersRegistry) registerJudgeParams() {
 			ValueType: TypeBool, Default: false,
 			VisualHint:  VisualHint{Control: ControlToggle},
 			Optimizable: true,
+		},
+		{
+			Key: "evaluation.judge.rubric", Scope: ScopePlatform, Category: "evaluation",
+			DisplayName: "AI 判定默认准则",
+			Description: "AI 判定断言（assertion_mode=judge）在用例未单写判定标准时使用的准则；留空回退内置",
+			ValueType:   TypeString, Default: constants.EvaluationJudgeDefaultRubric,
+			VisualHint:  VisualHint{Control: ControlTextarea},
+			Optimizable: false,
 		},
 	} {
 		_ = r.Register(def)

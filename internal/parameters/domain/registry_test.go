@@ -5,6 +5,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
 func TestRegistryRegistersAllBuiltinKeys(t *testing.T) {
@@ -428,6 +430,46 @@ func TestFactCheckCitationAndTemperatureRegistered(t *testing.T) {
 		}
 		if def.Sensitive {
 			t.Errorf("%s must not be Sensitive", tc.key)
+		}
+	}
+}
+
+// TestJudgeRubricAndOptimizerSystemPlatformed pins the prompt platformization
+// contract (spec 2026-09-04): evaluation.judge.rubric / evaluation.optimizer
+// .system_prompt 平台级暴露为多行 textarea、不进入优化搜索空间（Optimizable=false），
+// 且注册默认值 == pkg/constants 常量——开箱可见值 == 内置兜底 byte-identical，永不漂移。
+func TestJudgeRubricAndOptimizerSystemPlatformed(t *testing.T) {
+	r := NewParametersRegistry()
+	cases := []struct {
+		key      string
+		defText  string // pkg/constants 单一来源文本
+		platform bool
+	}{
+		{"evaluation.judge.rubric", constants.EvaluationJudgeDefaultRubric, true},
+		{"evaluation.optimizer.system_prompt", constants.EvaluationOptimizerSystemPrompt, true},
+	}
+	for _, tc := range cases {
+		def, ok := r.Get(tc.key)
+		if !ok {
+			t.Fatalf("%s not registered", tc.key)
+		}
+		if tc.platform && def.Scope != ScopePlatform {
+			t.Errorf("%s scope = %q, want platform", tc.key, def.Scope)
+		}
+		if def.Category != "evaluation" {
+			t.Errorf("%s category = %q, want evaluation", tc.key, def.Category)
+		}
+		if def.Optimizable {
+			t.Errorf("%s must not be optimizable (optimizer must not rewrite its own judge/rubric)", tc.key)
+		}
+		if def.VisualHint.Control != ControlTextarea {
+			t.Errorf("%s control = %q, want textarea", tc.key, def.VisualHint.Control)
+		}
+		if def.Sensitive {
+			t.Errorf("%s must not be Sensitive: platform settings page never renders sensitive params", tc.key)
+		}
+		if got, _ := def.Default.(string); got != tc.defText {
+			t.Errorf("%s default != pkg/constants 常量（平台默认与内置兜底必须 byte-identical）", tc.key)
 		}
 	}
 }
