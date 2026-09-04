@@ -527,7 +527,7 @@ func (r gatewayPromptRewriter) Rewrite(
 		LLM: &agentport.LLMCapRequest{
 			Model: model, Temperature: temperature, MaxTokens: maxTokens,
 			Messages: []agentport.LLMMessage{
-				{Role: "system", Content: "你是提示词优化器。只生成候选内容，不决定发布。仅输出 JSON 数组。"},
+				{Role: "system", Content: constants.EvaluationOptimizerSystemPrompt},
 				{Role: "user", Content: fmt.Sprintf(
 					"基线配置：%s\n失败摘要：%s\n输出最多3项，每项格式：{\"prompt_patch\":{\"instructions\":\"...\"},\"rationale\":\"...\"}。不得修改 requirements、权限、密钥或网络配置。",
 					string(snapshotJSON), string(failuresJSON),
@@ -540,20 +540,6 @@ func (r gatewayPromptRewriter) Rewrite(
 	}
 	return parsePromptRewritePatches(response.Content)
 }
-
-// judgeDefaultRubric is the built-in rubric used for LLM judge verdicts. It
-// asks for a binary verdict with a short justification, a 0-1 confidence,
-// and per-dimension scores (faithfulness / relevance / completeness, spec
-// §6.2). Missing or invalid dimensions are tolerated by parseJudgeResponse
-// (fail-open), so older judges that return only passed/reason keep working.
-const judgeDefaultRubric = `你是一名严谨的评测法官。根据以下标准判断实际输出是否通过：
-1. 实际输出是否直接、完整地回答了输入要求；
-2. 与期望输出的一致性（期望输出为 null 或空时忽略该项）；
-3. 是否存在明显的事实错误或逻辑矛盾。
-只输出 JSON：{"passed": true 或 false, "reason": "一句话理由", "confidence": 0-1 之间的小数表示判定置信度,
-"dimensions": [{"name": "faithfulness", "score": 0-1, "passed": true 或 false, "reason": "一句话理由", "confidence": 0-1},
-{"name": "relevance", "score": 0-1, "passed": true 或 false, "reason": "一句话理由", "confidence": 0-1},
-{"name": "completeness", "score": 0-1, "passed": true 或 false, "reason": "一句话理由", "confidence": 0-1}]}。`
 
 // buildEvaluationJudge wires the optional LLM judge. It degrades to a
 // disabled judge when the gateway is unavailable (db not configured),
@@ -714,7 +700,7 @@ func (j judgeAdapter) judgeRubric(_ context.Context, requested string) string {
 	if requested != "" {
 		return requested
 	}
-	return judgeDefaultRubric
+	return constants.EvaluationJudgeDefaultRubric
 }
 
 func (j judgeAdapter) Judge(ctx context.Context, req evalport.JudgeRequest) (evaldomain.AssertionResult, error) {

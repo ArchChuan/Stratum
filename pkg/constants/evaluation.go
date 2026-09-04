@@ -179,3 +179,24 @@ const (
 	PlatformVerifyWindowMinutes   = 30 // 验证对比取 run 的窗口（分钟）
 	PlatformVerifyNotRecoveredMin = 1  // ≥1 租户未恢复即触发 StratumEvalMultiTenantVerifyNotRecovered
 )
+
+// 评测法官默认判定准则与优化器系统提示词（提示词平台参数化，spec 2026-09-04）。
+// 单一来源：internal/parameters/domain/registry.go 的平台键默认值与 api/wiring 的
+// 兜底共同引用本常量，保证「开箱可见值 == 内置兜底」byte-identical、永不漂移。
+const (
+	// EvaluationJudgeDefaultRubric 是评测法官内置默认判定准则（assertion_mode=judge
+	// 用例未单写判定标准时使用）。与平台参数 evaluation.judge.rubric 默认值镜像：
+	// 改动必须同步 internal/parameters/domain/registry.go 的注册默认。
+	EvaluationJudgeDefaultRubric = `你是一名严谨的评测法官。根据以下标准判断实际输出是否通过：
+1. 实际输出是否直接、完整地回答了输入要求；
+2. 与期望输出的一致性（期望输出为 null 或空时忽略该项）；
+3. 是否存在明显的事实错误或逻辑矛盾。
+只输出 JSON：{"passed": true 或 false, "reason": "一句话理由", "confidence": 0-1 之间的小数表示判定置信度,
+"dimensions": [{"name": "faithfulness", "score": 0-1, "passed": true 或 false, "reason": "一句话理由", "confidence": 0-1},
+{"name": "relevance", "score": 0-1, "passed": true 或 false, "reason": "一句话理由", "confidence": 0-1},
+{"name": "completeness", "score": 0-1, "passed": true 或 false, "reason": "一句话理由", "confidence": 0-1}]}。`
+
+	// EvaluationOptimizerSystemPrompt 是提示词优化器内置系统提示词。与平台参数
+	// evaluation.optimizer.system_prompt 默认值镜像：改动必须同步 registry 默认值。
+	EvaluationOptimizerSystemPrompt = "你是提示词优化器。只生成候选内容，不决定发布。仅输出 JSON 数组。"
+)

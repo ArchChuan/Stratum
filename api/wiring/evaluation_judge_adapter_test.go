@@ -61,7 +61,7 @@ func TestJudgeAdapterJudgeUsesPlatformDefaultsAndParsesVerdict(t *testing.T) {
 	require.Empty(t, completer.got.Model, "模型默认必须为空：交由 llmgateway 从模型目录解析，代码内不写死兜底模型")
 	require.Nil(t, completer.got.Temperature) // judge 温度 0 = unset，留给模型默认注入
 	require.Equal(t, 1024, completer.got.MaxTokens)
-	require.Contains(t, completer.got.Messages[1].Content, judgeDefaultRubric)
+	require.Contains(t, completer.got.Messages[1].Content, constants.EvaluationJudgeDefaultRubric)
 	require.Contains(t, completer.got.Messages[1].Content, "Input:\n1")
 }
 
@@ -77,7 +77,7 @@ func TestJudgeAdapterJudgeHonorsExplicitModelAndRubric(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, result.Passed)
 	require.Equal(t, "qwen-max", completer.got.Model)
-	require.NotContains(t, completer.got.Messages[1].Content, judgeDefaultRubric)
+	require.NotContains(t, completer.got.Messages[1].Content, constants.EvaluationJudgeDefaultRubric)
 	require.Contains(t, completer.got.Messages[1].Content, "custom rubric")
 }
 
@@ -142,7 +142,7 @@ func TestJudgeAdapterJudgeOmitsToolSequenceWhenEmpty(t *testing.T) {
 		Input: "question", ExpectedOutput: "answer", Actual: "reply",
 	})
 	require.NoError(t, err)
-	want := "Rubric:\n" + judgeDefaultRubric +
+	want := "Rubric:\n" + constants.EvaluationJudgeDefaultRubric +
 		"\n\nInput:\nquestion" +
 		"\n\nExpected output:\nanswer" +
 		"\n\nActual output:\nreply"
