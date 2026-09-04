@@ -134,6 +134,21 @@ const (
 	StepJudgeRawTextMaxChars = 500
 )
 
+// 会话 transcript 渲染（阶段 B §4.3 judge 会话调用形态）行为边界：FormatTranscript
+// 把逐轮证据渲染成纯文本交给 LLM judge 判「末轮是否到达目标/守住探针」。截断预算与
+// FormatToolSequence 同族——防止 judge 上下文随轮次/文本无限膨胀。
+const (
+	// SessionTurnTextMaxRunes 是 FormatTranscript 单轮 user/assistant 文本上限（rune）：
+	// 超限按 rune 截断并追加省略号（仿 StepJudgeRawTextMaxChars 语义）。
+	SessionTurnTextMaxRunes = 800
+	// SessionTranscriptMaxTurns 是 FormatTranscript 保留的最近轮次数：长会话超限后
+	// 优先保留末端——judge 判末端终态，末端信息量最高。
+	SessionTranscriptMaxTurns = 20
+	// SessionTranscriptMaxRunes 是 FormatTranscript 总长度上限（rune）：超限从最旧轮
+	// 逐轮丢弃直至不超，绝不截断末端内容。
+	SessionTranscriptMaxRunes = 8000
+)
+
 // 分层门禁阈值（spec §4.2.4）。时间型常量沿用本文件不带 _MS 后缀的风格。
 // GateRuleBlockRollbackMin 规则阻断回滚门槛、GateAnomalyRollbackMin 行为异常回滚门槛、
 // GateAnomalyAlertMin 告警门槛、GateObservationWindow 证据窗口、GateCooldown 决策冷却、

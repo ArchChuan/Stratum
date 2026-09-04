@@ -283,6 +283,7 @@ func TestReviewTriggerReasonRiskLevel(t *testing.T) {
 		{TriggerDimensionSplit, ReviewRiskMedium},
 		{TriggerNeedsReview, ReviewRiskMedium},
 		{TriggerBehaviorAnomaly, ReviewRiskMedium},
+		{TriggerTrajectoryFailed, ReviewRiskMedium},
 		{ReviewTriggerReason("unknown_future"), ReviewRiskLow},
 	}
 	for _, tc := range cases {

@@ -770,6 +770,12 @@ func (j judgeAdapter) Judge(ctx context.Context, req evalport.JudgeRequest) (eva
 	if req.ToolSequence != "" {
 		userContent += "\n\nTool sequence:\n" + req.ToolSequence
 	}
+	// 会话剧本 case 追加 conversation transcript（阶段 B §4.3）：judge 据此评
+	// 「末轮是否到达目标/守住探针」。空 = 单轮 case 无 transcript，拼接与既有
+	// 契约逐字节一致（回归测试守护）。
+	if req.Transcript != "" {
+		userContent += "\n\nConversation transcript:\n" + req.Transcript
+	}
 	response, err := j.completer.Complete(ctx, &llmgatewaydomain.CompletionRequest{
 		Model:       j.judgeModel(ctx, req.Model),
 		Temperature: temperaturePtrOrNil(j.judgeTemperature(ctx)),

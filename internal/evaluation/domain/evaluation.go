@@ -329,6 +329,12 @@ type EvalCaseResult struct {
 	// Turns 是会话剧本逐轮执行证据（阶段 B）：会话 case 非空、旧单轮 case 为空。
 	// 落 eval_case_results.turns JSONB（'[]' 解码回 nil）。
 	Turns []SessionTurnEvidence `json:"turns,omitempty"`
+	// Trajectory 是会话演化轨迹判据产出（阶段 B §4.2）：判定会话是否一路收敛到
+	// 目标（converged）、绕圈空转（stalled）还是到达后推翻（drifted）。指针 +
+	// omitempty：旧单轮 case（无轨迹维度）保持 nil、JSON 省略，既有 wire 与 golden
+	// 不受影响；会话 case 由 runCaseSession 判定后非 nil。当前为派生值，不持久化
+	// 到 eval_case_results（评审快照与运行结果均可得，需落列时后续 slice 再扩展）。
+	Trajectory *TrajectoryVerdict `json:"trajectory,omitempty"`
 }
 
 // RAGEvidenceInfo is the per-case retrieval signal for knowledge runs. The

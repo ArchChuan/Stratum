@@ -133,6 +133,41 @@ func TestJudgeAdapterJudgeAppendsToolSequenceWhenPresent(t *testing.T) {
 	require.Contains(t, completer.got.Messages[1].Content, "\n\nTool sequence:\ntool_a\ncall 1\ntool_b\ncall 2")
 }
 
+func TestJudgeAdapterJudgeAppendsTranscriptWhenPresent(t *testing.T) {
+	completer := &fakeJudgeCompleter{
+		response: &llmgatewaydomain.CompletionResponse{Content: `{"passed": true, "reason": "ok"}`},
+	}
+	adapter := judgeAdapter{completer: completer}
+	_, err := adapter.Judge(context.Background(), evalport.JudgeRequest{
+		Input: "question", ExpectedOutput: "answer", Actual: "reply",
+		Transcript: "[Turn 0]\nUser: hi\nAssistant: hello",
+	})
+	require.NoError(t, err)
+	// transcript 追加在 tool sequence 块之后（如有），位于 base material 末尾。
+	require.Contains(t, completer.got.Messages[1].Content, "\n\nConversation transcript:\n[Turn 0]\nUser: hi\nAssistant: hello")
+	require.True(t, strings.HasSuffix(completer.got.Messages[1].Content, "Assistant: hello"),
+		"transcript must be the final block, got %q", completer.got.Messages[1].Content)
+}
+
+func TestJudgeAdapterJudgeAppendsToolSequenceBeforeTranscript(t *testing.T) {
+	completer := &fakeJudgeCompleter{
+		response: &llmgatewaydomain.CompletionResponse{Content: `{"passed": true, "reason": "ok"}`},
+	}
+	adapter := judgeAdapter{completer: completer}
+	_, err := adapter.Judge(context.Background(), evalport.JudgeRequest{
+		Input: "question", ExpectedOutput: "answer", Actual: "reply",
+		ToolSequence: "tool_a\ncall 1",
+		Transcript:   "[Turn 0]\nAssistant: hello",
+	})
+	require.NoError(t, err)
+	content := completer.got.Messages[1].Content
+	ti := strings.Index(content, "\n\nTool sequence:\ntool_a\ncall 1")
+	ci := strings.Index(content, "\n\nConversation transcript:\n[Turn 0]\nAssistant: hello")
+	if ti < 0 || ci < 0 || ci < ti {
+		t.Fatalf("tool sequence must precede transcript: tool=%d transcript=%d body=%q", ti, ci, content)
+	}
+}
+
 func TestJudgeAdapterJudgeOmitsToolSequenceWhenEmpty(t *testing.T) {
 	completer := &fakeJudgeCompleter{
 		response: &llmgatewaydomain.CompletionResponse{Content: `{"passed": true, "reason": "ok"}`},
