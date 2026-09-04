@@ -212,6 +212,46 @@ func TestJudgeAdapterRubricPriority(t *testing.T) {
 	}
 }
 
+// newOptimizerParamsWithSystem 构造带 evaluation.optimizer.system_prompt 平台值的
+// 真实 parameters 服务（值为空串表示已发布但留空）。
+func newOptimizerParamsWithSystem(t *testing.T, system string) *parametersapp.Service {
+	t.Helper()
+	encoded, err := json.Marshal(system)
+	require.NoError(t, err)
+	store := &fakePlatformStore{values: map[string]string{"evaluation.optimizer.system_prompt": string(encoded)}}
+	return parametersapp.NewService(parametersdomain.NewParametersRegistry(), store)
+}
+
+func TestOptimizerSystemPromptPrecedence(t *testing.T) {
+	cases := []struct {
+		name   string
+		params *parametersapp.Service
+		want   string
+	}{
+		{name: "platform value wins", params: newOptimizerParamsWithSystem(t, "你是专门的改写器"), want: "你是专门的改写器"},
+		{name: "empty platform falls back to constant", params: newOptimizerParamsWithSystem(t, ""), want: constants.EvaluationOptimizerSystemPrompt},
+		{name: "nil params falls back to constant", want: constants.EvaluationOptimizerSystemPrompt},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := gatewayPromptRewriter{params: tc.params}
+			require.Equal(t, tc.want, r.optimizerSystemPrompt(context.Background()))
+		})
+	}
+}
+
+func TestOptimizerMessagesCarrySystemAndJSONContract(t *testing.T) {
+	r := gatewayPromptRewriter{params: newOptimizerParamsWithSystem(t, "你是专门的改写器")}
+	msgs := r.optimizerMessages(context.Background(), []byte(`{"m":1}`), []byte(`[{"s":"x"}]`))
+	require.Len(t, msgs, 2)
+	require.Equal(t, "system", msgs[0].Role)
+	require.Equal(t, "你是专门的改写器", msgs[0].Content)
+	require.Equal(t, "user", msgs[1].Role)
+	require.Contains(t, msgs[1].Content, `基线配置：{"m":1}`)
+	require.Contains(t, msgs[1].Content, `失败摘要：[{"s":"x"}]`)
+	require.Contains(t, msgs[1].Content, "整段回复必须为合法 JSON 数组，禁止任何解释、Markdown、代码围栏或前后缀。")
+}
+
 func TestJudgeAdapterSnapshotPreferred(t *testing.T) {
 	cases := []struct {
 		name   string
