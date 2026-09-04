@@ -10,12 +10,22 @@ import type { SkillRevision, SkillWorkspace } from '../model/skill';
 import { useAuth, useEditorCandidates, useTenantRole } from '@/modules/iam';
 import { RequestEditorButton } from '@/shared/components';
 import { extractErrorMessage, isForbidden } from '@/shared/lib';
-import { VersionHistory, type VersionRow } from '@/shared/ui';
+import { VersionHistory, type VersionDetail, type VersionRow } from '@/shared/ui';
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
 
 type DraftValues = { name: string; description: string; instructions: string };
+
+// 版本编辑面字段的中文标签：Drawer 按 name/description/instructions 逐字段 diff。
+const SKILL_FIELD_LABELS: Record<string, string> = {
+  name: '名称',
+  description: '描述',
+  instructions: '执行指令',
+};
+// 单条 revision 的编辑面内容快照；nil(父/点击版缺失) → 空对象(全部视为新增)。
+const revisionContent = (rev?: SkillRevision): Record<string, unknown> =>
+  rev ? { name: rev.name, description: rev.description, instructions: rev.instructions } : {};
 
 export const SkillWorkspacePage = () => {
   const { id = '' } = useParams<{ id: string }>();
@@ -138,6 +148,21 @@ export const SkillWorkspacePage = () => {
     await reloadWorkspace();
     setRefreshTick((t) => t + 1);
   };
+  // 「详情」素材：after = 点击版整份编辑面；before = 直父(parentRevisionId)版本
+  // 整份编辑面。列表行已携带完整内容，直接基于页面持有的 revisions 定位，无需
+  // 单版接口。首版/父缺失 → before 空对象（全部视为新增）。
+  const handleViewDetail = (row: VersionRow): Promise<VersionDetail> => {
+    const current = (revisions ?? []).find((r) => r.id === row.id && r.status !== 'draft');
+    const parent = current?.parentRevisionId
+      ? (revisions ?? []).find((r) => r.id === current.parentRevisionId && r.status !== 'draft')
+      : undefined;
+    return Promise.resolve({
+      title: `版本 v${row.versionNo ?? '—'} 字段变更`,
+      fieldLabels: SKILL_FIELD_LABELS,
+      before: revisionContent(parent),
+      after: revisionContent(current),
+    });
+  };
   return <div>
     <div className="responsive-detail-header" style={{ marginBottom: 20 }}>
       <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/skills')} type="text">返回</Button>
@@ -212,6 +237,7 @@ export const SkillWorkspacePage = () => {
           }))}
           loading={revisionsLoading}
           rollback={handleRollback}
+          onViewDetail={handleViewDetail}
           infoMessage="保存为草稿，发布后生效；历史版本可回滚，回滚不产生新版本。"
         />
       ) },

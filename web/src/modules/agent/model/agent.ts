@@ -64,6 +64,9 @@ export const agentVersionSchema = z
     status: z.string(),
     source: z.string().optional().default('manual'),
     contentHash: z.string().optional().default(''),
+    // parentVersionId：直父版本 ID（创建时自链的前一最高 revision 行）；空串=首版。
+    // 「详情」Drawer 以直父整份 payload 为 before 基线现算字段前后值。
+    parentVersionId: z.string().optional().default(''),
     createdBy: z.string().optional().default(''),
     createdByName: z.string().optional().default(''),
     createdAt: z.string().optional().default(''),
@@ -73,6 +76,14 @@ export const agentVersionSchema = z
   })
   .passthrough();
 export type AgentVersion = z.infer<typeof agentVersionSchema>;
+
+// agentVersionDetailSchema：单版本内容接口（GET /agents/:id/versions/:versionID）
+// 在列表行字段上补充整份编辑面 payload（snake_case 快照键）。extend 后显式再
+// passthrough，未知键仍放行。
+export const agentVersionDetailSchema = agentVersionSchema
+  .extend({ payload: z.record(z.unknown()).optional().default({}) })
+  .passthrough();
+export type AgentVersionDetail = z.infer<typeof agentVersionDetailSchema>;
 
 export interface AgentFormValues {
   name: string;

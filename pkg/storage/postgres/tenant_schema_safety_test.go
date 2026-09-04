@@ -134,6 +134,15 @@ func TestTenantSchemaWorkflowEditorsAndCreatedBy(t *testing.T) {
 	if !strings.Contains(text, "agent|skill|mcp|knowledge|workflow") {
 		t.Fatal("resource_editors kind comment must include workflow")
 	}
+	// workflow_versions.created_by 是版本历史「操作者」列的存储基线：CREATE 段必须带列，
+	// 历史租户由幂等 ALTER 升级，两者任一缺失都会让 store 写路径与 DDL 静默分叉。
+	if !strings.Contains(text, "ALTER TABLE workflow_versions ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT '';") {
+		t.Fatal("workflow_versions must idempotently add created_by for historical tenants")
+	}
+	// 存量版本 created_by 幂等回填必须存在（WHERE created_by='' 只回填一次）。
+	if !strings.Contains(text, "WHERE v.created_by = '';") {
+		t.Fatal("workflow_versions must idempotently backfill created_by for existing versions")
+	}
 }
 
 // TestTenantSchemaEvaluationDeleteCreatedByColumns 守护评测删除门禁的创建者列：每个删除目标表

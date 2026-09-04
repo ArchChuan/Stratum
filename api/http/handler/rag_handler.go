@@ -381,6 +381,24 @@ func (h *RAGHandler) ListWorkspaceVersions(c *gin.Context) {
 	c.JSON(http.StatusOK, WorkspaceVersionsResponse{Versions: out})
 }
 
+// GetWorkspaceVersion returns one historical version's full content snapshot
+// (list metadata + edit-surface payload). The frontend "detail" drawer fetches
+// the clicked version and its direct parent (parentVersionId), then diffs the
+// two payloads field-by-field.
+func (h *RAGHandler) GetWorkspaceVersion(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	content, err := h.wsService.GetWorkspaceVersion(c.Request.Context(), tenantID, c.Param("name"), c.Param("versionID"))
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, workspaceVersionContentToResponse(content))
+}
+
 // RollbackWorkspace restores a deprecated historical version, repointing the
 // workspace to it immediately without creating a new version. Returns the
 // fresh workspace so the client can re-render in place.

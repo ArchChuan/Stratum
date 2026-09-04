@@ -409,11 +409,15 @@ func (r *PlatformRepository) ListVersions(
 	ctx context.Context,
 	groupKey string,
 ) ([]port.PlatformVersion, error) {
+	// created_by_name 由 LEFT JOIN public.users 现算（display_name > github_login >
+	// 原文），与 iam actor_name_resolver 同语义；system/未知 uuid 无命中则回退原文。
 	rows, err := r.pool.Query(ctx,
 		`SELECT v.id, v.group_key, v.version_seq, v.status, v.eval_state, v.snapshot, v.base_version_id,
 		        v.message, v.created_by, v.created_at,
-		        (prod.version_id IS NOT NULL) AS is_current
+		        (prod.version_id IS NOT NULL) AS is_current,
+		        COALESCE(u.display_name, u.github_login, v.created_by) AS created_by_name
 		 FROM public.platform_config_versions v
+		 LEFT JOIN public.users u ON u.id::text = v.created_by
 		 LEFT JOIN public.platform_config_labels prod
 		   ON prod.group_key = v.group_key AND prod.label = 'production' AND prod.version_id = v.id
 		 WHERE v.group_key = $1
@@ -434,7 +438,7 @@ func (r *PlatformRepository) ListVersions(
 			createdAt time.Time
 		)
 		if err := rows.Scan(&v.ID, &v.GroupKey, &v.VersionSeq, &v.Status, &v.EvalState,
-			&snapshot, &base, &v.Message, &v.CreatedBy, &createdAt, &v.IsCurrent); err != nil {
+			&snapshot, &base, &v.Message, &v.CreatedBy, &createdAt, &v.IsCurrent, &v.CreatedByName); err != nil {
 			return nil, fmt.Errorf("platform repository: scan version: %w", err)
 		}
 		if err := json.Unmarshal(snapshot, &v.Snapshot); err != nil {

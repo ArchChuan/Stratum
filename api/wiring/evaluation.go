@@ -504,6 +504,34 @@ func (r gatewayPromptRewriter) optimizerLLM(
 	return model, temperature, maxTokens
 }
 
+// optimizerSystemPrompt 解析优化器系统提示词：平台值 string 且非空用之，否则
+// 内置常量兜底（空/缺键不产生空 system，parsePromptRewritePatches 契约不漂移）。
+func (r gatewayPromptRewriter) optimizerSystemPrompt(ctx context.Context) string {
+	if r.params == nil {
+		return constants.EvaluationOptimizerSystemPrompt
+	}
+	values, err := r.params.PlatformValues(ctx)
+	if err == nil {
+		if s, ok := values["evaluation.optimizer.system_prompt"].(string); ok && s != "" {
+			return s
+		}
+	}
+	return constants.EvaluationOptimizerSystemPrompt
+}
+
+// optimizerMessages 组装优化器 LLM 消息：system 取平台配置（空回退常量）；
+// user 模板保持代码固定并追加 JSON 数组防御契约行——admin 自由改 system 也不会
+// 破坏 parsePromptRewritePatches 对「整段合法 JSON 数组」的强制。
+func (r gatewayPromptRewriter) optimizerMessages(ctx context.Context, snapshotJSON, failuresJSON []byte) []agentport.LLMMessage {
+	return []agentport.LLMMessage{
+		{Role: "system", Content: r.optimizerSystemPrompt(ctx)},
+		{Role: "user", Content: fmt.Sprintf(
+			"基线配置：%s\n失败摘要：%s\n输出最多3项，每项格式：{\"prompt_patch\":{\"instructions\":\"...\"},\"rationale\":\"...\"}。不得修改 requirements、权限、密钥或网络配置。\n整段回复必须为合法 JSON 数组，禁止任何解释、Markdown、代码围栏或前后缀。",
+			string(snapshotJSON), string(failuresJSON),
+		)},
+	}
+}
+
 func (r gatewayPromptRewriter) Rewrite(
 	ctx context.Context, request evalapp.PromptRewriteRequest,
 ) ([]evaldomain.CandidatePatch, error) {
@@ -526,13 +554,7 @@ func (r gatewayPromptRewriter) Rewrite(
 		Timeout:  60 * time.Second,
 		LLM: &agentport.LLMCapRequest{
 			Model: model, Temperature: temperature, MaxTokens: maxTokens,
-			Messages: []agentport.LLMMessage{
-				{Role: "system", Content: "你是提示词优化器。只生成候选内容，不决定发布。仅输出 JSON 数组。"},
-				{Role: "user", Content: fmt.Sprintf(
-					"基线配置：%s\n失败摘要：%s\n输出最多3项，每项格式：{\"prompt_patch\":{\"instructions\":\"...\"},\"rationale\":\"...\"}。不得修改 requirements、权限、密钥或网络配置。",
-					string(snapshotJSON), string(failuresJSON),
-				)},
-			},
+			Messages: r.optimizerMessages(ctx, snapshotJSON, failuresJSON),
 		},
 	})
 	if err != nil {
@@ -540,20 +562,6 @@ func (r gatewayPromptRewriter) Rewrite(
 	}
 	return parsePromptRewritePatches(response.Content)
 }
-
-// judgeDefaultRubric is the built-in rubric used for LLM judge verdicts. It
-// asks for a binary verdict with a short justification, a 0-1 confidence,
-// and per-dimension scores (faithfulness / relevance / completeness, spec
-// §6.2). Missing or invalid dimensions are tolerated by parseJudgeResponse
-// (fail-open), so older judges that return only passed/reason keep working.
-const judgeDefaultRubric = `你是一名严谨的评测法官。根据以下标准判断实际输出是否通过：
-1. 实际输出是否直接、完整地回答了输入要求；
-2. 与期望输出的一致性（期望输出为 null 或空时忽略该项）；
-3. 是否存在明显的事实错误或逻辑矛盾。
-只输出 JSON：{"passed": true 或 false, "reason": "一句话理由", "confidence": 0-1 之间的小数表示判定置信度,
-"dimensions": [{"name": "faithfulness", "score": 0-1, "passed": true 或 false, "reason": "一句话理由", "confidence": 0-1},
-{"name": "relevance", "score": 0-1, "passed": true 或 false, "reason": "一句话理由", "confidence": 0-1},
-{"name": "completeness", "score": 0-1, "passed": true 或 false, "reason": "一句话理由", "confidence": 0-1}]}。`
 
 // buildEvaluationJudge wires the optional LLM judge. It degrades to a
 // disabled judge when the gateway is unavailable (db not configured),
@@ -710,11 +718,26 @@ func (j judgeAdapter) judgeTemperature(ctx context.Context) float32 {
 	return 0
 }
 
-func (j judgeAdapter) judgeRubric(_ context.Context, requested string) string {
+// judgeRubric 解析法官判定准则，优先级：用例自声明 > run 版本快照 > 当前平台
+// 值 > 内置常量兜底（D2/D7：默认=内置全文，空/缺键不漂移）。params 与快照任一
+// 缺失均降级到下一层，绝不空态返回。
+func (j judgeAdapter) judgeRubric(ctx context.Context, requested string) string {
 	if requested != "" {
 		return requested
 	}
-	return judgeDefaultRubric
+	if snap := evaldomain.EvalSnapshotFromCtx(ctx); snap != nil {
+		if s, ok := snap.Evaluation.Values["evaluation.judge.rubric"].(string); ok && s != "" {
+			return s
+		}
+	}
+	if j.params != nil {
+		if values, err := j.params.PlatformValues(ctx); err == nil {
+			if s, ok := values["evaluation.judge.rubric"].(string); ok && s != "" {
+				return s
+			}
+		}
+	}
+	return constants.EvaluationJudgeDefaultRubric
 }
 
 func (j judgeAdapter) Judge(ctx context.Context, req evalport.JudgeRequest) (evaldomain.AssertionResult, error) {
