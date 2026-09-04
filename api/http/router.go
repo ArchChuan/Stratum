@@ -633,6 +633,8 @@ func registerKnowledge(r *gin.Engine, c *wiring.Container, requireActive gin.Han
 		// 版本历史/回滚：历史 GET member 级（对齐 agent/skill），回滚写 admin
 		// （spec：入口仅 isAdmin 可见）。
 		knowledgeGroup.GET("/workspaces/:name/versions", requireActive, ragHandler.ListWorkspaceVersions)
+		// 单版本内容 GET（member 级，同列表）：详情 Drawer 取点击版与直父版两次内容。
+		knowledgeGroup.GET("/workspaces/:name/versions/:versionID", requireActive, ragHandler.GetWorkspaceVersion)
 		knowledgeGroup.POST("/workspaces/:name/rollback", append(adminMW, requireActive, ragHandler.RollbackWorkspace)...)
 		knowledgeGroup.DELETE("/workspaces/:name", append(adminMW, requireActive, ragHandler.DeleteWorkspace)...)
 		knowledgeGroup.PUT("/workspaces/:name/editors", append(adminMW, requireActive, ragHandler.SetWorkspaceEditors)...)
