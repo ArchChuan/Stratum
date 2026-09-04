@@ -92,7 +92,7 @@ func TestAsConfigError(t *testing.T) {
 	_, ok := modelconfig.AsConfigError(cfgErr)
 	assert.True(t, ok)
 
-	var wrapped error = errors.New("boom")
+	wrapped := errors.New("boom")
 	_, ok = modelconfig.AsConfigError(wrapped)
 	assert.False(t, ok)
 
