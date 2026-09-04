@@ -180,3 +180,125 @@ func TestPgSuiteRepositoryReadsBareJudgeSpecCompat(t *testing.T) {
 		t.Fatalf("bare layout must not fabricate provenance: %+v", got)
 	}
 }
+
+// TestPgSuiteSessionRoundTrip 覆盖阶段 B 会话剧本持久化 round-trip：会话 case 的
+// Session（Goal / Turns / per-turn ToolSpec）写后读回逐字段一致；旧单轮 case
+// Session 保持 nil；UpdateDraftCase 编辑会话 full replacement、nil 写回回退单轮。
+func TestPgSuiteSessionRoundTrip(t *testing.T) {
+	url := os.Getenv("TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("TEST_DATABASE_URL not set")
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenantID := "eval_session_round_trip"
+	if err := postgres.ProvisionTenantSchema(ctx, pool, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if _, err := pool.Exec(ctx, fmt.Sprintf(`DROP SCHEMA IF EXISTS "tenant_%s" CASCADE`, tenantID)); err != nil {
+			t.Logf("cleanup tenant %s: %v", tenantID, err)
+		}
+		pool.Close()
+	})
+
+	repo := NewPgSuiteRepository(pool)
+	suite := domain.EvalSuite{ID: "suite-sess", Name: "会话剧本", DraftRevisionID: "rev-sess"}
+	sessionScript := &domain.EvalSessionScript{
+		Goal: "处理退换货",
+		Turns: []domain.SessionTurn{
+			{User: "我的订单 3 天没发货", ToolSpec: &domain.ToolSpec{MustNotCall: []string{"delete"}}},
+			{User: "好的帮我退款", Probe: "应调用退款工具", ToolSpec: &domain.ToolSpec{MustCall: []string{"refund"}}},
+		},
+	}
+	revision := domain.EvalSuiteRevision{
+		ID: "rev-sess", SuiteID: suite.ID, Status: domain.SuiteRevisionDraft,
+		ResourceKind: domain.ResourceKindSkill,
+		Cases: []domain.EvalCase{
+			{ID: "case-sess", Name: "多轮", Input: nil, ExpectedOutput: "已退款",
+				AssertionMode: domain.AssertionContains, Enabled: true, Session: sessionScript},
+			{ID: "case-legacy", Name: "单轮", Input: "问", ExpectedOutput: "答",
+				AssertionMode: domain.AssertionContains, Enabled: true},
+		},
+	}
+	if err := repo.CreateSuite(ctx, tenantID, suite, revision); err != nil {
+		t.Fatal(err)
+	}
+	loaded, ok, err := repo.GetDraftRevision(ctx, tenantID, suite.ID)
+	if err != nil || !ok {
+		t.Fatalf("GetDraftRevision: ok=%v err=%v", ok, err)
+	}
+	if len(loaded.Cases) != 2 {
+		t.Fatalf("expected 2 cases, got %d: %+v", len(loaded.Cases), loaded.Cases)
+	}
+	var sessCase, legacyCase *domain.EvalCase
+	for i := range loaded.Cases {
+		switch loaded.Cases[i].ID {
+		case "case-sess":
+			sessCase = &loaded.Cases[i]
+		case "case-legacy":
+			legacyCase = &loaded.Cases[i]
+		}
+	}
+	if sessCase == nil || legacyCase == nil {
+		t.Fatalf("cases missing on round-trip: %+v", loaded.Cases)
+	}
+	if !sessCase.IsSession() {
+		t.Fatalf("session case lost its script on round-trip")
+	}
+	if sessCase.Session.Goal != "处理退换货" || len(sessCase.Session.Turns) != 2 {
+		t.Fatalf("session shape mismatch: %+v", sessCase.Session)
+	}
+	turn := sessCase.Session.Turns[1]
+	if turn.User != "好的帮我退款" || turn.Probe != "应调用退款工具" ||
+		turn.ToolSpec == nil || len(turn.ToolSpec.MustCall) != 1 || turn.ToolSpec.MustCall[0] != "refund" {
+		t.Fatalf("per-turn spec mismatch: %+v", turn)
+	}
+	if legacyCase.IsSession() {
+		t.Fatalf("legacy case must round-trip with nil session")
+	}
+
+	// Editing the session case replaces its script (full replacement).
+	edited := *sessCase
+	edited.Session = &domain.EvalSessionScript{Goal: "改后目标", Turns: []domain.SessionTurn{{User: "单轮开场"}}}
+	if err := repo.UpdateDraftCase(ctx, tenantID, revision.ID, edited); err != nil {
+		t.Fatalf("UpdateDraftCase session: %v", err)
+	}
+	loaded, _, err = repo.GetDraftRevision(ctx, tenantID, suite.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := findCase(t, loaded.Cases, "case-sess")
+	if got.Session == nil || got.Session.Goal != "改后目标" || len(got.Session.Turns) != 1 {
+		t.Fatalf("session edit not applied: %+v", got.Session)
+	}
+
+	// nil session write-back reverts the case to single-turn semantics.
+	edited = got
+	edited.Session = nil
+	if err := repo.UpdateDraftCase(ctx, tenantID, revision.ID, edited); err != nil {
+		t.Fatalf("UpdateDraftCase clear session: %v", err)
+	}
+	loaded, _, err = repo.GetDraftRevision(ctx, tenantID, suite.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = findCase(t, loaded.Cases, "case-sess")
+	if got.IsSession() {
+		t.Fatalf("nil session write-back must clear the script: %+v", got.Session)
+	}
+}
+
+func findCase(t *testing.T, cases []domain.EvalCase, id string) domain.EvalCase {
+	t.Helper()
+	for _, c := range cases {
+		if c.ID == id {
+			return c
+		}
+	}
+	t.Fatalf("case %s not found", id)
+	return domain.EvalCase{}
+}

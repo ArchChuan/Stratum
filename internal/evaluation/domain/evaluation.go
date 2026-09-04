@@ -53,6 +53,10 @@ type EvalCase struct {
 	ExpectedOutput any           `json:"expected_output"`
 	AssertionMode  AssertionMode `json:"assertion_mode"`
 	Enabled        bool          `json:"enabled"`
+	// Session 是会话剧本（spec 2026-09-04 §5.4 阶段 B）：非 nil 时 case 走多轮
+	// 会话执行语义（SessionRunner），ExpectedOutput/AssertionMode 作为末轮终态断言；
+	// nil = 旧单轮 case。持久化在独立 eval_cases.session JSONB 列（'{}' 解码回 nil）。
+	Session *EvalSessionScript `json:"session,omitempty"`
 	// JudgeSpec configures LLM judge assertion for assertion_mode=judge.
 	// Both fields are optional: empty Model/Rubric fall back to platform
 	// parameters and the registered global rubric respectively. Persisted in
@@ -322,6 +326,9 @@ type EvalCaseResult struct {
 	// Tools 是执行链路工具调用序列（§6.5），过程断言与评审详情展示用；未采集
 	// 时为空。
 	Tools []ToolObservation `json:"tools,omitempty"`
+	// Turns 是会话剧本逐轮执行证据（阶段 B）：会话 case 非空、旧单轮 case 为空。
+	// 落 eval_case_results.turns JSONB（'[]' 解码回 nil）。
+	Turns []SessionTurnEvidence `json:"turns,omitempty"`
 }
 
 // RAGEvidenceInfo is the per-case retrieval signal for knowledge runs. The

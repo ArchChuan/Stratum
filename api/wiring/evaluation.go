@@ -100,6 +100,25 @@ func (r evaluationResourceRouter) SafeSummary(
 	return adapter.SafeSummary(ctx, tenantID, ref)
 }
 
+// RunSession 分派会话剧本执行（阶段 B §5.4）。adapter 未实现 evalport.SessionRunner
+// （单轮知识检索 / MCP 等）时 fail-close 报错，绝不静默退化为单轮执行。
+func (r evaluationResourceRouter) RunSession(
+	ctx context.Context, tenantID, requestedBy string, ref evaldomain.ResourceRef,
+	script evaldomain.EvalSessionScript,
+) ([]evaldomain.SessionTurnEvidence, error) {
+	adapter, err := r.adapter(ref.Kind)
+	if err != nil {
+		return nil, err
+	}
+	runner, ok := adapter.(evalport.SessionRunner)
+	if !ok {
+		return nil, fmt.Errorf("session evaluation not supported for %q resource", ref.Kind)
+	}
+	return runner.RunSession(ctx, tenantID, requestedBy, ref, script)
+}
+
+var _ evalport.SessionRunner = evaluationResourceRouter{}
+
 type evaluationCandidateRouter struct {
 	creators map[evaldomain.ResourceKind]evalport.CandidateCreator
 }
@@ -1265,7 +1284,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	if c.Agent != nil && sharedRevisionService != nil {
 		agentAdapter := agentEvaluationAdapter{
 			revisions: sharedRevisionService, agents: c.Agent.Service, modelValidator: tenantModelValidator(c.Agent.TenantResolver),
-			agentUpdater: c.Agent.Service, actorID: "evaluation-worker", parameters: c.Parameters.Registry,
+			agentUpdater: c.Agent.Service, parameters: c.Parameters.Registry, conversations: c.Agent.Service,
 		}
 		resourceAdapters[evaldomain.ResourceKindAgent] = agentAdapter
 		candidateCreators[evaldomain.ResourceKindAgent] = agentAdapter

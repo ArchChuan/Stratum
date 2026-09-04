@@ -477,6 +477,7 @@ CREATE TABLE IF NOT EXISTS eval_cases (
     input             JSONB NOT NULL DEFAULT '{}',
     expected_output   JSONB NOT NULL DEFAULT '{}',
     assertion_mode    TEXT NOT NULL DEFAULT 'contains',
+    session           JSONB NOT NULL DEFAULT '{}',
     evaluator_config  JSONB NOT NULL DEFAULT '{}',
     tags              TEXT[] NOT NULL DEFAULT '{}',
     critical          BOOL NOT NULL DEFAULT false,
@@ -484,6 +485,8 @@ CREATE TABLE IF NOT EXISTS eval_cases (
     created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_eval_cases_revision ON eval_cases(suite_revision_id);
+-- 阶段 B 会话容器地基：eval_cases 升级会话剧本（'{}' = 旧单轮 case，Session 解码 nil）。
+ALTER TABLE eval_cases ADD COLUMN IF NOT EXISTS session JSONB NOT NULL DEFAULT '{}';
 
 CREATE TABLE IF NOT EXISTS eval_runs (
     id                TEXT PRIMARY KEY,
@@ -531,6 +534,7 @@ CREATE TABLE IF NOT EXISTS eval_case_results (
     process_pass     BOOL NOT NULL DEFAULT true,
     process_failure  TEXT NOT NULL DEFAULT '',
     tool_sequence    JSONB NOT NULL DEFAULT '[]'::jsonb,
+    turns            JSONB NOT NULL DEFAULT '[]'::jsonb,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_eval_case_results_run ON eval_case_results(run_id);
@@ -543,6 +547,8 @@ ALTER TABLE eval_case_results ADD COLUMN IF NOT EXISTS trace_evidence JSONB NOT 
 ALTER TABLE eval_case_results ADD COLUMN IF NOT EXISTS process_pass BOOL NOT NULL DEFAULT true;
 ALTER TABLE eval_case_results ADD COLUMN IF NOT EXISTS process_failure TEXT NOT NULL DEFAULT '';
 ALTER TABLE eval_case_results ADD COLUMN IF NOT EXISTS tool_sequence JSONB NOT NULL DEFAULT '[]'::jsonb;
+-- 阶段 B 会话容器地基：逐轮执行证据投影（'[]' = 旧单轮结果，GetRun 读回 nil）。
+ALTER TABLE eval_case_results ADD COLUMN IF NOT EXISTS turns JSONB NOT NULL DEFAULT '[]'::jsonb;
 
 -- 运行态观测明细（规格 §4.3 EvalObservation）。param_version/signals/cost_perf
 -- 为 JSONB 结构化字段，由 Go json.Marshal 后写入。

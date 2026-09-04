@@ -127,7 +127,7 @@ func (s *PgChatStore) ListConversations(ctx context.Context, tenantID, agentID, 
 			`SELECT id, agent_id, user_id, name, created_at, updated_at, expires_at
 			 FROM chat_conversations
 			 WHERE agent_id = $1 AND user_id = $2 AND expires_at > NOW() AND deleted_at IS NULL
-			   AND source <> 'workflow'
+			   AND source NOT IN ('workflow', 'evaluation')
 			 ORDER BY updated_at DESC`,
 			agentID, userID,
 		)
