@@ -1171,6 +1171,9 @@ CREATE TABLE IF NOT EXISTS workflow_versions (
     version_no      BIGINT      NOT NULL,
     name            TEXT        NOT NULL,
     description     TEXT        NOT NULL DEFAULT '',
+    -- 发布者/operator（版本历史「操作者」原始 id，展示名由 application join
+    -- public.users 现算）。新版本由 publish 写路径直接记 actor，存量行走下方幂等回填。
+    created_by      TEXT        NOT NULL DEFAULT '',
     spec_json       JSONB       NOT NULL,
     input_schema_json JSONB     NOT NULL DEFAULT '{"task_label":"任务","fields":[]}',
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -1180,11 +1183,29 @@ ALTER TABLE workflow_versions ADD COLUMN IF NOT EXISTS definition_id UUID;
 ALTER TABLE workflow_versions ADD COLUMN IF NOT EXISTS version_no BIGINT NOT NULL DEFAULT 1;
 ALTER TABLE workflow_versions ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT '';
 ALTER TABLE workflow_versions ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '';
+ALTER TABLE workflow_versions ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT '';
 ALTER TABLE workflow_versions ADD COLUMN IF NOT EXISTS spec_json JSONB NOT NULL DEFAULT '{}';
 ALTER TABLE workflow_versions ADD COLUMN IF NOT EXISTS input_schema_json JSONB NOT NULL DEFAULT '{"task_label":"任务","fields":[]}';
 ALTER TABLE workflow_versions ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 CREATE INDEX IF NOT EXISTS idx_workflow_versions_definition
     ON workflow_versions (definition_id, version_no DESC);
+-- 存量版本 created_by 尽力回填（ProvisionAllTenantSchemas 每次启动幂等重放，
+-- WHERE created_by='' 保证只回填一次、重复执行稳定）：优先关联到该版本发布时
+-- operation=publish 的最近审计行（resource_change_audits 无版本外键，靠
+-- resource_id=definition_id + created_at<=版本创建时间近似）；关联不到回落
+-- definition 创建者；仍为空则保持 ''。新版本写路径已直接记 actor，不受影响。
+UPDATE workflow_versions v
+   SET created_by = COALESCE(
+       (SELECT a.actor_id FROM resource_change_audits a
+         WHERE a.resource_kind = 'workflow'
+           AND a.resource_id = v.definition_id::text
+           AND a.operation = 'publish'
+           AND a.created_at <= v.created_at
+         ORDER BY a.created_at DESC, a.id DESC
+         LIMIT 1),
+       (SELECT d.created_by FROM workflow_definitions d WHERE d.id = v.definition_id),
+       '')
+ WHERE v.created_by = '';
 
 CREATE TABLE IF NOT EXISTS workflow_runs (
     id               UUID        PRIMARY KEY DEFAULT public.gen_uuid_v7(),
