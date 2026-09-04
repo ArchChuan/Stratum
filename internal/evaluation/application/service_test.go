@@ -344,6 +344,103 @@ func TestServiceRunCaseSessionRejectsInvalidScriptBeforeSession(t *testing.T) {
 	}
 }
 
+// TestServiceRunCaseSessionTrajectoryStalledFails 覆盖演化轨迹判据（阶段 B §4.2）：
+// 规则会话连续两轮输出重复、末轮未达终态 → 判 stalled，Passed=false 且失败归因
+// 优先容器级 "trajectory:stalled"（比单轮 assert:contains 更能解释整段没走对）。
+func TestServiceRunCaseSessionTrajectoryStalledFails(t *testing.T) {
+	adapter := &fakeSessionAdapter{fakeAdapter: &fakeAdapter{}}
+	svc := NewService(adapter, &fakeRunRepo{}, nil, nil)
+
+	run, err := svc.Run(snapshotCtx(), RunInput{
+		TenantID: "tenant-1",
+		Resource: domain.ResourceRef{Kind: domain.ResourceKindAgent, ResourceID: "agent-1", RevisionID: "revision-1"},
+		Suite: domain.EvalSuiteRevision{ID: "sv-1", Cases: []domain.EvalCase{
+			{ID: "session-stall", Session: &domain.EvalSessionScript{Goal: "产出目标答案",
+				Turns: []domain.SessionTurn{{User: "同一个回答"}, {User: "同一个回答"}}},
+				AssertionMode: domain.AssertionContains, ExpectedOutput: "目标答案", Enabled: true},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	got := run.Results[0]
+	if got.Passed {
+		t.Fatalf("stalled session must not pass, got: %+v", got)
+	}
+	if got.Trajectory == nil || got.Trajectory.Kind != domain.TrajectoryStalled {
+		t.Fatalf("Trajectory = %+v, want stalled", got.Trajectory)
+	}
+	if got.FailureReason != "trajectory:stalled" {
+		t.Fatalf("FailureReason = %q, want trajectory:stalled", got.FailureReason)
+	}
+}
+
+// TestServiceRunJudgeSessionSendsTranscriptAndConverges 覆盖 judge 会话调用形态
+// （阶段 B §4.3/§4.2）：LLM judge 收到逐轮 transcript（非空且含 Goal/轮次）；终态
+// 通过后轨迹翻转为 converged（judge 模式纯函数只给 NA/Stalled，收敛由权威终态分支落）。
+func TestServiceRunJudgeSessionSendsTranscriptAndConverges(t *testing.T) {
+	adapter := &fakeSessionAdapter{fakeAdapter: &fakeAdapter{}}
+	repo := &fakeRunRepo{}
+	judge := &fakeLLMJudge{enabled: true, result: domain.AssertionResult{Passed: true, Message: "末轮到达目标"}}
+	svc := NewService(adapter, repo, nil, judge)
+
+	run, err := svc.Run(snapshotCtx(), RunInput{
+		TenantID: "tenant-1",
+		Resource: domain.ResourceRef{Kind: domain.ResourceKindAgent, ResourceID: "agent-1", RevisionID: "revision-1"},
+		Suite: domain.EvalSuiteRevision{ID: "sv-1", Cases: []domain.EvalCase{
+			{ID: "session-judge", Session: &domain.EvalSessionScript{Goal: "完成报销核算",
+				Turns: []domain.SessionTurn{{User: "报销规则"}, {User: "金额核算"}}},
+				AssertionMode: domain.AssertionJudge, Enabled: true},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	got := run.Results[0]
+	if !got.Passed {
+		t.Fatalf("judge-passed session must pass, got: %+v", got)
+	}
+	if judge.calls != 1 || judge.got.Transcript == "" {
+		t.Fatalf("judge must receive transcript once, calls=%d transcript=%q", judge.calls, judge.got.Transcript)
+	}
+	if !strings.Contains(judge.got.Transcript, "Goal: 完成报销核算") ||
+		!strings.Contains(judge.got.Transcript, "[Turn 0]") || !strings.Contains(judge.got.Transcript, "[Turn 1]") {
+		t.Fatalf("transcript missing goal/turns: %q", judge.got.Transcript)
+	}
+	if got.Trajectory == nil || got.Trajectory.Kind != domain.TrajectoryConverged {
+		t.Fatalf("Trajectory = %+v, want converged after LLM terminal pass", got.Trajectory)
+	}
+}
+
+// TestServiceRunJudgeSessionTranscriptOmitsForSingleTurnCase 覆盖旧单轮 judge case 零
+// 改动：无 Session → JudgeRequest.Transcript 保持空（与既有请求契约逐字节一致）。
+func TestServiceRunJudgeSessionTranscriptOmitsForSingleTurnCase(t *testing.T) {
+	adapter := &fakeAdapter{outputs: map[string]any{"judge-1": "答案"}}
+	repo := &fakeRunRepo{}
+	judge := &fakeLLMJudge{enabled: true, result: domain.AssertionResult{Passed: true, Message: "ok"}}
+	svc := NewService(adapter, repo, nil, judge)
+
+	run, err := svc.Run(snapshotCtx(), RunInput{
+		TenantID: "tenant-1",
+		Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "v1"},
+		Suite: domain.EvalSuiteRevision{ID: "sv-1", Cases: []domain.EvalCase{
+			{ID: "judge-1", Input: "问题", AssertionMode: domain.AssertionJudge, Enabled: true},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !run.Results[0].Passed {
+		t.Fatalf("single-turn judge case must pass, got: %+v", run.Results[0])
+	}
+	if judge.got.Transcript != "" {
+		t.Fatalf("single-turn judge request must omit transcript, got %q", judge.got.Transcript)
+	}
+	if run.Results[0].Trajectory != nil {
+		t.Fatalf("single-turn case must keep nil Trajectory (wire-omitted), got %+v", run.Results[0].Trajectory)
+	}
+}
+
 type fakeAdapter struct {
 	outputs  map[string]any
 	errCase  string
