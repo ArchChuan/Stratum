@@ -42,13 +42,16 @@ const (
 	// TriggerBehaviorAnomaly 行为判异入池：Signals.Behavior 含 abandonment/escalation 且
 	// Verdict=flag（spec §3.2-③）。trigger_reason 枚举 DDL P1 T2 已含，P2 零 DDL。
 	TriggerBehaviorAnomaly ReviewTriggerReason = "behavior_anomaly"
+	// TriggerTrajectoryFailed 会话演化轨迹判负入池（阶段 B §4.5 盲点：容器级轨迹
+	// 负例——整段会话停滞/漂移、逐轮单看无独立错误的样本——必须强制人工复核）。
+	TriggerTrajectoryFailed ReviewTriggerReason = "trajectory_failed"
 )
 
 // Valid 校验入池原因枚举。
 func (r ReviewTriggerReason) Valid() bool {
 	switch r {
 	case TriggerLowConfidence, TriggerDimensionSplit, TriggerJudgeRuleConflict, TriggerNeedsReview,
-		TriggerProcessOutputConflict, TriggerBehaviorAnomaly:
+		TriggerProcessOutputConflict, TriggerBehaviorAnomaly, TriggerTrajectoryFailed:
 		return true
 	default:
 		return false
@@ -67,13 +70,15 @@ const (
 // RiskLevel 把入池原因映射为评审优先级。硬编码规则，与 persistence 的 reviewRiskOrderSQL
 // 保持镜像（两端注释互指，修改必须同步）：
 //   - high：judge_rule_conflict（规则护栏命中 = 安全类）、process_output_conflict（副作用/写操作越界）；
-//   - medium：low_confidence、dimension_split、needs_review、behavior_anomaly；
+//   - medium：low_confidence、dimension_split、needs_review、behavior_anomaly、trajectory_failed
+//     （会话整段停滞/漂移需人工复核归因）；
 //   - low：其余（未来新增触发默认低，人工可随时介入）。
 func (r ReviewTriggerReason) RiskLevel() ReviewRiskLevel {
 	switch r {
 	case TriggerJudgeRuleConflict, TriggerProcessOutputConflict:
 		return ReviewRiskHigh
-	case TriggerLowConfidence, TriggerDimensionSplit, TriggerNeedsReview, TriggerBehaviorAnomaly:
+	case TriggerLowConfidence, TriggerDimensionSplit, TriggerNeedsReview, TriggerBehaviorAnomaly,
+		TriggerTrajectoryFailed:
 		return ReviewRiskMedium
 	default:
 		return ReviewRiskLow
