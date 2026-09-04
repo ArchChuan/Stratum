@@ -25,15 +25,27 @@ type StepJudge struct {
 	Criteria string `json:"criteria"`
 }
 
+type EvalSessionScript struct {
+	Goal  string        `json:"goal" binding:"required"`
+	Turns []SessionTurn `json:"turns" binding:"required,min=1,dive"`
+}
+
+type SessionTurn struct {
+	User     string    `json:"user" binding:"required"`
+	Probe    string    `json:"probe"`
+	ToolSpec *ToolSpec `json:"tool_spec"`
+}
+
 type EvaluationCaseRequest struct {
-	Name           string     `json:"name"`
-	Input          any        `json:"input" binding:"required"`
-	ExpectedOutput any        `json:"expected_output" binding:"required"`
-	AssertionMode  string     `json:"assertion_mode" binding:"required,oneof=exact contains regex judge"`
-	Enabled        *bool      `json:"enabled"`
-	JudgeSpec      *JudgeSpec `json:"judge_spec"`
-	ToolSpec       *ToolSpec  `json:"tool_spec"`
-	StepJudge      *StepJudge `json:"step_judge"`
+	Name           string             `json:"name"`
+	Input          any                `json:"input"`
+	ExpectedOutput any                `json:"expected_output" binding:"required"`
+	AssertionMode  string             `json:"assertion_mode" binding:"required,oneof=exact contains regex judge"`
+	Enabled        *bool              `json:"enabled"`
+	JudgeSpec      *JudgeSpec         `json:"judge_spec"`
+	ToolSpec       *ToolSpec          `json:"tool_spec"`
+	StepJudge      *StepJudge         `json:"step_judge"`
+	Session        *EvalSessionScript `json:"session"`
 }
 
 type CreateEvaluationSuiteRequest struct {
@@ -93,11 +105,12 @@ type GenerateSuiteCasesRequest struct {
 }
 
 type UpdateDraftCaseRequest struct {
-	Name           string `json:"name" binding:"required,max=255"`
-	Input          any    `json:"input" binding:"required"`
-	ExpectedOutput any    `json:"expected_output" binding:"required"`
-	AssertionMode  string `json:"assertion_mode" binding:"required,oneof=exact contains regex judge"`
-	Enabled        *bool  `json:"enabled"`
+	Name           string             `json:"name" binding:"required,max=255"`
+	Input          any                `json:"input"`
+	ExpectedOutput any                `json:"expected_output" binding:"required"`
+	AssertionMode  string             `json:"assertion_mode" binding:"required,oneof=exact contains regex judge"`
+	Enabled        *bool              `json:"enabled"`
+	Session        *EvalSessionScript `json:"session"`
 }
 
 type ReviewItemDecisionRequest struct {
