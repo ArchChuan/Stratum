@@ -170,6 +170,48 @@ func newJudgeParamsWithModel(t *testing.T, model string) *parametersapp.Service 
 	return parametersapp.NewService(parametersdomain.NewParametersRegistry(), store)
 }
 
+// newJudgeParamsWithRubric 构造真实 parameters 服务，平台快照写入
+// evaluation.judge.rubric（空串 = 已发布但留空，应回退常量）。
+func newJudgeParamsWithRubric(t *testing.T, rubric string) *parametersapp.Service {
+	t.Helper()
+	encoded, err := json.Marshal(rubric)
+	require.NoError(t, err)
+	store := &fakePlatformStore{values: map[string]string{"evaluation.judge.rubric": string(encoded)}}
+	return parametersapp.NewService(parametersdomain.NewParametersRegistry(), store)
+}
+
+func TestJudgeAdapterRubricPriority(t *testing.T) {
+	cases := []struct {
+		name    string
+		request string // 用例自声明 rubric
+		ctx     context.Context
+		params  *parametersapp.Service
+		want    string
+	}{
+		{name: "requested wins over snapshot", request: "case-rubric",
+			ctx: evalSnapshotWith(t, map[string]any{"evaluation.judge.rubric": "snap-rubric"}), want: "case-rubric"},
+		{name: "snapshot wins over platform",
+			ctx:    evalSnapshotWith(t, map[string]any{"evaluation.judge.rubric": "snap-rubric"}),
+			params: newJudgeParamsWithRubric(t, "platform-rubric"), want: "snap-rubric"},
+		{name: "snapshot missing rubric falls through to platform",
+			ctx:    evalSnapshotWith(t, map[string]any{"evaluation.judge.model": "m"}),
+			params: newJudgeParamsWithRubric(t, "platform-rubric"), want: "platform-rubric"},
+		{name: "platform fallback when no snapshot",
+			ctx: context.Background(), params: newJudgeParamsWithRubric(t, "platform-rubric"), want: "platform-rubric"},
+		{name: "empty platform falls back to constant",
+			ctx: context.Background(), params: newJudgeParamsWithRubric(t, ""), want: constants.EvaluationJudgeDefaultRubric},
+		{name: "nothing configured falls back to constant",
+			ctx: context.Background(), want: constants.EvaluationJudgeDefaultRubric},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			j := judgeAdapter{completer: nil, params: tc.params}
+			got := j.judgeRubric(tc.ctx, tc.request)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
 func TestJudgeAdapterSnapshotPreferred(t *testing.T) {
 	cases := []struct {
 		name   string

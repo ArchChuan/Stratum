@@ -696,9 +696,24 @@ func (j judgeAdapter) judgeTemperature(ctx context.Context) float32 {
 	return 0
 }
 
-func (j judgeAdapter) judgeRubric(_ context.Context, requested string) string {
+// judgeRubric 解析法官判定准则，优先级：用例自声明 > run 版本快照 > 当前平台
+// 值 > 内置常量兜底（D2/D7：默认=内置全文，空/缺键不漂移）。params 与快照任一
+// 缺失均降级到下一层，绝不空态返回。
+func (j judgeAdapter) judgeRubric(ctx context.Context, requested string) string {
 	if requested != "" {
 		return requested
+	}
+	if snap := evaldomain.EvalSnapshotFromCtx(ctx); snap != nil {
+		if s, ok := snap.Evaluation.Values["evaluation.judge.rubric"].(string); ok && s != "" {
+			return s
+		}
+	}
+	if j.params != nil {
+		if values, err := j.params.PlatformValues(ctx); err == nil {
+			if s, ok := values["evaluation.judge.rubric"].(string); ok && s != "" {
+				return s
+			}
+		}
 	}
 	return constants.EvaluationJudgeDefaultRubric
 }
