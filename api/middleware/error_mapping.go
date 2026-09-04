@@ -212,6 +212,8 @@ var errorStatusTable = map[error]int{
 	skilldomain.ErrSkillNotPublishable:            http.StatusBadRequest,
 	evalapp.ErrSuiteNameRequired:                  http.StatusBadRequest,
 	evalapp.ErrSuiteCasesRequired:                 http.StatusBadRequest,
+	evalapp.ErrSuiteCaseInputRequired:             http.StatusBadRequest,
+	evalapp.ErrSuiteCaseInvalidScript:             http.StatusBadRequest,
 	evaldomain.ErrInvalidCenterQuery:              http.StatusBadRequest,
 	evaldomain.ErrInvalidCandidateCommand:         http.StatusBadRequest,
 	memorydomain.ErrInvalidStatus:                 http.StatusBadRequest,

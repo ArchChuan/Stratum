@@ -16,6 +16,7 @@ import { ResourceTable } from '../components/ResourceTable';
 import ReviewPoolPanel from '../components/ReviewPoolPanel';
 import { RunDrawer } from '../components/RunDrawer';
 import { RuntimeHealthTrendPanel } from '../components/RuntimeHealthTrendPanel';
+import { sessionFromForm } from '../components/SessionScriptFields';
 import { SuiteDrawer } from '../components/SuiteDrawer';
 import { SuitesPanel } from '../components/SuitesPanel';
 import { TimelineDrawer } from '../components/TimelineDrawer';
@@ -181,12 +182,15 @@ export const EvaluationCenterPage = () => {
     <CreateSuiteModal open={suiteCreateOpen} onClose={() => setSuiteCreateOpen(false)}
       onSubmit={async (values) => {
         try {
+          // 会话剧本 case（sessionFromForm 返回非空）省略 input、带完整剧本；单轮保持既有载荷。
+          const session = sessionFromForm(values);
           await evaluationApi.createSuite({ name: values.name, description: values.description || undefined,
-            resourceKind: values.resource_kind, cases: [{ name: values.case_name, input: values.input,
+            resourceKind: values.resource_kind, cases: [{ name: values.case_name,
               expected_output: values.expected_output, assertion_mode: values.assertion_mode,
               judge_spec: values.assertion_mode === 'judge'
                 ? { model: values.judge_model, rubric: values.judge_rubric } : undefined,
-              enabled: values.enabled, ...processFieldsToSpec(values) }] });
+              enabled: values.enabled, ...processFieldsToSpec(values),
+              ...(session ? { session } : { input: values.input }) }] });
           await center.reload();
           message.success({ content: '套件已创建', duration: 2 });
         } catch (error) {
@@ -199,13 +203,15 @@ export const EvaluationCenterPage = () => {
     }}
       onSubmit={async (values, value) => {
         try {
+          const session = sessionFromForm(values);
           await center.createEvaluation({ resource: { kind: value.resource_kind, resource_id: value.resource_id,
             revision_id: value.stable_revision_id || '' }, name: values.name, description: values.description,
-          cases: [{ name: values.case_name, input: values.input, expected_output: values.expected_output,
+          cases: [{ name: values.case_name, expected_output: values.expected_output,
             assertion_mode: values.assertion_mode,
             judge_spec: values.assertion_mode === 'judge'
               ? { model: values.judge_model, rubric: values.judge_rubric } : undefined,
-            enabled: true, ...processFieldsToSpec(values) }] });
+            enabled: true, ...processFieldsToSpec(values),
+            ...(session ? { session } : { input: values.input }) }] });
           message.success({ content: '评测已创建并进入运行队列', duration: 2 });
         } catch (error) {
           message.error({ content: error instanceof Error ? error.message : '创建评测失败', duration: 3 });

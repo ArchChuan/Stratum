@@ -24,6 +24,30 @@ import {
 } from './evaluation';
 
 describe('evaluation model', () => {
+  it('parses and preserves a session script case without stripping turns', () => {
+    const parsed = evaluationCaseSchema.parse({
+      id: 'c-session', name: '退货会话', expected_output: '已受理退款', assertion_mode: 'contains', enabled: true,
+      session: {
+        goal: '处理退货退款诉求',
+        turns: [
+          { user: '快递没到', probe: '识别到退货意向' },
+          { user: '请退款', tool_spec: { must_call: ['refund'], max_calls: 2 } },
+        ],
+      },
+    });
+    expect(parsed.session).toBeDefined();
+    expect(parsed.session?.turns).toHaveLength(2);
+    expect(parsed.session?.turns[1].tool_spec?.must_call).toEqual(['refund']);
+    expect(parsed.session?.turns[1].tool_spec?.max_calls).toBe(2);
+  });
+
+  it('leaves session undefined for single-turn cases', () => {
+    const parsed = evaluationCaseSchema.parse({
+      name: '单轮', input: '你好', expected_output: '您好', assertion_mode: 'contains', enabled: true,
+    });
+    expect(parsed.session).toBeUndefined();
+  });
+
   it('parses completed job with result id', () => {
     const job = evaluationJobSchema.parse({ job_id: 'job-1', status: 'succeeded', result_id: 'run-1' });
     expect(job.result_id).toBe('run-1');

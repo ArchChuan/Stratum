@@ -221,3 +221,161 @@ func TestSuiteServiceGetActiveRevision(t *testing.T) {
 		}
 	})
 }
+
+// sessionScriptFixture 构造一个合法的双轮会话剧本 case（阶段 B §5.4 authoring
+// round-trip 用）：首轮纯 user 消息、末轮带工具过程断言。
+func sessionScriptFixture() domain.EvalCase {
+	return domain.EvalCase{
+		Name: "会话投诉", ExpectedOutput: "已给用户可执行处理", AssertionMode: domain.AssertionContains,
+		Enabled: true,
+		Session: &domain.EvalSessionScript{
+			Goal: "用户投诉快递未收到：定位物流状态并给出签收异常处理",
+			Turns: []domain.SessionTurn{
+				{User: "快递一直没到，帮我看看", Probe: "识别物流查询意图"},
+				{User: "物流显示已签收但我没收到", Probe: "进入签收异常处理",
+					ToolSpec: &domain.ToolSpec{MustCall: []string{"track_package"}, MaxCalls: 2}},
+			},
+		},
+	}
+}
+
+func TestSuiteServiceCreateCarriesSessionScriptIntoRevision(t *testing.T) {
+	repo := &fakeSuiteRepo{}
+	svc := NewSuiteService(repo)
+
+	suite, revision, err := svc.Create(context.Background(), "tenant-1", CreateSuiteInput{
+		Name: "会话基线", ResourceKind: domain.ResourceKindAgent,
+		Cases: []domain.EvalCase{sessionScriptFixture()},
+	})
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	if suite.ID == "" || revision.Cases[0].ID == "" {
+		t.Fatalf("expected generated IDs, suite=%+v revision=%+v", suite, revision)
+	}
+	got := revision.Cases[0].Session
+	if got == nil {
+		t.Fatal("session script lost through Create")
+	}
+	if got.Goal != "用户投诉快递未收到：定位物流状态并给出签收异常处理" || len(got.Turns) != 2 {
+		t.Fatalf("session script not preserved verbatim: %+v", got)
+	}
+	if got.Turns[1].ToolSpec == nil || len(got.Turns[1].ToolSpec.MustCall) != 1 ||
+		got.Turns[1].ToolSpec.MustCall[0] != "track_package" || got.Turns[1].ToolSpec.MaxCalls != 2 {
+		t.Fatalf("per-turn tool spec not preserved: %+v", got.Turns[1])
+	}
+	// 会话 case 的 input 无执行语义，Create 应放行（服务层不要求单轮输入）。
+	if !revision.Cases[0].IsSession() {
+		t.Fatal("expected case to report IsSession()=true")
+	}
+}
+
+func TestSuiteServiceRejectsInvalidSessionScript(t *testing.T) {
+	repo := &fakeSuiteRepo{}
+	svc := NewSuiteService(repo)
+
+	tests := []struct {
+		name string
+		wrap func() error
+	}{
+		{name: "zero turns",
+			wrap: func() error {
+				_, _, err := svc.Create(context.Background(), "tenant-1", CreateSuiteInput{
+					Name: "x", ResourceKind: domain.ResourceKindAgent,
+					Cases: []domain.EvalCase{{Name: "c", ExpectedOutput: "e", AssertionMode: domain.AssertionContains,
+						Enabled: true, Session: &domain.EvalSessionScript{Goal: "g", Turns: nil}}},
+				})
+				return err
+			}},
+		{name: "empty turn user",
+			wrap: func() error {
+				_, _, err := svc.Create(context.Background(), "tenant-1", CreateSuiteInput{
+					Name: "x", ResourceKind: domain.ResourceKindAgent,
+					Cases: []domain.EvalCase{{Name: "c", ExpectedOutput: "e", AssertionMode: domain.AssertionContains,
+						Enabled: true, Session: &domain.EvalSessionScript{Goal: "g",
+							Turns: []domain.SessionTurn{{User: "  "}}}}},
+				})
+				return err
+			}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.wrap(); !errors.Is(err, ErrSuiteCaseInvalidScript) {
+				t.Fatalf("expected ErrSuiteCaseInvalidScript, got %v", err)
+			}
+		})
+	}
+}
+
+func TestSuiteServiceRejectsSingleTurnCaseWithoutInput(t *testing.T) {
+	svc := NewSuiteService(&fakeSuiteRepo{})
+
+	// Create：单轮 case（session nil）缺 input → 400 哨兵。
+	if _, _, err := svc.Create(context.Background(), "tenant-1", CreateSuiteInput{
+		Name: "x", ResourceKind: domain.ResourceKindSkill,
+		Cases: []domain.EvalCase{{Name: "c", ExpectedOutput: "e", AssertionMode: domain.AssertionExact, Enabled: true}},
+	}); !errors.Is(err, ErrSuiteCaseInputRequired) {
+		t.Fatalf("expected ErrSuiteCaseInputRequired on Create, got %v", err)
+	}
+
+	// UpdateDraftCase 同规则：编辑不能把单轮 case 的 input 清空。
+	repo := &fakeSuiteRepo{}
+	createSvc := NewSuiteService(repo)
+	_, revision, err := createSvc.Create(context.Background(), "tenant-1", CreateSuiteInput{
+		Name: "x", ResourceKind: domain.ResourceKindSkill,
+		Cases: []domain.EvalCase{{Name: "c", Input: "q", ExpectedOutput: "e", AssertionMode: domain.AssertionExact, Enabled: true}},
+	})
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	svc = NewSuiteService(repo)
+	if _, err := svc.UpdateDraftCase(context.Background(), "tenant-1", revision.SuiteID, revision.Cases[0].ID, domain.EvalCase{
+		ID: revision.Cases[0].ID, Name: "c", ExpectedOutput: "e",
+		AssertionMode: domain.AssertionExact, Enabled: true,
+	}); !errors.Is(err, ErrSuiteCaseInputRequired) {
+		t.Fatalf("expected ErrSuiteCaseInputRequired on UpdateDraftCase, got %v", err)
+	}
+}
+
+func TestSuiteServiceUpdateDraftCaseSessionRoundTrip(t *testing.T) {
+	repo := &fakeSuiteRepo{}
+	svc := NewSuiteService(repo)
+	_, revision, err := svc.Create(context.Background(), "tenant-1", CreateSuiteInput{
+		Name: "会话基线", ResourceKind: domain.ResourceKindAgent,
+		Cases: []domain.EvalCase{sessionScriptFixture()},
+	})
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	caseID := revision.Cases[0].ID
+
+	// 编辑会话剧本：goal 与轮次内容可随 draft case full replacement 更新。
+	edited, err := svc.UpdateDraftCase(context.Background(), "tenant-1", revision.SuiteID, caseID, domain.EvalCase{
+		ID: caseID, Name: "会话投诉改", ExpectedOutput: "已给用户可执行处理",
+		AssertionMode: domain.AssertionContains, Enabled: true,
+		Session: &domain.EvalSessionScript{
+			Goal: "快递签收异常：先核实再给处理",
+			Turns: []domain.SessionTurn{
+				{User: "签收异常怎么处理", Probe: "进入异常处理"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("UpdateDraftCase returned error: %v", err)
+	}
+	if edited.Session == nil || edited.Session.Goal != "快递签收异常：先核实再给处理" || len(edited.Session.Turns) != 1 {
+		t.Fatalf("session edit not persisted: %+v", edited.Session)
+	}
+
+	// 清空 session（会话 case 转回单轮）：nil Session 被接受，必须补 input。
+	reverted, err := svc.UpdateDraftCase(context.Background(), "tenant-1", revision.SuiteID, caseID, domain.EvalCase{
+		ID: caseID, Name: "会话投诉改", Input: "签收异常怎么处理", ExpectedOutput: "已给用户可执行处理",
+		AssertionMode: domain.AssertionContains, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("UpdateDraftCase reverted to single-turn returned error: %v", err)
+	}
+	if reverted.IsSession() {
+		t.Fatalf("expected session cleared, got %+v", reverted.Session)
+	}
+}

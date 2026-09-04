@@ -13,6 +13,7 @@ import {
   type EvaluationRun,
   type ExperimentResponse,
   type ResourceRef,
+  type SessionScript,
   candidatePageSchema,
   centerOverviewSchema,
   evaluationCaseSchema,
@@ -102,13 +103,17 @@ export const evaluationApi = {
     const response = await api.get(`/evaluations/suites/${suiteId}/draft`);
     return suiteRevisionSchema.parse(response.data);
   },
+  // updateDraftCase 更新单个草稿用例。会话剧本 case 携带 session（完整替换剧本，
+  // 后端对 nil Session 写回 '{}' 语义回退单轮）；input 仅在单轮形态出现，会话形态
+  // 省略（undefined 键会被 JSON.stringify 丢弃）。
   updateDraftCase: async (suiteId: string, caseId: string, data: {
-    name: string; input: unknown; expectedOutput: unknown; assertionMode: 'exact' | 'contains' | 'regex' | 'judge'; enabled: boolean;
+    name: string; input?: unknown; expectedOutput: unknown;
+    assertionMode: 'exact' | 'contains' | 'regex' | 'judge'; enabled: boolean; session?: SessionScript;
   }): Promise<EvaluationCase> => {
-    const { expectedOutput, assertionMode, ...body } = data;
-    const response = await api.put(`/evaluations/suites/${suiteId}/draft/cases/${caseId}`, {
-      ...body, expected_output: expectedOutput, assertion_mode: assertionMode,
-    });
+    const { expectedOutput, assertionMode, session, ...body } = data;
+    const payload: Record<string, unknown> = { ...body, expected_output: expectedOutput, assertion_mode: assertionMode };
+    if (session) payload.session = session;
+    const response = await api.put(`/evaluations/suites/${suiteId}/draft/cases/${caseId}`, payload);
     return evaluationCaseSchema.parse(response.data);
   },
   enqueueRun: async (resource: ResourceRef, suiteRevisionId: string, idempotencyKey: string): Promise<EvaluationJob> => {

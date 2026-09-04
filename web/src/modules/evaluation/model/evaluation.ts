@@ -33,13 +33,35 @@ export type ToolObservation = z.infer<typeof toolObservationSchema>;
 // toolSpecSchema is the deterministic tool-call rule (§6.5): must_call /
 // must_not_call / order constrain the execution tool sequence, max_calls caps
 // total invocations. Empty fields do not participate in validation.
-export const toolSpecSchema = z.object({
+export const toolSpecObjectSchema = z.object({
   must_call: z.array(z.string()).optional(),
   must_not_call: z.array(z.string()).optional(),
   order: z.array(z.string()).optional(),
   max_calls: z.number().optional(),
-}).optional();
+});
+export type ToolSpecObject = z.infer<typeof toolSpecObjectSchema>;
+
+// toolSpecSchema 是 case 级可选工具断言；轮次级 tool_spec 复用 toolSpecObjectSchema
+// 以允许 optional 语义落在各自层级（会话 case 的某轮可单独携带过程断言）。
+export const toolSpecSchema = toolSpecObjectSchema.optional();
 export type ToolSpec = z.infer<typeof toolSpecSchema>;
+
+// sessionTurnSchema 是会话剧本的一轮（阶段 B §5.4）：user 必填、probe 探针可选、
+// tool_spec 为该轮工具序列过程断言（可缺省）。
+export const sessionTurnSchema = z.object({
+  user: z.string(),
+  probe: z.string().optional(),
+  tool_spec: toolSpecObjectSchema.optional(),
+});
+export type SessionTurn = z.infer<typeof sessionTurnSchema>;
+
+// sessionScriptSchema 是 EvalSessionScript（阶段 B §5.4）：goal 描述被测任务终点，
+// turns 至少一轮、每轮 user 非空（后端 Validate 兜底）。缺省 session 即旧单轮 case。
+export const sessionScriptSchema = z.object({
+  goal: z.string(),
+  turns: z.array(sessionTurnSchema).min(1),
+});
+export type SessionScript = z.infer<typeof sessionScriptSchema>;
 
 // stepJudgeSchema is the step-level LLM rubric (§6.5): criteria scores the
 // tool sequence step by step. Empty criteria falls back to the platform
@@ -58,6 +80,9 @@ export const evaluationCaseSchema = z.object({
   judge_spec: judgeSpecSchema,
   tool_spec: toolSpecSchema,
   step_judge: stepJudgeSchema,
+  // session 是会话剧本（阶段 B §5.4）；nil/缺省 = 旧单轮 case。字段必须显式声明，
+  // 否则 zod 默认 strip 响应里 draft case 的 session，导致会话剧本读回即丢。
+  session: sessionScriptSchema.optional(),
   enabled: z.boolean().optional().default(true),
   // Provenance from auto-generation (Phase 3c): which production trace and
   // feedback signal the case was generated from, and why.

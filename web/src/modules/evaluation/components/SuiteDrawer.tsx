@@ -90,7 +90,19 @@ export const SuiteDrawer = ({ suite, open, onClose, canManage, onChanged, isMobi
       {modeTag(testCase.assertion_mode)}
       {testCase.enabled ? <Tag color="green">包含在本版本</Tag> : <Tag>已从本版本排除</Tag>}
     </Flex>
-    <div><Typography.Text type="secondary">测试输入</Typography.Text><br /><SafeValue value={testCase.input} /></div>
+    {testCase.session ? <div><Typography.Text type="secondary">会话剧本</Typography.Text><br />
+      <Typography.Text>Goal：{testCase.session.goal}</Typography.Text>
+      {testCase.session.turns.map((turn, index) => <div key={index} style={{ marginTop: 8 }}>
+        <Typography.Text type="secondary">第 {index + 1} 轮用户消息</Typography.Text><br />
+        <SafeValue value={turn.user} />
+        {turn.probe && <div style={{ marginTop: 4 }}><Typography.Text type="secondary">探针期望：</Typography.Text>
+          <SafeValue value={turn.probe} /></div>}
+        {turn.tool_spec && <div style={{ marginTop: 4 }}>
+          <Typography.Text type="secondary">本轮工具断言：</Typography.Text>
+          <Typography.Text>{toolSpecSummary(turn.tool_spec)}</Typography.Text>
+        </div>}
+      </div>)}
+    </div> : <div><Typography.Text type="secondary">测试输入</Typography.Text><br /><SafeValue value={testCase.input} /></div>}
     <div style={{ marginTop: 8 }}><Typography.Text type="secondary">期望输出</Typography.Text><br /><SafeValue value={testCase.expected_output} /></div>
     {testCase.assertion_mode === 'judge' && testCase.judge_spec && <div style={{ marginTop: 8 }}>
       <Typography.Text type="secondary">AI 判定配置</Typography.Text><br />

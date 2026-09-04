@@ -240,8 +240,10 @@ func (h *EvaluationHandler) CreateSuite(c *gin.Context) {
 }
 
 // toDomainCase converts one create-suite request case into a domain.EvalCase,
-// copying the assertion config (judge_spec / tool_spec / step_judge) verbatim
-// so the payloads bind to the domain shapes.
+// copying the assertion config (judge_spec / tool_spec / step_judge) and the
+// session script (阶段 B §5.4) verbatim so the payloads bind to the domain
+// shapes. Session cases carry no single-turn input (input is meaningless under
+// the multi-turn runner); the shape validation happens in the application layer.
 func toDomainCase(item gen.EvaluationCaseRequest) domain.EvalCase {
 	enabled := true
 	if item.Enabled != nil {
@@ -250,6 +252,7 @@ func toDomainCase(item gen.EvaluationCaseRequest) domain.EvalCase {
 	testCase := domain.EvalCase{
 		Name: item.Name, Input: item.Input, ExpectedOutput: item.ExpectedOutput,
 		AssertionMode: domain.AssertionMode(item.AssertionMode), Enabled: enabled,
+		Session: toSessionScript(item.Session),
 	}
 	if item.JudgeSpec != nil {
 		testCase.JudgeSpec = &domain.JudgeSpec{Model: item.JudgeSpec.Model, Rubric: item.JudgeSpec.Rubric}
@@ -264,6 +267,27 @@ func toDomainCase(item gen.EvaluationCaseRequest) domain.EvalCase {
 		testCase.StepJudge = &domain.StepJudge{Criteria: item.StepJudge.Criteria}
 	}
 	return testCase
+}
+
+// toSessionScript converts the request-layer session script into the domain
+// shape, mapping each turn's optional tool_spec the same way the case-level
+// tool_spec is mapped. A nil request script yields nil (old single-turn case).
+func toSessionScript(script *gen.EvalSessionScript) *domain.EvalSessionScript {
+	if script == nil {
+		return nil
+	}
+	turns := make([]domain.SessionTurn, 0, len(script.Turns))
+	for _, turn := range script.Turns {
+		t := domain.SessionTurn{User: turn.User, Probe: turn.Probe}
+		if turn.ToolSpec != nil {
+			t.ToolSpec = &domain.ToolSpec{
+				MustCall: turn.ToolSpec.MustCall, MustNotCall: turn.ToolSpec.MustNotCall,
+				Order: turn.ToolSpec.Order, MaxCalls: int(turn.ToolSpec.MaxCalls),
+			}
+		}
+		turns = append(turns, t)
+	}
+	return &domain.EvalSessionScript{Goal: script.Goal, Turns: turns}
 }
 
 func (h *EvaluationHandler) PublishSuite(c *gin.Context) {
@@ -353,6 +377,7 @@ func (h *EvaluationHandler) UpdateDraftCase(c *gin.Context) {
 		ExpectedOutput: req.ExpectedOutput,
 		AssertionMode:  domain.AssertionMode(req.AssertionMode),
 		Enabled:        enabled,
+		Session:        toSessionScript(req.Session),
 	})
 	if err != nil {
 		_ = c.Error(err)
