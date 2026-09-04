@@ -541,6 +541,9 @@ func registerAgents(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 		// 版本历史/回滚：与 skill 语义一致——member 级，归属/白名单鉴权在 service
 		// ownership 矩阵内完成（owner/admin/creator/白名单 editor 放行，其余 ErrForbidden）。
 		agents.GET("/:id/versions", requireActive, agentHandler.ListAgentVersions)
+		// 单版本内容：返回该版整份 payload + safeSummary + parentVersionId，供「详情」
+		// Drawer 以其直父版本 payload 为基线现算字段前后值。
+		agents.GET("/:id/versions/:versionID", requireActive, agentHandler.GetAgentVersion)
 		agents.POST("/:id/rollback", requireActive, agentHandler.RollbackAgent)
 		agents.DELETE("/:id", requireAdmin, requireActive, agentHandler.DeleteAgent)
 		agents.POST("/:id/conversations", chatHandler.CreateConversation)
