@@ -50,18 +50,27 @@ func TestPgSuiteRepositoryDraftLifecycle(t *testing.T) {
 	if err := repo.CreateSuite(ctx, tenantID, suite, base); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.PublishRevision(ctx, tenantID, suite.ID, base.ID, 1); err != nil {
+	published, err := repo.PublishRevision(ctx, tenantID, suite.ID, base.ID, 1)
+	if err != nil {
 		t.Fatal(err)
 	}
+	if published.Status != domain.SuiteRevisionPublished {
+		t.Fatalf("unexpected published revision: %+v", published)
+	}
 
-	// A fresh draft after publishing inherits resource_kind and parent.
-	draft, err := repo.CreateDraftRevision(ctx, tenantID, suite.ID)
-	if err != nil {
-		t.Fatalf("CreateDraftRevision: %v", err)
+	// 发布后自动开启继承草稿（S1-1）：kind/parent 继承、base case 以新 id 拷贝，
+	// GetDraftRevision 恒成功，不再需要显式 CreateDraftRevision。
+	draft, ok, err := repo.GetDraftRevision(ctx, tenantID, suite.ID)
+	if err != nil || !ok {
+		t.Fatalf("GetDraftRevision after publish: ok=%v err=%v", ok, err)
 	}
 	if draft.ResourceKind != domain.ResourceKindSkill || draft.ParentID != "rev-0" || draft.Status != domain.SuiteRevisionDraft {
-		t.Fatalf("draft not inherited from active revision: %+v", draft)
+		t.Fatalf("draft not inherited from published revision: %+v", draft)
 	}
+	if len(draft.Cases) != 1 || draft.Cases[0].ID == "hand-case" || draft.Cases[0].Name != "手工" {
+		t.Fatalf("inherited draft must copy the base case under a fresh id: %+v", draft.Cases)
+	}
+	draftCaseID := draft.Cases[0].ID
 
 	// Generated case with provenance + judge spec.
 	generated := domain.EvalCase{
@@ -77,10 +86,10 @@ func TestPgSuiteRepositoryDraftLifecycle(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("GetDraftRevision: ok=%v err=%v", ok, err)
 	}
-	if len(loaded.Cases) != 1 {
-		t.Fatalf("expected 1 generated case, got %d: %+v", len(loaded.Cases), loaded.Cases)
+	if len(loaded.Cases) != 2 {
+		t.Fatalf("expected inherited + 1 generated case, got %d: %+v", len(loaded.Cases), loaded.Cases)
 	}
-	got := loaded.Cases[0]
+	got := findCase(t, loaded.Cases, "gen-case-1")
 	if got.SourceTraceID != "trace-9" || got.FeedbackRef != "fb-9" || got.GenerateReason != "负反馈样本" {
 		t.Fatalf("provenance lost on round-trip: %+v", got)
 	}
@@ -101,7 +110,7 @@ func TestPgSuiteRepositoryDraftLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got = loaded.Cases[0]
+	got = findCase(t, loaded.Cases, "gen-case-1")
 	if got.Name != "物流查询改" || got.AssertionMode != domain.AssertionExact || got.Input != "物流进度没更新" {
 		t.Fatalf("edit not applied: %+v", got)
 	}
@@ -109,7 +118,7 @@ func TestPgSuiteRepositoryDraftLifecycle(t *testing.T) {
 		t.Fatalf("edit wiped provenance or judge spec: %+v", got)
 	}
 
-	// Deletion removes the case from the draft.
+	// Deletion removes the generated case; the inherited draft case remains.
 	if err := repo.DeleteDraftCase(ctx, tenantID, draft.ID, got.ID); err != nil {
 		t.Fatalf("DeleteDraftCase: %v", err)
 	}
@@ -117,12 +126,12 @@ func TestPgSuiteRepositoryDraftLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(loaded.Cases) != 0 {
-		t.Fatalf("expected empty draft after delete, got %d", len(loaded.Cases))
+	if len(loaded.Cases) != 1 || loaded.Cases[0].ID != draftCaseID {
+		t.Fatalf("expected only the inherited draft case after delete, got %d: %+v", len(loaded.Cases), loaded.Cases)
 	}
 
 	// Update of a case in another revision must fail (no cross-revision writes).
-	if err := repo.UpdateDraftCase(ctx, tenantID, "rev-0", got); err == nil {
+	if err := repo.UpdateDraftCase(ctx, tenantID, "rev-0", domain.EvalCase{ID: draftCaseID}); err == nil {
 		t.Fatal("expected error updating a case outside the draft revision")
 	}
 }
