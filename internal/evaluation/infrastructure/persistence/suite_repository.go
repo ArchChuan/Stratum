@@ -250,80 +250,107 @@ func (r *PgSuiteRepository) PublishRevision(
 // its cases under fresh ids; suites never published have no active revision
 // and fail. Creating a draft while one already exists is rejected to preserve
 // the at-most-one-draft-per-suite invariant.
+// ensureNoOpenDraft rejects suites that already own an editable draft, preserving the
+// at-most-one-draft-per-suite invariant that StartNextDraft depends on.
+func ensureNoOpenDraft(ctx context.Context, tx pgx.Tx, suiteID string) error {
+	var exists bool
+	if err := tx.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM eval_suite_revisions WHERE suite_id=$1 AND status='draft')`,
+		suiteID,
+	).Scan(&exists); err != nil {
+		return fmt.Errorf("evaluation suite repository: check existing draft: %w", err)
+	}
+	if exists {
+		return fmt.Errorf("evaluation suite repository: draft revision already exists")
+	}
+	return nil
+}
+
+// resolveActiveRevision loads the suite's active (published) revision. Suites without a
+// published revision cannot seed an inherited draft, so the lookup is fail-closed.
+func resolveActiveRevision(ctx context.Context, tx pgx.Tx, suiteID string) (domain.EvalSuiteRevision, error) {
+	var activeID string
+	if err := tx.QueryRow(ctx,
+		`SELECT sr.id
+		 FROM eval_suite_revisions sr
+		 JOIN eval_suites s ON s.active_revision_id = sr.id
+		 WHERE s.id = $1`, suiteID,
+	).Scan(&activeID); err == pgx.ErrNoRows {
+		return domain.EvalSuiteRevision{}, fmt.Errorf("evaluation suite repository: suite has no published revision")
+	} else if err != nil {
+		return domain.EvalSuiteRevision{}, fmt.Errorf("evaluation suite repository: resolve active revision: %w", err)
+	}
+	active, found, err := loadSuiteRevision(ctx, tx,
+		`SELECT id, suite_id, COALESCE(parent_id, ''), COALESCE(version_no, 0), status, resource_kind, created_by
+		 FROM eval_suite_revisions WHERE id=$1`, activeID)
+	if err != nil {
+		return domain.EvalSuiteRevision{}, err
+	}
+	if !found {
+		return domain.EvalSuiteRevision{}, fmt.Errorf("evaluation suite repository: active revision not found")
+	}
+	return active, nil
+}
+
+// createInheritedDraft opens a fresh draft inheriting resource_kind, created_by and the
+// case set from the active revision, points eval_suites.draft_revision_id at it, and
+// reloads the revision with its cases for direct consumption.
+func createInheritedDraft(ctx context.Context, tx pgx.Tx, suiteID string,
+	active domain.EvalSuiteRevision) (domain.EvalSuiteRevision, error) {
+	revision := domain.EvalSuiteRevision{
+		ID: uuid.Must(uuid.NewV7()).String(), SuiteID: suiteID,
+		ParentID: active.ID, Status: domain.SuiteRevisionDraft,
+		ResourceKind: active.ResourceKind, CreatedBy: active.CreatedBy,
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO eval_suite_revisions (id, suite_id, parent_id, version_no, status, resource_kind, created_by)
+		 VALUES ($1,$2,$3,NULL,$4,$5,$6)`,
+		revision.ID, revision.SuiteID, revision.ParentID,
+		string(revision.Status), string(revision.ResourceKind), revision.CreatedBy,
+	); err != nil {
+		return domain.EvalSuiteRevision{}, fmt.Errorf("evaluation suite repository: insert draft revision: %w", err)
+	}
+	if err := copyCasesToDraft(ctx, tx, revision.ID, active.Cases); err != nil {
+		return domain.EvalSuiteRevision{}, err
+	}
+	tag, err := tx.Exec(ctx,
+		`UPDATE eval_suites SET draft_revision_id=$2, updated_at=NOW() WHERE id=$1`,
+		suiteID, revision.ID,
+	)
+	if err != nil {
+		return domain.EvalSuiteRevision{}, fmt.Errorf("evaluation suite repository: point draft revision: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.EvalSuiteRevision{}, fmt.Errorf("evaluation suite repository: suite not found")
+	}
+	// 返回装载好 cases 的新草稿：StartNextDraft 与测试直接消费返回值，省一次再查。
+	loaded, found, err := loadSuiteRevision(ctx, tx,
+		`SELECT id, suite_id, COALESCE(parent_id, ''), COALESCE(version_no, 0), status, resource_kind, created_by
+		 FROM eval_suite_revisions WHERE id=$1`, revision.ID)
+	if err != nil {
+		return domain.EvalSuiteRevision{}, err
+	}
+	if !found {
+		return domain.EvalSuiteRevision{}, fmt.Errorf("evaluation suite repository: draft revision not found after insert")
+	}
+	return loaded, nil
+}
+
 func (r *PgSuiteRepository) CreateDraftRevision(
 	ctx context.Context,
 	tenantID, suiteID string,
 ) (domain.EvalSuiteRevision, error) {
 	var revision domain.EvalSuiteRevision
 	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		var exists bool
-		if err := tx.QueryRow(ctx,
-			`SELECT EXISTS(SELECT 1 FROM eval_suite_revisions WHERE suite_id=$1 AND status='draft')`,
-			suiteID,
-		).Scan(&exists); err != nil {
-			return fmt.Errorf("evaluation suite repository: check existing draft: %w", err)
+		if err := ensureNoOpenDraft(ctx, tx, suiteID); err != nil {
+			return err
 		}
-		if exists {
-			return fmt.Errorf("evaluation suite repository: draft revision already exists")
-		}
-		var activeID string
-		if err := tx.QueryRow(ctx,
-			`SELECT sr.id
-			 FROM eval_suite_revisions sr
-			 JOIN eval_suites s ON s.active_revision_id = sr.id
-			 WHERE s.id = $1`, suiteID,
-		).Scan(&activeID); err == pgx.ErrNoRows {
-			return fmt.Errorf("evaluation suite repository: suite has no published revision")
-		} else if err != nil {
-			return fmt.Errorf("evaluation suite repository: resolve active revision: %w", err)
-		}
-		active, found, err := loadSuiteRevision(ctx, tx,
-			`SELECT id, suite_id, COALESCE(parent_id, ''), COALESCE(version_no, 0), status, resource_kind, created_by
-			 FROM eval_suite_revisions WHERE id=$1`, activeID)
+		active, err := resolveActiveRevision(ctx, tx, suiteID)
 		if err != nil {
 			return err
 		}
-		if !found {
-			return fmt.Errorf("evaluation suite repository: active revision not found")
-		}
-		revision = domain.EvalSuiteRevision{
-			ID: uuid.Must(uuid.NewV7()).String(), SuiteID: suiteID,
-			ParentID: active.ID, Status: domain.SuiteRevisionDraft,
-			ResourceKind: active.ResourceKind, CreatedBy: active.CreatedBy,
-		}
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO eval_suite_revisions (id, suite_id, parent_id, version_no, status, resource_kind, created_by)
-			 VALUES ($1,$2,$3,NULL,$4,$5,$6)`,
-			revision.ID, revision.SuiteID, revision.ParentID,
-			string(revision.Status), string(revision.ResourceKind), revision.CreatedBy,
-		); err != nil {
-			return fmt.Errorf("evaluation suite repository: insert draft revision: %w", err)
-		}
-		if err := copyCasesToDraft(ctx, tx, revision.ID, active.Cases); err != nil {
-			return err
-		}
-		tag, err := tx.Exec(ctx,
-			`UPDATE eval_suites SET draft_revision_id=$2, updated_at=NOW() WHERE id=$1`,
-			suiteID, revision.ID,
-		)
-		if err != nil {
-			return fmt.Errorf("evaluation suite repository: point draft revision: %w", err)
-		}
-		if tag.RowsAffected() == 0 {
-			return fmt.Errorf("evaluation suite repository: suite not found")
-		}
-		// 返回装载好 cases 的新草稿：StartNextDraft 与测试直接消费返回值，省一次再查。
-		loaded, found, err := loadSuiteRevision(ctx, tx,
-			`SELECT id, suite_id, COALESCE(parent_id, ''), COALESCE(version_no, 0), status, resource_kind, created_by
-			 FROM eval_suite_revisions WHERE id=$1`, revision.ID)
-		if err != nil {
-			return err
-		}
-		if !found {
-			return fmt.Errorf("evaluation suite repository: draft revision not found after insert")
-		}
-		revision = loaded
-		return nil
+		revision, err = createInheritedDraft(ctx, tx, suiteID, active)
+		return err
 	})
 	return revision, err
 }
