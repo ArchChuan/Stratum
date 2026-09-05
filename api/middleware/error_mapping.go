@@ -127,6 +127,7 @@ var errorStatusTable = map[error]int{
 	memorydomain.ErrFactAlreadyDeleted:            http.StatusConflict,
 	evaldomain.ErrOptimizationIdempotencyConflict: http.StatusConflict,
 	evaldomain.ErrFeedbackIdempotencyConflict:     http.StatusConflict,
+	evalapp.ErrSuiteDraftMissing:                  http.StatusConflict,
 	agentapp.ErrApprovalNotApproved:               http.StatusConflict,
 	agentapp.ErrApprovalOutcomeUnknown:            http.StatusConflict,
 	agentdomain.ErrApprovalAlreadyDecided:         http.StatusConflict,

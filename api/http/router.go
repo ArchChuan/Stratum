@@ -209,7 +209,15 @@ func registerEvaluations(r *gin.Engine, c *wiring.Container, requireActive gin.H
 		evaluations.POST("/suites", requireAdmin, requireActive, h.CreateSuite)
 		evaluations.POST("/suites/:id/publish", requireAdmin, requireActive, h.PublishSuite)
 		evaluations.POST("/suites/:id/generate", requireAdmin, requireActive, h.GenerateSuiteCases)
+		// S1-3 suite 管理页读写端点：读放开（member 只读展示版本/cases），
+		// 草稿开启/加删 case 是写操作 requireAdmin。
+		evaluations.GET("/suites/:id", requireActive, h.GetSuiteDetail)
 		evaluations.GET("/suites/:id/draft", requireActive, h.GetSuiteDraft)
+		evaluations.GET("/suites/:id/versions", requireActive, h.ListSuiteVersions)
+		evaluations.GET("/suites/:id/versions/:revisionId", requireActive, h.GetSuiteRevision)
+		evaluations.POST("/suites/:id/draft", requireAdmin, requireActive, h.StartNextDraft)
+		evaluations.POST("/suites/:id/draft/cases", requireAdmin, requireActive, h.AddDraftCase)
+		evaluations.DELETE("/suites/:id/draft/cases/:caseId", requireAdmin, requireActive, h.DeleteDraftCase)
 		evaluations.PUT("/suites/:id/draft/cases/:caseId", requireAdmin, requireActive, h.UpdateDraftCase)
 		evaluations.POST("/runs", requireAdmin, requireActive, h.EnqueueRun)
 		evaluations.GET("/runs/:id", h.GetRun)

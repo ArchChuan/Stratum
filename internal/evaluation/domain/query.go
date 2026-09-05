@@ -52,12 +52,40 @@ type ResourceSummary struct {
 }
 
 type SuiteSummary struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	Description string    `json:"description"`
-	Status      string    `json:"status"`
-	CreatedBy   string    `json:"created_by,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID               string       `json:"id"`
+	Name             string       `json:"name"`
+	Description      string       `json:"description"`
+	ResourceKind     ResourceKind `json:"resource_kind,omitempty"`
+	Status           string       `json:"status"`
+	ActiveRevisionID string       `json:"active_revision_id,omitempty"`
+	DraftRevisionID  string       `json:"draft_revision_id,omitempty"`
+	ActiveVersionNo  int          `json:"active_version_no,omitempty"`
+	DraftVersionNo   int          `json:"draft_version_no,omitempty"`
+	// ActiveCaseCount / DraftCaseCount 是 active/draft revision 的启用 case 数
+	// （与 SuiteRevisionMeta.EnabledCaseCount 同口径）；无该 revision 时为 0。
+	ActiveCaseCount int       `json:"active_case_count,omitempty"`
+	DraftCaseCount  int       `json:"draft_case_count,omitempty"`
+	CreatedBy       string    `json:"created_by,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
+}
+
+// SuiteDetail 是评测集详情页顶部元信息：套件自身字段叠加当前 active/draft
+// revision 的 kind/版本号/启用 case 数。case 正文不进本结构（草稿/版本正文走
+// 各自只读/编辑端点装载），避免详情元信息与正文两份读取互相拖累。
+type SuiteDetail struct {
+	ID               string       `json:"id"`
+	Name             string       `json:"name"`
+	Description      string       `json:"description"`
+	ResourceKind     ResourceKind `json:"resource_kind"`
+	Status           string       `json:"status"`
+	ActiveRevisionID string       `json:"active_revision_id,omitempty"`
+	DraftRevisionID  string       `json:"draft_revision_id,omitempty"`
+	ActiveVersionNo  int          `json:"active_version_no,omitempty"`
+	DraftVersionNo   int          `json:"draft_version_no,omitempty"`
+	ActiveCaseCount  int          `json:"active_case_count,omitempty"`
+	DraftCaseCount   int          `json:"draft_case_count,omitempty"`
+	CreatedBy        string       `json:"created_by,omitempty"`
+	CreatedAt        time.Time    `json:"created_at"`
 }
 type RunSummary struct {
 	ID           string       `json:"id"`

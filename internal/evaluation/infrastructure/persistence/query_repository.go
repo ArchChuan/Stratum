@@ -126,16 +126,38 @@ func (r *PgCenterQueryRepository) ListSuites(ctx context.Context, tenantID strin
 		return page, e
 	}
 	e = r.tenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		rows, e := tx.Query(ctx, `SELECT s.id,s.name,s.description,COALESCE(sr.status,''),s.created_by,s.created_at FROM eval_suites s LEFT JOIN eval_suite_revisions sr ON sr.id=COALESCE(s.active_revision_id,s.draft_revision_id) WHERE ($1='' OR sr.resource_kind=$1) AND ($2='' OR EXISTS (SELECT 1 FROM eval_runs r WHERE r.suite_revision_id=sr.id AND r.resource_id=$2)) AND ($3='' OR sr.status=$3) AND ($4::timestamptz IS NULL OR (s.created_at,s.id)<($4,$5)) ORDER BY s.created_at DESC,s.id DESC LIMIT $6`, filter.ResourceKind, filter.ResourceID, filter.Status, ct, cid, filter.Limit+1)
+		// 一次 LEFT JOIN 同时带出 active 与 draft 两版（kind/状态/版本号 + 启用
+		// case 数经相关子查询聚合），列表行携带当前链完整演进元信息；filter 语义
+		// 沿用旧的"代表性 revision"= COALESCE(active, draft)。
+		rows, e := tx.Query(ctx, `SELECT s.id,s.name,s.description,
+			COALESCE(ar.resource_kind,dr.resource_kind,''),
+			COALESCE(ar.status,dr.status,''),
+			s.created_by,s.created_at,
+			COALESCE(ar.id,''),COALESCE(dr.id,''),
+			COALESCE(ar.version_no,0),COALESCE(dr.version_no,0),
+			COALESCE((SELECT count(*)::int FROM eval_cases c WHERE c.suite_revision_id=ar.id AND c.enabled),0),
+			COALESCE((SELECT count(*)::int FROM eval_cases c WHERE c.suite_revision_id=dr.id AND c.enabled),0)
+			FROM eval_suites s
+			LEFT JOIN eval_suite_revisions ar ON ar.id=s.active_revision_id
+			LEFT JOIN eval_suite_revisions dr ON dr.id=s.draft_revision_id
+			WHERE ($1='' OR COALESCE(ar.resource_kind,dr.resource_kind,'')=$1)
+			  AND ($2='' OR EXISTS (SELECT 1 FROM eval_runs r WHERE (r.suite_revision_id=ar.id OR r.suite_revision_id=dr.id) AND r.resource_id=$2))
+			  AND ($3='' OR COALESCE(ar.status,dr.status,'')=$3)
+			  AND ($4::timestamptz IS NULL OR (s.created_at,s.id)<($4,$5))
+			ORDER BY s.created_at DESC,s.id DESC LIMIT $6`, filter.ResourceKind, filter.ResourceID, filter.Status, ct, cid, filter.Limit+1)
 		if e != nil {
 			return e
 		}
 		defer rows.Close()
 		for rows.Next() {
 			var x domain.SuiteSummary
-			if e = rows.Scan(&x.ID, &x.Name, &x.Description, &x.Status, &x.CreatedBy, &x.CreatedAt); e != nil {
+			var kind string
+			if e = rows.Scan(&x.ID, &x.Name, &x.Description, &kind, &x.Status, &x.CreatedBy, &x.CreatedAt,
+				&x.ActiveRevisionID, &x.DraftRevisionID, &x.ActiveVersionNo, &x.DraftVersionNo,
+				&x.ActiveCaseCount, &x.DraftCaseCount); e != nil {
 				return e
 			}
+			x.ResourceKind = domain.ResourceKind(kind)
 			page.Items = append(page.Items, x)
 		}
 		return rows.Err()

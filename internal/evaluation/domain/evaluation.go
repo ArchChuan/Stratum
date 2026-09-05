@@ -281,12 +281,26 @@ const (
 )
 
 type EvalSuite struct {
-	ID               string `json:"id"`
-	Name             string `json:"name"`
-	Description      string `json:"description"`
-	ActiveRevisionID string `json:"active_revision_id,omitempty"`
-	DraftRevisionID  string `json:"draft_revision_id,omitempty"`
-	CreatedBy        string `json:"created_by,omitempty"`
+	ID               string    `json:"id"`
+	Name             string    `json:"name"`
+	Description      string    `json:"description"`
+	ActiveRevisionID string    `json:"active_revision_id,omitempty"`
+	DraftRevisionID  string    `json:"draft_revision_id,omitempty"`
+	CreatedBy        string    `json:"created_by,omitempty"`
+	CreatedAt        time.Time `json:"created_at,omitempty"`
+}
+
+// SuiteRevisionMeta 是套件版本列表行的轻量投影：不装载 cases，只带版本号、
+// 状态、kind、创建者、发布时间与启用 case 数。草稿 revision 的 version_no 为
+// NULL（未分配版本号）读回时归 0；published_at 同样可空。
+type SuiteRevisionMeta struct {
+	ID               string              `json:"id"`
+	VersionNo        int                 `json:"version_no,omitempty"`
+	Status           SuiteRevisionStatus `json:"status"`
+	ResourceKind     ResourceKind        `json:"resource_kind"`
+	CreatedBy        string              `json:"created_by,omitempty"`
+	PublishedAt      *time.Time          `json:"published_at,omitempty"`
+	EnabledCaseCount int                 `json:"enabled_case_count"`
 }
 
 type EvalCaseResult struct {

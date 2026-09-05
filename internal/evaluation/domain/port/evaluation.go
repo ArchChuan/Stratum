@@ -111,6 +111,13 @@ type RunRepository interface {
 
 type SuiteRepository interface {
 	CreateSuite(ctx context.Context, tenantID string, suite domain.EvalSuite, revision domain.EvalSuiteRevision) error
+	// GetSuite 返回套件自身元信息（含 created_at 与 active/draft revision
+	// 指针）；套件不存在时 found=false。
+	GetSuite(ctx context.Context, tenantID, suiteID string) (domain.EvalSuite, bool, error)
+	// ListSuiteRevisions 返回套件全部 revision（含当前草稿与历史已发布版本）的
+	// 轻量 meta，不装载 cases；版本号降序、草稿/未编号 revision 垫底。版本列
+	// 表页与详情元信息聚合共用。
+	ListSuiteRevisions(ctx context.Context, tenantID, suiteID string) ([]domain.SuiteRevisionMeta, error)
 	GetDraftRevision(ctx context.Context, tenantID, suiteID string) (domain.EvalSuiteRevision, bool, error)
 	// GetActiveRevision 返回套件当前已发布（active）revision；从未发布的
 	// 套件或套件不存在时 found=false。矩阵评测 seed 复用已发布基准集用。
