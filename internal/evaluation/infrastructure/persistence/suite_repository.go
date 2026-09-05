@@ -114,6 +114,67 @@ func (r *PgSuiteRepository) GetActiveRevision(
 	return revision, found, err
 }
 
+// GetSuite 返回套件自身元信息（含 created_at 与 active/draft revision 指针）；
+// 套件不存在时 found=false。
+func (r *PgSuiteRepository) GetSuite(
+	ctx context.Context,
+	tenantID, suiteID string,
+) (domain.EvalSuite, bool, error) {
+	var suite domain.EvalSuite
+	found := false
+	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		err := tx.QueryRow(ctx,
+			`SELECT id, name, description, COALESCE(active_revision_id, ''), COALESCE(draft_revision_id, ''),
+			        created_by, created_at
+			 FROM eval_suites WHERE id=$1`, suiteID,
+		).Scan(&suite.ID, &suite.Name, &suite.Description, &suite.ActiveRevisionID,
+			&suite.DraftRevisionID, &suite.CreatedBy, &suite.CreatedAt)
+		if err == pgx.ErrNoRows {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("evaluation suite repository: load suite: %w", err)
+		}
+		found = true
+		return nil
+	})
+	return suite, found, err
+}
+
+// ListSuiteRevisions 返回套件全部 revision 的轻量 meta（版本列表页 / 详情元信息
+// 聚合用），不装载 cases。已发布版本按 version_no 降序在前，草稿（version_no
+// 为 NULL）垫底；published_at 未发布的 revision 为 NULL。
+func (r *PgSuiteRepository) ListSuiteRevisions(
+	ctx context.Context,
+	tenantID, suiteID string,
+) ([]domain.SuiteRevisionMeta, error) {
+	metas := []domain.SuiteRevisionMeta{}
+	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		rows, err := tx.Query(ctx,
+			`SELECT id, COALESCE(version_no, 0), status, resource_kind, created_by, published_at,
+			        (SELECT count(*)::int FROM eval_cases c WHERE c.suite_revision_id = r.id AND c.enabled)
+			 FROM eval_suite_revisions r WHERE suite_id=$1
+			 ORDER BY version_no DESC NULLS LAST, created_at DESC, id DESC`, suiteID)
+		if err != nil {
+			return fmt.Errorf("evaluation suite repository: list revisions: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var meta domain.SuiteRevisionMeta
+			var status, kind string
+			if err := rows.Scan(&meta.ID, &meta.VersionNo, &status, &kind, &meta.CreatedBy,
+				&meta.PublishedAt, &meta.EnabledCaseCount); err != nil {
+				return fmt.Errorf("evaluation suite repository: scan revision meta: %w", err)
+			}
+			meta.Status = domain.SuiteRevisionStatus(status)
+			meta.ResourceKind = domain.ResourceKind(kind)
+			metas = append(metas, meta)
+		}
+		return rows.Err()
+	})
+	return metas, err
+}
+
 func (r *PgSuiteRepository) NextVersionNo(ctx context.Context, tenantID, suiteID string) (int, error) {
 	next := 0
 	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {

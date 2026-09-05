@@ -102,6 +102,29 @@ func (f *fakeSuiteRepo) GetActiveRevision(_ context.Context, _ string, suiteID s
 		nil
 }
 
+func (f *fakeSuiteRepo) GetSuite(_ context.Context, _ string, suiteID string) (domain.EvalSuite, bool, error) {
+	if f.suite.ID != suiteID {
+		return domain.EvalSuite{}, false, nil
+	}
+	return f.suite, true, nil
+}
+
+func (f *fakeSuiteRepo) ListSuiteRevisions(_ context.Context, _ string, _ string) ([]domain.SuiteRevisionMeta, error) {
+	meta := domain.SuiteRevisionMeta{
+		ID: f.revision.ID, VersionNo: f.revision.VersionNo, Status: f.revision.Status,
+		ResourceKind: f.revision.ResourceKind, CreatedBy: f.revision.CreatedBy,
+	}
+	for _, c := range f.revision.Cases {
+		if c.Enabled {
+			meta.EnabledCaseCount++
+		}
+	}
+	if meta.ID == "" {
+		return nil, nil
+	}
+	return []domain.SuiteRevisionMeta{meta}, nil
+}
+
 // The four draft-management methods exist so the fake satisfies
 // port.SuiteRepository; UpdateDraftCase mutates the fake's revision to
 // exercise UpdateDraftCase on the service.
