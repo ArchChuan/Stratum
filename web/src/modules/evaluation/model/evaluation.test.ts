@@ -21,6 +21,8 @@ import {
   monitorResourceSummarySchema,
   monitorResourcesPageSchema,
   monitorTrendSchema,
+  suiteRevisionMetaSchema,
+  suiteSummarySchema,
 } from './evaluation';
 
 describe('evaluation model', () => {
@@ -319,5 +321,50 @@ describe('evaluation monitor schemas', () => {
     const page = monitorResourcesPageSchema.parse({ items, window: { from: 'a', to: 'b' } });
     expect(page.items).toHaveLength(20);
     expect(page.items[0].resource_id).toBe('skill-0');
+  });
+});
+
+describe('suite management schemas', () => {
+  it('parses the enhanced suite list row with active/draft version meta', () => {
+    const parsed = suiteSummarySchema.parse({
+      id: 'suite-1', name: '投诉基线', description: '', resource_kind: 'skill', status: 'active',
+      active_revision_id: 'rev-v3', draft_revision_id: 'rev-draft',
+      active_version_no: 3, draft_version_no: 0, active_case_count: 7, draft_case_count: 2,
+      created_by: 'user-1', created_at: '2026-09-01T00:00:00Z',
+    });
+    expect(parsed.active_version_no).toBe(3);
+    expect(parsed.active_case_count).toBe(7);
+    expect(parsed.resource_kind).toBe('skill');
+  });
+
+  it('parses a legacy suite list row that omits the S1-2 additive keys', () => {
+    const parsed = suiteSummarySchema.parse({
+      id: 'suite-legacy', name: '旧基线', description: '历史遗留', status: 'published',
+      created_by: 'user-1', created_at: '2026-08-01T00:00:00Z',
+    });
+    expect(parsed.active_version_no).toBeUndefined();
+    expect(parsed.resource_kind).toBeUndefined();
+  });
+
+  it('rejects an unknown key on the strict suite list row', () => {
+    expect(() => suiteSummarySchema.parse({
+      id: 's', name: 'n', description: '', status: 'published', created_at: '2026-08-01T00:00:00Z', extra: true,
+    })).toThrow();
+  });
+
+  it('parses the lightweight version chain rows with nullable published_at', () => {
+    const published = suiteRevisionMetaSchema.parse({
+      id: 'rev-v2', version_no: 2, status: 'published', resource_kind: 'skill',
+      created_by: 'user-1', published_at: '2026-08-20T00:00:00Z', enabled_case_count: 7,
+    });
+    expect(published.version_no).toBe(2);
+    expect(published.published_at).toBe('2026-08-20T00:00:00Z');
+    const draft = suiteRevisionMetaSchema.parse({
+      id: 'rev-draft', status: 'draft', resource_kind: 'skill',
+      created_by: 'user-1', enabled_case_count: 2,
+    });
+    expect(draft.version_no).toBeUndefined();
+    expect(draft.published_at).toBeUndefined();
+    expect(draft.status).toBe('draft');
   });
 });

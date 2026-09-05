@@ -319,13 +319,43 @@ export type ResourceSummary = z.infer<typeof resourceSummarySchema>;
 export const resourcePageSchema = page(resourceSummarySchema);
 export type ResourcePage = z.infer<typeof resourcePageSchema>;
 
+// suiteSummarySchema 是评测集列表行（GET /evaluations/suites）。S1-2 起后端在
+// 原 suite 字段上叠加当前 active/draft revision 的 kind/版本号/启用 case 数；
+// omitempty 使 legacy 套件可缺省这些键，故全部 optional。active_case_count /
+// draft_case_count 与 SuiteRevisionMeta.enabled_case_count 同口径（启用 case 数）。
 export const suiteSummarySchema = z.object({
   id: z.string(), name: z.string(), description: z.string(), status: z.string(),
+  resource_kind: resourceKindSchema.optional(),
+  active_revision_id: z.string().optional(),
+  draft_revision_id: z.string().optional(),
+  active_version_no: z.number().optional(),
+  draft_version_no: z.number().optional(),
+  active_case_count: z.number().optional(),
+  draft_case_count: z.number().optional(),
   created_by: z.string().optional(), created_at: z.string(),
 }).strict();
 export const suitePageSchema = page(suiteSummarySchema);
 export type SuiteSummary = z.infer<typeof suiteSummarySchema>;
 export type SuitePage = z.infer<typeof suitePageSchema>;
+
+// suiteDetailSchema 是 GET /suites/:id 顶部元信息，字段集与增强后的列表行一致
+// （kind/status 由当前 active/draft revision 聚合而来，无 revision 的 legacy 空套件
+// 可能缺省 kind）。
+export const suiteDetailSchema = suiteSummarySchema;
+export type SuiteDetail = SuiteSummary;
+
+// suiteRevisionMetaSchema 是 GET /suites/:id/versions 的轻量版本行：不含 case 正文。
+// version_no 草稿为 0（未分配版本号）；published_at 已发布才有值。
+export const suiteRevisionMetaSchema = z.object({
+  id: z.string(),
+  version_no: z.number().optional(),
+  status: z.string(),
+  resource_kind: resourceKindSchema.optional(),
+  created_by: z.string().optional(),
+  published_at: z.string().nullable().optional(),
+  enabled_case_count: z.number().optional(),
+}).strict();
+export type SuiteRevisionMeta = z.infer<typeof suiteRevisionMetaSchema>;
 
 export const runSummarySchema = z.object({
   id: z.string(), resource_id: z.string(), revision_id: z.string(), status: z.string(),

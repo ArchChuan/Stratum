@@ -21,13 +21,17 @@ import {
   experimentPageSchema,
   resourcePageSchema,
   runPageSchema,
+  suiteDetailSchema,
   suitePageSchema,
+  suiteRevisionMetaSchema,
   timelinePageSchema,
   type EvaluationCenterFilters,
   type EvaluationCommand,
   type GenerateResult,
   type ResourceKind,
+  type SuiteDetail,
   type SuiteRevision,
+  type SuiteRevisionMeta,
   resourceRefSchema,
   candidateCommandResponseSchema,
   experimentCommandResponseSchema,
@@ -115,6 +119,47 @@ export const evaluationApi = {
     if (session) payload.session = session;
     const response = await api.put(`/evaluations/suites/${suiteId}/draft/cases/${caseId}`, payload);
     return evaluationCaseSchema.parse(response.data);
+  },
+  // —— 评测集独立管理页端点（GET 读放开，写 requireAdmin）——
+  getSuiteDetail: async (suiteId: string): Promise<SuiteDetail> => {
+    const response = await api.get(`/evaluations/suites/${encodeURIComponent(suiteId)}`);
+    return suiteDetailSchema.parse(response.data);
+  },
+  // listSuiteVersions 返回轻量版本链（published 在前、draft 最后）；无 case 正文。
+  listSuiteVersions: async (suiteId: string): Promise<SuiteRevisionMeta[]> => {
+    const response = await api.get(`/evaluations/suites/${encodeURIComponent(suiteId)}/versions`);
+    return z.array(suiteRevisionMetaSchema).parse(response.data);
+  },
+  // getSuiteRevision 装载指定版本完整 case 正文（含会话剧本）供只读展示。
+  getSuiteRevision: async (suiteId: string, revisionId: string): Promise<SuiteRevision> => {
+    const response = await api.get(
+      `/evaluations/suites/${encodeURIComponent(suiteId)}/versions/${encodeURIComponent(revisionId)}`,
+    );
+    return suiteRevisionSchema.parse(response.data);
+  },
+  // addDraftCase 追加一个手写用例到草稿。载荷与 create-suite 单 case 结构同构
+  // （gen.EvaluationCaseRequest 的 snake_case 字段）；会话剧本 case 由调用方带
+  // session 并省略 input。成功返回 201 的完整 case。
+  addDraftCase: async (suiteId: string, data: {
+    name: string; input?: unknown; expected_output: unknown;
+    assertion_mode: 'exact' | 'contains' | 'regex' | 'judge'; enabled: boolean;
+    judge_spec?: { model?: string; rubric?: string };
+    tool_spec?: { must_call?: string[]; must_not_call?: string[]; order?: string[]; max_calls?: number };
+    step_judge?: { criteria?: string };
+    session?: SessionScript;
+  }): Promise<EvaluationCase> => {
+    const response = await api.post(`/evaluations/suites/${encodeURIComponent(suiteId)}/draft/cases`, data);
+    return evaluationCaseSchema.parse(response.data);
+  },
+  // deleteDraftCase 从草稿删除一个 case（204 空体）；后端对 case 不在当前草稿 fail-closed。
+  deleteDraftCase: async (suiteId: string, caseId: string): Promise<void> => {
+    await api.delete(`/evaluations/suites/${encodeURIComponent(suiteId)}/draft/cases/${encodeURIComponent(caseId)}`);
+  },
+  // startNextDraft 保证套件存在可编辑草稿：已有草稿幂等返回；legacy（已发布无草稿）
+  // 从当前 active revision 继承 cases 补建。返回草稿 revision。
+  startNextDraft: async (suiteId: string): Promise<SuiteRevision> => {
+    const response = await api.post(`/evaluations/suites/${encodeURIComponent(suiteId)}/draft`);
+    return suiteRevisionSchema.parse(response.data);
   },
   enqueueRun: async (resource: ResourceRef, suiteRevisionId: string, idempotencyKey: string): Promise<EvaluationJob> => {
     const response = await api.post('/evaluations/runs', {
