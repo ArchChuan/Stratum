@@ -2,6 +2,8 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { SuiteSummary } from '../model/evaluation';
+
 import { EvaluationCenterPage } from './EvaluationCenterPage';
 
 const center = vi.hoisted(() => ({
@@ -16,7 +18,7 @@ const center = vi.hoisted(() => ({
     { id: 'r4', resource_id: 'knowledge-1', resource_kind: 'knowledge', status: 'active', stable_revision_id: 'knowledge-v1',
       safe_summary: { name: '产品知识库' }, created_at: '2026-07-23T00:00:00Z' },
   ] },
-  suites: { items: [] }, runs: { items: [] }, candidates: { items: [] }, experiments: { items: [{
+  suites: { items: [] as SuiteSummary[] }, runs: { items: [] }, candidates: { items: [] }, experiments: { items: [{
     id: 'experiment-1', resource_id: 'agent-1', stable_revision_id: 'stable-1', canary_revision_id: 'canary-1',
     status: 'running', recommendation: 'promote', resource_kind: 'agent', stage_percent: 100, safety_stopped: false,
     state_version: 2, promotion_evidence: { eligible: true, gates: { quality: 'passed', cost: 'passed',
@@ -55,11 +57,17 @@ vi.mock('../api/evaluation.api', async () => {
 
 const emptyMonitorWindow = { items: [], window: { from: '2026-08-27T00:00:00Z', to: '2026-09-03T00:00:00Z' } };
 
+const suiteFixture: SuiteSummary = {
+  id: 'suite-1', name: '投诉分类基线', description: '技能检索基线', status: 'published', resource_kind: 'skill',
+  active_version_no: 2, active_case_count: 5, created_by: 'admin', created_at: '2026-07-23T00:00:00Z',
+};
+
 const LocationProbe = () => {
   const location = useLocation();
   const navigate = useNavigate();
   return <>
     <output aria-label="当前查询参数">{location.search}</output>
+    <output aria-label="当前路径">{location.pathname}</output>
     <button type="button" onClick={() => navigate(-1)}>返回</button>
   </>;
 };
@@ -76,7 +84,11 @@ const renderPage = (entry = '/evaluations') => {
 };
 
 describe('EvaluationCenterPage', () => {
-  beforeEach(() => { center.canManageEvaluation = true; useCenter.mockClear(); });
+  beforeEach(() => {
+    center.canManageEvaluation = true;
+    center.suites.items = [];
+    useCenter.mockClear();
+  });
 
   it('exposes only the three primary first-viewport decisions', () => {
     renderPage();
@@ -139,18 +151,28 @@ describe('EvaluationCenterPage', () => {
     })));
   });
 
-  it('exposes suite authoring through the suites tab for admins', () => {
+  it('directs suite management from the suites tab to the dedicated list page for admins', () => {
     renderPage();
     fireEvent.click(screen.getByRole('tab', { name: '套件 0' }));
-    expect(screen.getByRole('button', { name: /新建套件/ })).toBeInTheDocument();
-    expect(screen.getByText('套件还是空的')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /管理评测集/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /管理评测集/ }));
+    expect(screen.getByRole('status', { name: '当前路径' })).toHaveTextContent('/evaluations/suites');
   });
 
-  it('hides suite authoring for members', () => {
+  it('hides suite management for members while the read-only hint remains', () => {
     center.canManageEvaluation = false;
     renderPage();
     fireEvent.click(screen.getByRole('tab', { name: '套件 0' }));
-    expect(screen.queryByRole('button', { name: /新建套件/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /管理评测集/ })).not.toBeInTheDocument();
+    expect(screen.getByText('套件还是空的（仅管理员可管理）')).toBeInTheDocument();
+  });
+
+  it('navigates to the suite detail route when a row is opened from the suites tab', () => {
+    center.suites.items = [suiteFixture];
+    renderPage();
+    fireEvent.click(screen.getByRole('tab', { name: '套件 1' }));
+    fireEvent.click(screen.getByRole('button', { name: '打开' }));
+    expect(screen.getByRole('status', { name: '当前路径' })).toHaveTextContent('/evaluations/suites/suite-1');
   });
 
   it('enables promotion from the real eligible experiment summary shape', () => {
