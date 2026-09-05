@@ -402,6 +402,22 @@ type fakeSuiteService struct {
 	tenantID    string
 	suiteID     string
 	caseID      string
+
+	// S1-3 扩展：详情/版本/加删草稿 case/开启草稿/单版本读取。
+	detail     domain.SuiteDetail
+	detailErr  error
+	metas      []domain.SuiteRevisionMeta
+	metasErr   error
+	revByID    domain.EvalSuiteRevision
+	revByIDErr error
+	revisionID string
+	addedCase  domain.EvalCase
+	addCaseReq domain.EvalCase
+	addCaseErr error
+	deletedID  string
+	deleteErr  error
+	started    domain.EvalSuiteRevision
+	startErr   error
 }
 
 func (f *fakeSuiteService) Create(_ context.Context, _ string, input application.CreateSuiteInput) (domain.EvalSuite, domain.EvalSuiteRevision, error) {
@@ -422,6 +438,36 @@ func (f *fakeSuiteService) UpdateDraftCase(_ context.Context, tenantID, suiteID,
 	f.tenantID, f.suiteID, f.caseID = tenantID, suiteID, caseID
 	f.updatedReq = testCase
 	return f.updated, f.updateErr
+}
+
+func (f *fakeSuiteService) GetSuiteDetail(_ context.Context, tenantID, suiteID string) (domain.SuiteDetail, error) {
+	f.tenantID, f.suiteID = tenantID, suiteID
+	return f.detail, f.detailErr
+}
+
+func (f *fakeSuiteService) ListVersions(_ context.Context, tenantID, suiteID string) ([]domain.SuiteRevisionMeta, error) {
+	f.tenantID, f.suiteID = tenantID, suiteID
+	return f.metas, f.metasErr
+}
+
+func (f *fakeSuiteService) GetRevision(_ context.Context, tenantID, revisionID string) (domain.EvalSuiteRevision, error) {
+	f.tenantID, f.revisionID = tenantID, revisionID
+	return f.revByID, f.revByIDErr
+}
+
+func (f *fakeSuiteService) AddDraftCase(_ context.Context, tenantID, suiteID string, testCase domain.EvalCase) (domain.EvalCase, error) {
+	f.tenantID, f.suiteID, f.addCaseReq = tenantID, suiteID, testCase
+	return f.addedCase, f.addCaseErr
+}
+
+func (f *fakeSuiteService) DeleteDraftCase(_ context.Context, tenantID, suiteID, caseID string) error {
+	f.tenantID, f.suiteID, f.deletedID = tenantID, suiteID, caseID
+	return f.deleteErr
+}
+
+func (f *fakeSuiteService) StartNextDraft(_ context.Context, tenantID, suiteID string) (domain.EvalSuiteRevision, error) {
+	f.tenantID, f.suiteID = tenantID, suiteID
+	return f.started, f.startErr
 }
 
 type fakeCaseGen struct {
@@ -999,5 +1045,188 @@ func TestEvaluationHandlerUpdateDraftCaseCarriesSessionScriptToDomain(t *testing
 	}
 	if got.Input != nil {
 		t.Fatalf("session case update should carry no single-turn input, got %v", got.Input)
+	}
+}
+
+// ---- S1-3 suite management page endpoints ----
+
+func TestEvaluationHandlerGetSuiteDetail(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	suites := &fakeSuiteService{detail: domain.SuiteDetail{
+		ID: "suite-1", Name: "投诉分类", ResourceKind: domain.ResourceKindSkill, Status: "published",
+		ActiveRevisionID: "rev-1", DraftRevisionID: "rev-2", ActiveVersionNo: 2, ActiveCaseCount: 8,
+	}}
+	h := NewEvaluationHandler(suites, nil, nil, nil, nil, nil, nil, nil, zap.NewNop())
+	r := gin.New()
+	r.GET("/evaluations/suites/:id", withTenant("tenant-1"), h.GetSuiteDetail)
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/evaluations/suites/suite-1", nil))
+
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"投诉分类"`) ||
+		!strings.Contains(rec.Body.String(), `"resource_kind":"skill"`) {
+		t.Fatalf("unexpected response: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if suites.tenantID != "tenant-1" || suites.suiteID != "suite-1" {
+		t.Fatalf("detail path not propagated: %+v", suites)
+	}
+}
+
+func TestEvaluationHandlerGetSuiteDetailNotFound(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	suites := &fakeSuiteService{detailErr: application.ErrSuiteNotFound}
+	h := NewEvaluationHandler(suites, nil, nil, nil, nil, nil, nil, nil, zap.NewNop())
+	r := gin.New()
+	r.Use(middleware.ErrorHandler(zap.NewNop()))
+	r.GET("/evaluations/suites/:id", withTenant("tenant-1"), h.GetSuiteDetail)
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/evaluations/suites/missing", nil))
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for missing suite, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestEvaluationHandlerListSuiteVersions(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	suites := &fakeSuiteService{metas: []domain.SuiteRevisionMeta{
+		{ID: "rev-1", VersionNo: 2, Status: domain.SuiteRevisionPublished, ResourceKind: domain.ResourceKindSkill},
+		{ID: "rev-2", Status: domain.SuiteRevisionDraft, ResourceKind: domain.ResourceKindSkill},
+	}}
+	h := NewEvaluationHandler(suites, nil, nil, nil, nil, nil, nil, nil, zap.NewNop())
+	r := gin.New()
+	r.GET("/evaluations/suites/:id/versions", withTenant("tenant-1"), h.ListSuiteVersions)
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/evaluations/suites/suite-1/versions", nil))
+
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"rev-1"`) ||
+		!strings.Contains(rec.Body.String(), `"version_no":2`) || !strings.Contains(rec.Body.String(), `"draft"`) {
+		t.Fatalf("unexpected response: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestEvaluationHandlerListSuiteVersionsEmptyArray(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	suites := &fakeSuiteService{}
+	h := NewEvaluationHandler(suites, nil, nil, nil, nil, nil, nil, nil, zap.NewNop())
+	r := gin.New()
+	r.GET("/evaluations/suites/:id/versions", withTenant("tenant-1"), h.ListSuiteVersions)
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/evaluations/suites/suite-1/versions", nil))
+
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `[]`) {
+		t.Fatalf("expected empty-array body, got status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestEvaluationHandlerGetSuiteRevision(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	suites := &fakeSuiteService{revByID: domain.EvalSuiteRevision{
+		ID: "rev-1", SuiteID: "suite-1", Status: domain.SuiteRevisionPublished, VersionNo: 2,
+		ResourceKind: domain.ResourceKindSkill,
+		Cases: []domain.EvalCase{{
+			ID: "case-1", Name: "物流", Input: "快递没更新",
+			ExpectedOutput: "物流查询", AssertionMode: domain.AssertionContains,
+		}},
+	}}
+	h := NewEvaluationHandler(suites, nil, nil, nil, nil, nil, nil, nil, zap.NewNop())
+	r := gin.New()
+	r.GET("/evaluations/suites/:id/versions/:revisionId", withTenant("tenant-1"), h.GetSuiteRevision)
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/evaluations/suites/suite-1/versions/rev-1", nil))
+
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"case-1"`) {
+		t.Fatalf("unexpected response: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if suites.revisionID != "rev-1" || suites.tenantID != "tenant-1" {
+		t.Fatalf("revision path not propagated: %+v", suites)
+	}
+}
+
+func TestEvaluationHandlerStartNextDraft(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	suites := &fakeSuiteService{started: domain.EvalSuiteRevision{
+		ID: "rev-next", SuiteID: "suite-1", Status: domain.SuiteRevisionDraft, ResourceKind: domain.ResourceKindSkill,
+		Cases: []domain.EvalCase{{ID: "case-1", Name: "继承", Input: "q", ExpectedOutput: "a"}},
+	}}
+	h := NewEvaluationHandler(suites, nil, nil, nil, nil, nil, nil, nil, zap.NewNop())
+	r := gin.New()
+	r.POST("/evaluations/suites/:id/draft", withTenant("tenant-1"), h.StartNextDraft)
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/evaluations/suites/suite-1/draft", nil))
+
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"rev-next"`) {
+		t.Fatalf("unexpected response: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if suites.suiteID != "suite-1" || suites.tenantID != "tenant-1" {
+		t.Fatalf("start-next path not propagated: %+v", suites)
+	}
+}
+
+func TestEvaluationHandlerAddDraftCaseDefaultsEnabledAndMapsConfig(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	suites := &fakeSuiteService{addedCase: domain.EvalCase{ID: "case-new", Name: "物流新"}}
+	h := NewEvaluationHandler(suites, nil, nil, nil, nil, nil, nil, nil, zap.NewNop())
+	r := gin.New()
+	r.POST("/evaluations/suites/:id/draft/cases", withTenant("tenant-1"), h.AddDraftCase)
+
+	rec := httptest.NewRecorder()
+	body := `{"name":"物流新","input":"查单","expected_output":"物流查询","assertion_mode":"contains",
+	  "tool_spec":{"must_call":["track_package"]}}`
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+		"/evaluations/suites/suite-1/draft/cases", strings.NewReader(body)))
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("unexpected status: %d body=%s", rec.Code, rec.Body.String())
+	}
+	if suites.suiteID != "suite-1" || suites.tenantID != "tenant-1" {
+		t.Fatalf("add-case path not propagated: %+v", suites)
+	}
+	got := suites.addCaseReq
+	if got.Name != "物流新" || got.Input != "查单" ||
+		got.AssertionMode != domain.AssertionContains || !got.Enabled {
+		t.Fatalf("add-case request not mapped: %+v", got)
+	}
+	if got.ToolSpec == nil || len(got.ToolSpec.MustCall) != 1 || got.ToolSpec.MustCall[0] != "track_package" {
+		t.Fatalf("tool_spec not mapped through toDomainCase: %+v", got.ToolSpec)
+	}
+}
+
+func TestEvaluationHandlerDeleteDraftCase(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	suites := &fakeSuiteService{}
+	h := NewEvaluationHandler(suites, nil, nil, nil, nil, nil, nil, nil, zap.NewNop())
+	r := gin.New()
+	r.DELETE("/evaluations/suites/:id/draft/cases/:caseId", withTenant("tenant-1"), h.DeleteDraftCase)
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/evaluations/suites/suite-1/draft/cases/case-1", nil))
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("unexpected status: %d body=%s", rec.Code, rec.Body.String())
+	}
+	if suites.deletedID != "case-1" || suites.suiteID != "suite-1" {
+		t.Fatalf("delete path not propagated: %+v", suites)
+	}
+}
+
+func TestEvaluationHandlerDeleteDraftCaseNotFound(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	suites := &fakeSuiteService{deleteErr: application.ErrSuiteNotFound}
+	h := NewEvaluationHandler(suites, nil, nil, nil, nil, nil, nil, nil, zap.NewNop())
+	r := gin.New()
+	r.Use(middleware.ErrorHandler(zap.NewNop()))
+	r.DELETE("/evaluations/suites/:id/draft/cases/:caseId", withTenant("tenant-1"), h.DeleteDraftCase)
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/evaluations/suites/suite-1/draft/cases/missing", nil))
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d body=%s", rec.Code, rec.Body.String())
 	}
 }

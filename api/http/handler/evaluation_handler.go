@@ -21,7 +21,13 @@ type evaluationSuiteService interface {
 	Create(ctx context.Context, tenantID string, input evalapp.CreateSuiteInput) (domain.EvalSuite, domain.EvalSuiteRevision, error)
 	Publish(ctx context.Context, tenantID, suiteID string) (domain.EvalSuiteRevision, error)
 	GetDraft(ctx context.Context, tenantID, suiteID string) (domain.EvalSuiteRevision, error)
+	GetRevision(ctx context.Context, tenantID, revisionID string) (domain.EvalSuiteRevision, error)
 	UpdateDraftCase(ctx context.Context, tenantID, suiteID, caseID string, testCase domain.EvalCase) (domain.EvalCase, error)
+	GetSuiteDetail(ctx context.Context, tenantID, suiteID string) (domain.SuiteDetail, error)
+	ListVersions(ctx context.Context, tenantID, suiteID string) ([]domain.SuiteRevisionMeta, error)
+	AddDraftCase(ctx context.Context, tenantID, suiteID string, testCase domain.EvalCase) (domain.EvalCase, error)
+	DeleteDraftCase(ctx context.Context, tenantID, suiteID, caseID string) error
+	StartNextDraft(ctx context.Context, tenantID, suiteID string) (domain.EvalSuiteRevision, error)
 }
 
 type evaluationCaseGenerator interface {
@@ -384,6 +390,113 @@ func (h *EvaluationHandler) UpdateDraftCase(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, updated)
+}
+
+// GetSuiteDetail returns the suite header meta for the detail page: base fields
+// plus the current active/draft version numbers, enabled case counts, resource
+// kind and status aggregated from the revision chain. member 可读。
+func (h *EvaluationHandler) GetSuiteDetail(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	detail, err := h.suites.GetSuiteDetail(c.Request.Context(), tenantID, c.Param("id"))
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, detail)
+}
+
+// ListSuiteVersions returns the lightweight revision chain (published newest
+// first, draft last) without case bodies. member 可读。
+func (h *EvaluationHandler) ListSuiteVersions(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	metas, err := h.suites.ListVersions(c.Request.Context(), tenantID, c.Param("id"))
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	if metas == nil {
+		metas = []domain.SuiteRevisionMeta{}
+	}
+	c.JSON(http.StatusOK, metas)
+}
+
+// GetSuiteRevision returns one revision's full case bodies (single-turn cases
+// with assertion config, session scripts included) for read-only display.
+// member 可读。
+func (h *EvaluationHandler) GetSuiteRevision(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	revision, err := h.suites.GetRevision(c.Request.Context(), tenantID, c.Param("revisionId"))
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, revision)
+}
+
+// StartNextDraft guarantees an editable draft for the suite: returns the
+// existing one, or on a legacy suite (published, no draft) inherits the active
+// revision's cases into a new draft. admin。成功 200 返回（可能带 cases 的）草稿。
+func (h *EvaluationHandler) StartNextDraft(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	draft, err := h.suites.StartNextDraft(c.Request.Context(), tenantID, c.Param("id"))
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, draft)
+}
+
+// AddDraftCase appends one hand-authored case to the suite's draft revision.
+// admin；请求体复用 create-suite 的单 case 结构（gen.EvaluationCaseRequest），
+// 经 toDomainCase 转换后走与 Create/UpdateDraftCase 一致的 authoring 校验。
+func (h *EvaluationHandler) AddDraftCase(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	var req gen.EvaluationCaseRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+	testCase, err := h.suites.AddDraftCase(c.Request.Context(), tenantID, c.Param("id"), toDomainCase(req))
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusCreated, testCase)
+}
+
+// DeleteDraftCase removes one case from the suite's draft revision. admin；
+// 成功 204 空体，失败（case 不在当前草稿/无草稿/套件不存在）交给统一错误中间件。
+func (h *EvaluationHandler) DeleteDraftCase(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	if err := h.suites.DeleteDraftCase(c.Request.Context(), tenantID, c.Param("id"), c.Param("caseId")); err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.Status(http.StatusNoContent)
 }
 
 func (h *EvaluationHandler) EnqueueRun(c *gin.Context) {
