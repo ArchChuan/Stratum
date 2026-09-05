@@ -15,7 +15,6 @@ import { ResourceTable } from '../components/ResourceTable';
 import ReviewPoolPanel from '../components/ReviewPoolPanel';
 import { RunDrawer } from '../components/RunDrawer';
 import { RuntimeHealthTrendPanel } from '../components/RuntimeHealthTrendPanel';
-import { sessionFromForm } from '../components/SessionScriptFields';
 import { SuitesPanel } from '../components/SuitesPanel';
 import { TimelineDrawer } from '../components/TimelineDrawer';
 import { StatusTag, displayLabel, drawerWidth, runDisplayStatus } from '../components/evaluationView';
@@ -32,17 +31,6 @@ const resourceOptions = ['skill', 'agent', 'mcp', 'knowledge'].map((value) => ({
 const statusOptions = ['active', 'proposed', 'promoted', 'running', 'succeeded', 'failed', 'paused'].map((value) => ({ value, label: displayLabel(value) }));
 const command = (version: number, reason: string) => ({ reason, expected_state_version: version,
   idempotency_key: createIdempotencyKey() });
-
-// processFieldsToSpec 把表单过程字段映射为 case 载荷（§6.5）：任一工具断言
-// 字段存在时生成 tool_spec，否则 undefined；step_criteria 存在时生成 step_judge。
-const processFieldsToSpec = (values: {
-  must_call?: string[]; must_not_call?: string[]; tool_order?: string[]; max_calls?: number; step_criteria?: string;
-}) => ({
-  tool_spec: (values.must_call?.length || values.must_not_call?.length || values.tool_order?.length || values.max_calls)
-    ? { must_call: values.must_call, must_not_call: values.must_not_call, order: values.tool_order, max_calls: values.max_calls }
-    : undefined,
-  step_judge: values.step_criteria ? { criteria: values.step_criteria } : undefined,
-});
 
 export const EvaluationCenterPage = () => {
   const navigate = useNavigate();
@@ -158,6 +146,7 @@ export const EvaluationCenterPage = () => {
         () => center.rejectCandidate(value.id, command(value.state_version, '管理员拒绝候选版本')), '候选版本已拒绝')}
       onEvaluate={() => setCandidateEvaluationOpen(true)} />
     <CandidateEvaluationModal open={candidateEvaluationOpen} onClose={() => setCandidateEvaluationOpen(false)}
+      resourceKind={candidate?.resource_kind ?? 'skill'}
       onSubmit={async (suiteRevisionId, idempotencyKey) => {
         if (!candidate) throw new Error('候选版本已不可用');
         try {
@@ -180,17 +169,9 @@ export const EvaluationCenterPage = () => {
     <CreateEvaluationModal open={createOpen} resources={center.resources.items} onClose={() => {
       center.resetCreateEvaluation(); setCreateOpen(false);
     }}
-      onSubmit={async (values, value) => {
+      onSubmit={async (plan) => {
         try {
-          const session = sessionFromForm(values);
-          await center.createEvaluation({ resource: { kind: value.resource_kind, resource_id: value.resource_id,
-            revision_id: value.stable_revision_id || '' }, name: values.name, description: values.description,
-          cases: [{ name: values.case_name, expected_output: values.expected_output,
-            assertion_mode: values.assertion_mode,
-            judge_spec: values.assertion_mode === 'judge'
-              ? { model: values.judge_model, rubric: values.judge_rubric } : undefined,
-            enabled: true, ...processFieldsToSpec(values),
-            ...(session ? { session } : { input: values.input }) }] });
+          await center.createEvaluation(plan);
           message.success({ content: '评测已创建并进入运行队列', duration: 2 });
         } catch (error) {
           message.error({ content: error instanceof Error ? error.message : '创建评测失败', duration: 3 });

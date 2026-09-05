@@ -107,20 +107,22 @@ describe('EvaluationCenterPage', () => {
     expect(screen.getByText('观测事实')).toBeInTheDocument();
   });
 
-  it('creates a suite and baseline run then refreshes through the center hook', async () => {
+  it('creates an inline suite under create mode and forwards the plan to the center hook', async () => {
     center.createEvaluation.mockResolvedValue({ job_id: 'job-1', status: 'queued' });
     renderPage();
     fireEvent.click(screen.getByRole('button', { name: /新建评测/ }));
+    fireEvent.click(screen.getByRole('radio', { name: '新建评测集' }));
     fireEvent.mouseDown(screen.getByRole('combobox', { name: '目标资源' }));
     expect(await screen.findByText('检索 MCP（mcp-1）')).toBeInTheDocument();
     expect(screen.getByText('产品知识库（knowledge-1）')).toBeInTheDocument();
     fireEvent.click(await screen.findByText('客服 Agent（agent-1）'));
-    fireEvent.change(screen.getByLabelText('评测名称'), { target: { value: '客服基线评测' } });
+    fireEvent.change(screen.getByLabelText('评测集名称'), { target: { value: '客服基线评测' } });
     fireEvent.change(screen.getByLabelText('用例名称'), { target: { value: '标准问候' } });
     fireEvent.change(screen.getByLabelText('测试输入'), { target: { value: '你好' } });
     fireEvent.change(screen.getByLabelText('期望输出'), { target: { value: '您好' } });
     fireEvent.click(screen.getByRole('button', { name: '创建并运行' }));
     await waitFor(() => expect(center.createEvaluation).toHaveBeenCalledWith(expect.objectContaining({
+      mode: 'create',
       resource: expect.objectContaining({ kind: 'agent', resource_id: 'agent-1', revision_id: 'agent-v1' }),
       name: '客服基线评测',
       cases: [expect.objectContaining({ tool_spec: undefined, step_judge: undefined })],
@@ -131,9 +133,10 @@ describe('EvaluationCenterPage', () => {
     center.createEvaluation.mockResolvedValue({ job_id: 'job-1', status: 'queued' });
     renderPage();
     fireEvent.click(screen.getByRole('button', { name: /新建评测/ }));
+    fireEvent.click(screen.getByRole('radio', { name: '新建评测集' }));
     fireEvent.mouseDown(screen.getByRole('combobox', { name: '目标资源' }));
     fireEvent.click(await screen.findByText('客服 Agent（agent-1）'));
-    fireEvent.change(screen.getByLabelText('评测名称'), { target: { value: '工具链路评测' } });
+    fireEvent.change(screen.getByLabelText('评测集名称'), { target: { value: '工具链路评测' } });
     fireEvent.change(screen.getByLabelText('用例名称'), { target: { value: '查天气' } });
     fireEvent.change(screen.getByLabelText('测试输入'), { target: { value: '北京天气' } });
     fireEvent.change(screen.getByLabelText('期望输出'), { target: { value: '晴天' } });
@@ -144,6 +147,8 @@ describe('EvaluationCenterPage', () => {
     fireEvent.change(screen.getByLabelText('步骤判定标准'), { target: { value: '逐步评分' } });
     fireEvent.click(screen.getByRole('button', { name: '创建并运行' }));
     await waitFor(() => expect(center.createEvaluation).toHaveBeenCalledWith(expect.objectContaining({
+      mode: 'create',
+      resource: expect.objectContaining({ kind: 'agent', resource_id: 'agent-1' }),
       cases: [expect.objectContaining({
         tool_spec: { must_call: ['weather'] },
         step_judge: { criteria: '逐步评分' },

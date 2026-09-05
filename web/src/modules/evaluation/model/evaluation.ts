@@ -431,6 +431,19 @@ export interface EvaluationCenterFilters {
   limit?: number;
 }
 
+// CreateEvaluationPlan 是「新建一次评测 run」的三态执行计划（S3 产品决策）：
+// resource 恒为带稳定基线 revision 的目标资源行——离线评测跑在已发布稳定版本上，
+// 由页面在下发命令前保证 revision 有效。
+//  - published：目标评测集已有已发布版本，直接用该 revision 排队 run（纯读，不产生写）。
+//  - unpublished：目标评测集只有未发布草稿（从未 publish），先把 draft publish 成 v1 再跑。
+//  - create：内联新建含起始 case 的评测集 → publish v1 → 跑（旧「内联 1 case 即跑」升级版，
+//     suite 成为详情页可继续补 case/再发布的复用对象）。
+// 幂等 / in-flight 去重由 useEvaluationCenter 按计划指纹 + idempotency_key 处理。
+export type CreateEvaluationPlan =
+  | { mode: 'published'; resource: ResourceRef; suiteId: string; revisionId: string }
+  | { mode: 'unpublished'; resource: ResourceRef; suiteId: string }
+  | { mode: 'create'; resource: ResourceRef; name: string; description?: string; cases: EvaluationCase[] };
+
 // —— 评测指标监控面板（spec 2026-09-03 §4.2）——
 
 // qualityDimSchema 单 judge 语义维度的窗口聚合；仅在实际观测到样本时出现。
