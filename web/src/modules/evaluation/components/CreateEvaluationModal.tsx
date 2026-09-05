@@ -95,7 +95,7 @@ export const CreateEvaluationModal = ({ open, resources, onClose, onSubmit }: {
       resource_id: resource.resource_id,
       revision_id: resource.stable_revision_id,
     };
-    const plan: CreateEvaluationPlan = mode === 'create'
+    const plan: CreateEvaluationPlan | null = mode === 'create'
       ? { mode: 'create', resource: ref, name: values.name ?? '', description: values.description,
         cases: [formValuesToCase(values)] }
       : pick
