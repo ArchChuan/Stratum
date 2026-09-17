@@ -215,7 +215,9 @@ data: <d>
 
 **`id:` 保持为逐字的 Redis 游标**，可直接喂给 `XRANGE key (1726483200000-37 +`，无需编解码。
 
-**哪些帧进流**：恢复键 / token / delegate 进度 / done / error / approval_required **进流**；`: heartbeat` 注释帧**不进流**（纯传输层保活，由订阅侧本地 tick 生成，`SSEHeartbeatInterval` 不变）。规则：**流承载语义事件，心跳是订阅侧的本地职责。**
+**哪些帧进流**：meta / token / delegate 进度 / done / error / approval_required **进流**；`: heartbeat` 注释帧**不进流**（纯传输层保活，由订阅侧本地 tick 生成，`SSEHeartbeatInterval` 不变）；reset 由订阅侧合成（见 §6.6）。规则：**流承载 run 的语义产出，传输层保活与游标翻译都是订阅侧的本地职责。**
+
+**心跳有两种，不要混淆**：面向客户端的 SSE `: heartbeat` 注释帧（传输层保活），以及面向 runner 的 `{"type":"viewer"}` 控制消息（见 §7.1，用于孤儿判定）。两者都搭同一个 5s tick，但走不同通道、语义完全无关。
 
 ### 6.4 游标协议
 
@@ -226,7 +228,7 @@ data: <d>
 { "execution_id": "...", "generation": 1, "last_event_id": "1726483200000-37" }
 ```
 
-`generation` 从每次订阅的**首帧**获得——扩展已有恢复键帧：
+`generation` 从每次订阅的**首帧**获得——扩展已有恢复键帧（事件名 `meta`）：
 
 ```jsonc
 { "execution_id": "...", "generation": 1 }   // 今天只有 execution_id
@@ -253,7 +255,7 @@ F5 后 React 状态全部丢失，且 assistant 消息**不在数据库里**（`
 | 场景 | React 状态 | 发什么游标 | 服务端行为 | 视觉 |
 |---|---|---|---|---|
 | 网络抖动（`agent.api.ts` 内部自动重连） | 存活，已渲染 N 字符 | `last_event_id` | **增量**回放 | 真·无缝，无重复 |
-| F5 / 重开页 | 丢失 | **不发**（只发 `generation`） | **全量**回放当前 gen | 毫秒级瞬间补全，然后继续流式 |
+| F5 / 重开页 | 丢失 | **不发 `last_event_id`**（只发 `generation`） | **全量**回放当前 gen | 毫秒级瞬间补全，然后继续流式 |
 | 跨 generation（pod 重启） | 任意 | gen 不匹配 | reset + 全量回放新 gen | 清空重渲染 |
 
 **所以游标不是持久化状态，是会话内状态。** sessionStorage 只放 `{executionId, generation}`。
@@ -266,6 +268,8 @@ F5 后 React 状态全部丢失，且 assistant 消息**不在数据库里**（`
 { "reset": true, "generation": 2, "reason": "generation_changed" | "stream_lost" }
 ```
 
+**reset 由订阅侧合成，不写入流**——它是订阅者对「游标与当前 generation 不匹配」的翻译，不是 run 的产出。
+
 前端收到 → 清空当前 assistant 气泡 → 从头渲染后续 token。**这是全协议里唯一的新概念**，只在 pod 真重启 / 租约真过期时出现。
 
 裁剪产生缺口时（游标早于现存最老 entry）同样按 `stream_lost` 发 reset，**不发带洞的文本**。
@@ -276,16 +280,17 @@ F5 后 React 状态全部丢失，且 assistant 消息**不在数据库里**（`
 |---|---|---|
 | `AgentStreamTTL` | 1h | `pkg/constants/agent.go` |
 | `AgentStreamMaxLen` | 20000（`MAXLEN ~` 近似裁剪） | 同上 |
+| `AgentExecutionLeaseTTL` | 30s（续租 interval = 10s = `TTL/3`） | 同上 |
+| `AgentViewerTimeout` | 15s（viewer 无心跳即摘除） | 同上 |
 | `AgentExecutionOrphanTimeout` | 2min | 同上 |
-| 租约时长 | 具体值在实施计划中定 | 同上 |
 
-TTL 在流创建时设一次，由 runner 已有心跳 tick（`lease/3`）搭车 `EXPIRE`，订阅者 attach 时也续一次。**不新增定时器。**
+TTL 在流创建时设一次，由 runner 已有心跳 tick（续租 interval）搭车 `EXPIRE`，订阅者 attach 时也续一次。**不新增定时器。**
 
 ### 6.8 事件清单与命名
 
 后端今天只给 `approval_required` 起名，其余靠前端嗅探 data 字段（`onExecutionId` 找 `execution_id`、`onDone` 找 `done`）。
 
-**建议给所有事件起名**（`meta` / `token` / `delegate` / `done` / `error` / `approval_required` / `reset`）。**加 `event:` 行是纯增量**——今天的前端忽略它，行为完全不变。前端是否改按名分发是独立决策，不阻塞本改造。
+**决定给所有事件起名**（`meta` / `token` / `delegate` / `done` / `error` / `approval_required` / `reset`）。**加 `event:` 行是纯增量**——今天的前端忽略它，行为完全不变，因此排在 PR 3 而不阻塞前两片。前端是否改按名分发是独立决策。
 
 ## 7. 生命周期
 
@@ -298,12 +303,14 @@ TTL 在流创建时设一次，由 runner 已有心跳 tick（`lease/3`）搭车
 | `{"type":"viewer"}` | 订阅者 | 复用已有 5s 心跳 tick（`SSEHeartbeatInterval`）搭车发送 |
 | `{"type":"cancel"}` | controller | 用户点「停止生成」 |
 
-runner 维护 `map[viewerID]lastSeen`，本地判断：
+runner 维护 `map[viewerID]lastSeen`。**viewerID 由订阅者为每条 SSE 连接生成唯一的随机串，不接受客户端提供**——客户端可控的 ID 可以被伪造，用同一个 ID 反复续期就能永久压制孤儿计时。本地判断：
 
 - **孤儿计时**：`len(活跃 viewer) == 0` 持续 `AgentExecutionOrphanTimeout` → 自取消。viewer 15s 无心跳即摘除——**崩溃/断网自然过期，runner 不需要查询 Redis**
 - **取消**：收到 `cancel` → 立刻 cancel run
 
 收益三合一：**零额外连接**（订阅者复用已有心跳 tick，runner 复用已有订阅连接）、**零 SCAN / 零查询**、**取消延迟 <1s**（不像轮询租约要等 10s）。
+
+runner **必须在开跑前就订阅好控制通道**，否则会漏掉早到的 viewer 消息。**实现注意**：go-redis 的 `Subscribe` 独占一条连接，Pub/Sub 与 Stream 命令不能共用同一个 `*PubSub` 句柄，控制通道要用独立的 `Client` 实例。
 
 **安全边界**：Pub/Sub 通道**不承载鉴权**——发布前必须在 HTTP 层校验 actor 对该 execution 有所有权。
 
@@ -449,7 +456,7 @@ const finalContent = streamResult.output || accumulatedContent;
 1. A 跑期间，B 用同一 `execution_id` attach → **B 收到 token**
 2. **LLM 调用次数 == 1** —— 「没有重新生成」的直接证据，本次改造的北极星
 3. A 的 HTTP 断开后 run **继续跑**（未被 cancel）
-4. B attach 后 A 的 viewer 集合非空 → 孤儿计时**不**启动
+4. A 断开、B attach 之后，runner 的 viewer 集合仍非空 → 孤儿计时**不**启动
 
 **本地即可运行**：`make infra-up` 起 PG/Redis，跑两个 `cmd/server`（不同端口、同一套依赖）。符合「E2E 优先本地 Docker」。
 
@@ -490,7 +497,9 @@ R3 → `make test-verify-before-pr` + soak（`STATEFUL_E2E_PROFILE=test STATEFUL
 
 **停止按钮必须在 PR 1**：去掉 `cancel()` 之后「断连即停」的保护没了，若 PR 1 上线时无手动停止入口，用户开了长回答只能干等 2 分钟——不可接受的体验倒退。
 
-每片均为 R3，各自走完整门槛。
+**PR 1 不修故障 2**（§2.3 的抖动重复）：前端仍不发游标 → 服务端仍是全量回放 → 前端仍是非空 `content` 追加。行为与今天相同，**不变差也不变好**；修复在 PR 2。
+
+每片均为 R3，各自走完整门槛。**实施计划先覆盖 PR 1**；PR 2 / PR 3 待 PR 1 合入后另行出计划（PR 2 依赖 PR 1 已上线的 wire 协议）。
 
 ## 13. 明确不做（YAGNI）
 
@@ -507,7 +516,7 @@ R3 → `make test-verify-before-pr` + soak（`STATEFUL_E2E_PROFILE=test STATEFUL
 - `pkg/storage/tenantnaming/redis.go`
 - `pkg/storage/redis/stream.go`
 - `pkg/storage/redis/stream_test.go`
-- `internal/agent/domain/port/` 中的流存储端口
+- `internal/agent/domain/port/agent_stream.go`（流存储端口；按 DDD 分层由消费方定义）
 - agent 流相关的常量（`pkg/constants/agent.go` 追加）
 
 ### 修改
