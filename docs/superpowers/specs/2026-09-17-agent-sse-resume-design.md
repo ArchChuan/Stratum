@@ -473,11 +473,19 @@ const finalContent = streamResult.output || accumulatedContent;
 | 跨租户 `execution_id` | 404，不区分「不存在/不属于你」 |
 | 无订阅者 2 分钟 | run 被取消，checkpoint 保留 |
 
-### 11.4 契约
+### 11.4 契约（已修正：不改 proto）
 
-`proto/agent/agent.proto:32` 的 `ExecuteAgentRequest` 是流式请求体的唯一事实源（前端 `ExecuteAgentPayload extends GenExecuteAgentRequest`，`model/agent.ts:318`）。需加 `generation`、`last_event_id`，以及 stop 端点的新请求消息。改完 `make proto-gen`；`api/http/contract_test.go` + golden 更新。
+**本节初稿的判断有误**，实施前取证推翻，记录于此避免重犯：
 
-绕过 make 直接 `go test` 会 import 失败，属预期约束。
+`proto/agent/agent.proto:32` 的 `ExecuteAgentRequest` **不是**流式请求体的事实源。它的生成物 `gen.ExecuteAgentRequest` **零生产引用**（`grep -rn "gen\.ExecuteAgentRequest" --include='*.go' .` 无命中），是死代码。agent execute 路由实际绑定的请求体是**手写**结构体 `api/http/handler/agent_dto.go:96`，绑定点在 `agent_exec_handler.go:34` / `:119` 的 `c.ShouldBindJSON`。
+
+因此 PR 1 的契约改动是：
+
+- `generation`、`last_event_id` **加到手写结构体**，与既有的 `conversation_id` / `execution_id` / `options` 同属 wire-only 字段；前端按 `model/agent.ts:314-322` 既有方式手写声明。
+- **不改 proto。** 改 proto 反而有额外成本：`cmd/protoc-gen-ginstruct/testdata/production-snapshots/agent.proto.golden.go` **入库**且被 `TestProductionProtoSnapshots` 逐字节比对，改 proto 必须跑 `go test ./cmd/protoc-gen-ginstruct -run TestProductionProtoSnapshots -update` 重写基线。为一个无人消费的 message 付字节级快照成本不划算。
+- `scripts/quality/dto-residue-guard.sh` **不构成阻碍**：它只查「`api/http/dto/` 顶层无手写 `.go`」「无旧 dto 包 import」「`web/src/modules` 不重现 4 个已迁移类型名」，**不做字段级双向一致性校验**。
+
+**必须如实记录的护栏现状**：agent execute 的 golden（`post_agents__id_execute_stream.golden.json`）**只有一条 401 用例**，断言只看 `want_status` / `want_body`，新增请求字段**不会**让 `TestContracts` 变红。即这条路径上 CI 的护栏是「生成器不漂移」，**不是**「字段契约」。所以 stop 端点必须显式补一条有内容断言的 golden（PR 1 任务 13），否则新端点在契约层是裸的。
 
 ### 11.5 验收门槛
 
@@ -491,7 +499,7 @@ R3 → `make test-verify-before-pr` + soak（`STATEFUL_E2E_PROFILE=test STATEFUL
 
 | PR | 内容 | 效果 | 前端 |
 |---|---|---|---|
-| **1**<br>后端续传内核 | proto 字段、`tenantnaming/redis.go`、`StreamStore`、`lease_expires_at` 列 + 租约 CAS、去掉 `cancel()`、订阅侧三分支、控制通道、孤儿超时、`sse_writer` 的 `id:` 行、停止端点 + **停止按钮 UI** | F5 无缝（回放而非重生成）；双跑修复；停止可用 | 只加停止按钮（F6） |
+| **1**<br>后端续传内核 | `tenantnaming/redis.go`、`StreamStore`、`lease_expires_at` 列 + 租约 CAS、去掉 `cancel()`、订阅侧三分支、控制通道、孤儿超时、`sse_writer` 的 `id:` 行、**wire-only 请求字段**（不改 proto）、停止端点 + **停止按钮 UI** | F5 无缝（回放而非重生成）；双跑修复；停止可用 | 只加停止按钮（F6） |
 | **2**<br>前端游标 | F1–F5 | 自动重连从「重复」→「无缝」 | 纯前端，**零后端改动** |
 | **3**<br>事件命名 | 后端给所有事件起名（§6.8）；前端可选切按名分发 | 协议可读性 | 可选 |
 
@@ -513,20 +521,22 @@ R3 → `make test-verify-before-pr` + soak（`STATEFUL_E2E_PROFILE=test STATEFUL
 
 ### 新增
 
-- `pkg/storage/tenantnaming/redis.go`
-- `pkg/storage/redis/stream.go`
-- `pkg/storage/redis/stream_test.go`
-- `internal/agent/domain/port/agent_stream.go`（流存储端口；按 DDD 分层由消费方定义）
+- `pkg/storage/tenantnaming/redis.go`（`TenantKey`，照 `nats.go` 的 `TenantSubject` 形状，fail closed）
+- `pkg/storage/redis/stream.go` + `stream_test.go`（通用 Redis Streams 薄封装）
+- `internal/agent/domain/port/agent_stream.go`（`AgentStreamStore` / `AgentControlBus` / `ExecutionLeaseRepo`；按 DDD 分层由消费方定义）
+- `internal/agent/infrastructure/stream/agent_stream_store.go`（端口实现，内含租户命名空间）
+- `internal/agent/infrastructure/stream/control_bus.go`（Pub/Sub；**独立 `*goredis.Client`**）
+- `internal/agent/application/agent_stream_session.go`（订阅会话、viewer 注册、孤儿计时、纯函数 `PlanStream`）
 - agent 流相关的常量（`pkg/constants/agent.go` 追加）
 
 ### 修改
 
-- `proto/agent/agent.proto`
 - `pkg/storage/postgres/tenant_schema.sql`（`lease_expires_at` 列，`IF NOT EXISTS` + 覆盖历史租户）
 - `api/http/handler/agent_exec_handler.go`（去 `cancel()`、订阅化、控制通道、孤儿超时、stop 端点）
+- `api/http/handler/agent_dto.go`（wire-only `generation` / `last_event_id`；**不改 proto**，见 §11.4）
 - `api/http/handler/sse_writer.go`（`id:` 行）
 - `api/http/router.go`（stop 路由）
-- `internal/agent/application/agent_execution.go`、`agent_approval.go`（租约、续跑入口）
-- `internal/agent/infrastructure/persistence/checkpoint_store.go`（Claim / Renew / Fence SQL）
-- `api/wiring/`（StreamStore 装配、可注入时长）
+- `internal/agent/application/agent_execution.go`（`ExecuteStream` 签名：移除 `tokenCb`，改为返回 `StreamRun`；`ExecMeta` 加 `Generation` / `LastEventID`）
+- `internal/agent/infrastructure/persistence/checkpoint_store.go`（Stamp / Claim / Renew / Release 租约 SQL）
+- `api/wiring/`（StreamStore 装配、可注入时长、关闭注册）
 - `web/src/services/client.ts`、`web/src/modules/agent/api/agent.api.ts`、`web/src/modules/agent/hooks/ChatStreamContext.tsx`、`useChatPage.ts`、输入区组件
