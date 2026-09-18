@@ -1,4 +1,4 @@
-// Agent execution path: revision execution, Execute/ExecuteStream,
+// Agent execution path: revision execution, Execute/ExecuteWithDeltas/ExecuteStream,
 // logging and memory-buffer side effects.
 
 package application
@@ -123,10 +123,16 @@ type ExecRequest struct {
 // (tenant, trace) — never inferred from request body.
 
 type ExecMeta struct {
-	TenantID                   string
-	TraceID                    string
-	Stream                     bool
-	ExecutionID                string // optional; generated if empty, used for resume
+	TenantID    string
+	TraceID     string
+	Stream      bool
+	ExecutionID string // optional; generated if empty, used for resume
+	// Generation 是客户端上一次订阅时看到的分代（缺省 0 = 客户端未提供），
+	// 用于判定是否需要 reset（spec §6.4）。
+	Generation int
+	// LastEventID 是客户端内存持有的游标。仅存在于会话内，不跨页面重载——
+	// F5 后前端不发它，服务端因此走全量回放（spec §6.5）。
+	LastEventID                string
 	EvolutionTrace             EvolutionTraceMetadata
 	KnowledgeAssignmentsPinned bool
 	PinnedKnowledgeRevisions   map[string]port.KnowledgeRevisionPin
@@ -327,13 +333,112 @@ func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequ
 	return result, durationMs, err
 }
 
-// ExecuteStream runs an agent with token streaming. tokenCb is invoked
-// per LLM token; it must be safe for concurrent use with this call's
-// goroutine. The returned context carries the per-tenant LLM completer
-// (for inner streaming RAG / tool calls) — transport must use it for
-// the SSE write loop. cancel() releases the per-call deadline.
+// StreamHandle 是一次流式执行的订阅坐标。它不返回 cancel——run 的取消由租约
+// 续租失败、控制通道 stop 消息与孤儿超时三者驱动，订阅侧只读不写（spec §4.2）。
+type StreamHandle struct {
+	ExecutionID string
+	Generation  int
+}
 
+// ExecuteStream 为一条 SSE 请求确定订阅坐标：NEW 建流开跑、租约有效则 TAIL、
+// 租约失效则抢占（CAS 胜者跑，败者 TAIL）。
+//
+// 全部帧（meta/token/delegate/done/error/approval_required）由 runner 写入流，
+// 本方法不再接收 tokenCb——执行侧不再直接写 socket（spec D1）。
 func (s *AgentService) ExecuteStream(
+	ctx context.Context, agentID string, req ExecRequest, meta ExecMeta,
+) (*StreamHandle, error) {
+	if s.deps.StreamStore == nil || s.deps.ControlBus == nil || s.deps.LeaseRepo == nil {
+		return nil, fmt.Errorf("agent: execute stream: stream dependencies not configured")
+	}
+	cfg := s.streamRunnerConfig()
+	executionID := executionIDOrNew(meta.ExecutionID)
+	newExecution := meta.ExecutionID == ""
+
+	if !newExecution {
+		// D4：订阅/续跑前必须做一次租户限定的 checkpoint 查询。查不到 → 404
+		// 语义，且不区分「不存在」与「不属于你」，关闭 existence oracle。
+		cp, err := s.deps.CheckpointStore.GetLatest(ctx, meta.TenantID, executionID)
+		if err != nil {
+			return nil, fmt.Errorf("agent: execute stream: load checkpoint: %w", err)
+		}
+		if cp == nil {
+			return nil, ErrNotFound
+		}
+	}
+
+	generation, startRunner, err := s.settleGeneration(ctx, agentID, req, meta, executionID, newExecution, cfg)
+	if err != nil {
+		return nil, err
+	}
+	if !startRunner {
+		// 别的 runner 持有租约（本 pod 或别的 pod 都一样）：本请求只订阅。
+		return &StreamHandle{ExecutionID: executionID, Generation: generation}, nil
+	}
+	if err := s.launchStreamRunner(ctx, agentID, req, meta, executionID, generation, cfg); err != nil {
+		return nil, err
+	}
+	return &StreamHandle{ExecutionID: executionID, Generation: generation}, nil
+}
+
+// settleGeneration 决定本次请求是「读现有 generation」还是「抢占后开新 generation」。
+// 返回 startRunner=false 表示已有 runner 在跑，本请求只订阅。
+func (s *AgentService) settleGeneration(
+	ctx context.Context, agentID string, req ExecRequest, meta ExecMeta,
+	executionID string, newExecution bool, cfg StreamRunnerConfig,
+) (generation int, startRunner bool, err error) {
+	if newExecution {
+		gen, err := s.deps.LeaseRepo.StampLease(ctx, meta.TenantID, executionID, cfg.LeaseTTL)
+		if err != nil {
+			return 0, false, fmt.Errorf("agent: execute stream: stamp lease: %w", err)
+		}
+		return gen, true, nil
+	}
+
+	status, err := s.deps.LeaseRepo.LeaseStatus(ctx, meta.TenantID, executionID)
+	if err != nil {
+		return 0, false, fmt.Errorf("agent: execute stream: lease status: %w", err)
+	}
+	if status.Active {
+		return status.Generation, false, nil
+	}
+	// 租约失效：CAS 抢占。两个实例同时走到这里，恰好一个拿到新 generation，
+	// 另一个收到 ErrLeaseConflict 并转入 TAIL 读赢家的流（spec §7.2）。
+	claimed, err := s.deps.LeaseRepo.ClaimLease(ctx, meta.TenantID, executionID, status.Generation, cfg.LeaseTTL)
+	if err == nil {
+		return claimed, true, nil
+	}
+	if !errors.Is(err, port.ErrLeaseConflict) {
+		return 0, false, fmt.Errorf("agent: execute stream: claim lease: %w", err)
+	}
+	// 没抢到：重读赢家的 generation 并订阅它。
+	latest, err := s.deps.LeaseRepo.LeaseStatus(ctx, meta.TenantID, executionID)
+	if err != nil {
+		return 0, false, fmt.Errorf("agent: execute stream: lease status after conflict: %w", err)
+	}
+	return latest.Generation, false, nil
+}
+
+func (s *AgentService) streamRunnerConfig() StreamRunnerConfig {
+	cfg := s.deps.StreamRunnerCfg
+	if cfg.LeaseTTL <= 0 {
+		return DefaultStreamRunnerConfig()
+	}
+	return cfg
+}
+
+// ExecuteWithDeltas 是请求绑定的同步流式执行：调用方拿到 run 闭包后自行调用，
+// 并直接得到类型化的 *AgentResult 与错误。它服务于 workflow 节点执行器
+// （internal 之外的 api/wiring/workflow.go），那条路径需要 result.ToolCalls
+// 与 errors.As 可辨识的审批错误，二者的语义都无法从 SSE 帧里重建。
+//
+// 面向 SSE 的续传路径不走这里——它用 ExecuteStream 拿到订阅坐标后只读流。
+//
+// tokenCb 每个 LLM token 调用一次，必须能与本调用的 goroutine 并发使用。返回的
+// context 携带 per-tenant LLM completer（供内层流式 RAG / 工具调用），transport
+// 必须用它做 SSE 写出循环；cancel() 释放 per-call 期限。
+
+func (s *AgentService) ExecuteWithDeltas(
 	ctx context.Context, agentID string, req ExecRequest, meta ExecMeta, tokenCb func(string),
 ) (execCtx context.Context, cancel context.CancelFunc, run func() (*AgentResult, int, error), executionID string, err error) {
 	// 复用调用方传入的 execution_id（断线续接的恢复键）：非空则沿用同一执行
@@ -391,7 +496,7 @@ func (s *AgentService) ExecuteStream(
 	return execCtx, cancel, run, executionID, nil
 }
 
-// prepareAgentExecution 是 Execute/ExecuteStream 的公共准备链：Registry 解析
+// prepareAgentExecution 是 Execute/ExecuteWithDeltas/runner 的公共准备链：Registry 解析
 // Agent → ensure 会话与 init checkpoint → 实验 revision 解析 → 审批续跑抢占并
 // 重写 req/meta → assembleOptions → 追加恢复选项。返回重写后的 req/meta、
 // streamCtx（仅流式使用，供携带 per-tenant LLM completer）、options、cfg、

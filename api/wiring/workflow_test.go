@@ -44,7 +44,7 @@ func (f *workflowAgentServiceFake) ExecuteSkillScenario(_ context.Context, agent
 	return &agentapp.AgentResult{Output: revision}, 10, nil
 }
 
-func (f *workflowAgentServiceFake) ExecuteStream(
+func (f *workflowAgentServiceFake) ExecuteWithDeltas(
 	ctx context.Context,
 	agentID string,
 	req agentapp.ExecRequest,

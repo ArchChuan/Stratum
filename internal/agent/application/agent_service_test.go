@@ -88,7 +88,7 @@ func TestAgentServicePreparationFailureRemainsObservable(t *testing.T) {
 		{
 			name: "execute stream",
 			run: func(ctx context.Context, svc *application.AgentService) error {
-				_, _, _, _, err := svc.ExecuteStream(ctx, "agent-1", application.ExecRequest{
+				_, _, _, _, err := svc.ExecuteWithDeltas(ctx, "agent-1", application.ExecRequest{
 					UserID: "user-1", Query: "use the lookup tool",
 				}, application.ExecMeta{TenantID: "tenant-1", TraceID: "business-trace-1"}, nil)
 				return err
@@ -175,11 +175,11 @@ func (noAgentRevisionResolver) ResolveAgentRevision(context.Context, string, str
 	return port.AgentRevisionAssignment{}, false, nil
 }
 
-// TestAgentService_ExecuteStream_ReusesProvidedExecutionID:断线续接协议要求
-// 服务端沿用调用方恢复键。ExecuteStream 传 meta.ExecutionID 必须原样返回,
+// TestAgentService_ExecuteWithDeltas_ReusesProvidedExecutionID:断线续接协议要求
+// 服务端沿用调用方恢复键。ExecuteWithDeltas 传 meta.ExecutionID 必须原样返回,
 // 前端才能用同一 execution_id 重发续接;此前流式路径无条件新建 execution_id,
 // 带 ID 重发也永不 resume(先决 bug B1)。
-func TestAgentService_ExecuteStream_ReusesProvidedExecutionID(t *testing.T) {
+func TestAgentService_ExecuteWithDeltas_ReusesProvidedExecutionID(t *testing.T) {
 	repo := new(mockAgentRepo)
 	repo.On("Get", mock.Anything, "agent-1").Return(&domain.AgentConfig{
 		ID: "agent-1", Name: "Resume Agent", Type: domain.ReActAgent,
@@ -191,7 +191,7 @@ func TestAgentService_ExecuteStream_ReusesProvidedExecutionID(t *testing.T) {
 		TenantModelValidator:  lenientModelValidator{},
 	})
 
-	execCtx, cancel, run, executionID, err := svc.ExecuteStream(
+	execCtx, cancel, run, executionID, err := svc.ExecuteWithDeltas(
 		context.Background(), "agent-1",
 		application.ExecRequest{UserID: "user-1", Query: "continue the search"},
 		application.ExecMeta{TenantID: "tenant-1", TraceID: "trace-1", ExecutionID: "provided-exec-1"},

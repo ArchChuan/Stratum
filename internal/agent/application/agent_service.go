@@ -102,6 +102,18 @@ type AgentServiceDeps struct {
 	ActorNameResolver port.ActorNameResolver
 	// StreamRunnerSet 是进程内 runner 集合，供关闭时统一取消。内部惰性初始化。
 	StreamRunnerSet *runnerSet
+	// StreamStore / ControlBus / LeaseRepo 是断线续传的三个依赖。
+	// 流式路径未装配时 fail closed（见 ExecuteStream）——静默退化成「不可续传」
+	// 会让线上表现与本设计不符，属必须暴露的失败。
+	StreamStore port.AgentStreamStore
+	ControlBus  port.AgentControlBus
+	LeaseRepo   port.ExecutionLeaseRepo
+	// StreamRunnerCfg 是可注入的 runner 时长；零值走 DefaultStreamRunnerConfig。
+	StreamRunnerCfg StreamRunnerConfig
+	// StreamRunFn 是 runner 实际执行的那次调用。生产为 nil，走 executeStreamRun；
+	// 跨实例测试（Task 17）注入假 LLM 以断言「LLM 调用次数 == 1」——这是 spec
+	// §11.2 那条北极星断言能在本地跑起来的前提。
+	StreamRunFn func(context.Context, string, ExecRequest, ExecMeta, func(string)) (*domain.AgentResult, int, error)
 }
 
 // AgentService aggregates agent CRUD + Execute/ExecuteStream and shields

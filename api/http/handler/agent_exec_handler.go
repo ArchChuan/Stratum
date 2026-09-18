@@ -145,7 +145,7 @@ func (h *AgentHandler) ExecuteAgentStream(c *gin.Context) {
 		writer.EnqueueData(string(payload))
 	}
 
-	execCtx, cancel, run, executionID, err := h.svc.ExecuteStream(clientCtx, id, agent.ExecRequest{
+	execCtx, cancel, run, executionID, err := h.svc.ExecuteWithDeltas(clientCtx, id, agent.ExecRequest{
 		Query:          req.Query,
 		ConversationID: req.ConversationID,
 		UserID:         userID,
