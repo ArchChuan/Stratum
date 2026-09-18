@@ -2332,43 +2332,51 @@ func TestViewerRegistryForget(t *testing.T) {
 	}
 }
 
-func TestStreamFrameWriters(t *testing.T) {
+func TestSnapshotStreamFrameEncodesPayload(t *testing.T) {
 	cases := []struct {
-		name       string
-		entry      port.StreamEntry
-		wantEvent  string
-		wantSubstr string
+		name    string
+		event   string
+		payload any
+		want    string
 	}{
-		{"token frame carries token", port.StreamEntry{Event: port.StreamEventToken, Payload: `{"token":"x"}`}, port.StreamEventToken, `"token":"x"`},
-		{"meta frame carries generation", port.StreamEntry{Event: port.StreamEventMeta, Payload: `{"generation":2}`}, port.StreamEventMeta, `"generation":2`},
+		{
+			name:  "token frame wraps token key",
+			event: port.StreamEventToken,
+			// 形状必须与今天 handler 写进 data: 的 JSON 逐字节一致，
+			// 否则前端按字段嗅探会认不出 token（spec §6.2）。
+			payload: map[string]string{"token": "x"},
+			want:    `{"token":"x"}`,
+		},
+		{
+			name:    "meta frame carries generation as number",
+			event:   port.StreamEventMeta,
+			payload: map[string]any{"execution_id": "e1", "generation": 2},
+			want:    `{"execution_id":"e1","generation":2}`,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if tc.entry.Event != tc.wantEvent {
-				t.Fatalf("test fixture event mismatch")
+			got := snapshotStreamFrame(tc.event, tc.payload)
+			if got.Event != tc.event {
+				t.Errorf("Event = %q, want %q", got.Event, tc.event)
 			}
-			if !contains(tc.entry.Payload, tc.wantSubstr) {
-				t.Fatalf("payload %q missing %q", tc.entry.Payload, tc.wantSubstr)
+			if got.Payload != tc.want {
+				t.Errorf("Payload = %q, want %q", got.Payload, tc.want)
 			}
 		})
 	}
 }
 
-func contains(haystack, needle string) bool {
-	return len(needle) == 0 || (len(haystack) >= len(needle) && indexOf(haystack, needle) >= 0)
-}
-
-func indexOf(h, n string) int {
-	for i := 0; i+len(n) <= len(h); i++ {
-		if h[i:i+len(n)] == n {
-			return i
-		}
+func TestSnapshotStreamFrameFallsBackOnUnmarshalablePayload(t *testing.T) {
+	// 不可序列化的载荷降级为空对象而不是 panic：一条坏帧不该带走整个 run。
+	got := snapshotStreamFrame(port.StreamEventToken, make(chan int))
+	if got.Payload != "{}" {
+		t.Fatalf("Payload = %q, want \"{}\"", got.Payload)
 	}
-	return -1
 }
 ```
 
-> 说明：`contains`/`indexOf` 是本用例内的最小实现，避免为一个断言引入 `strings` 依赖从而掩盖真实 import（如需清理可改用 `strings.Contains`）。
+> 说明：断言必须落在生产函数 `snapshotStreamFrame` 上，而不是复述测试自身 fixture 的字段——后者不断言任何生产行为。第二个用例覆盖 marshal 失败路径，这是该函数唯一的错误分支。
 
 - [ ] **Step 2: 运行测试确认失败**
 
@@ -3246,6 +3254,8 @@ func TestOpenStreamSubscriptionRequiresCheckpointForResume(t *testing.T) {
 }
 ```
 
+> `noopCheckpointStore` **已在** `internal/agent/application/agent_service_extra_test.go:347` 定义，其 `GetLatest` 返回 `(nil, nil)`——正是本用例需要的「查不到」语义。**不要重复声明**，直接复用；同包重复声明会编译失败。
+
 - [ ] **Step 2: 运行测试确认失败**
 
 Run: `go test ./internal/agent/application/ -run TestOpenStreamSubscription -v`
@@ -3266,6 +3276,10 @@ Expected: FAIL — `svc.deps.StreamStore undefined`
 	StreamRunnerCfg StreamRunnerConfig
 	// StreamRunnerSet 是进程内 runner 集合，供关闭时统一取消。内部惰性初始化。
 	StreamRunnerSet *runnerSet
+	// StreamRunFn 是 runner 实际执行的那次调用。生产为 nil，走 executeStreamRun；
+	// 跨实例测试（Task 17）注入假 LLM 以断言「LLM 调用次数 == 1」——这是 spec
+	// §11.2 那条北极星断言能在本地跑起来的前提。
+	StreamRunFn func(context.Context, string, ExecRequest, ExecMeta, func(string)) (*domain.AgentResult, int, error)
 ```
 
 在 `AgentService` 结构体中追加互斥锁：
@@ -3557,7 +3571,17 @@ func (s *AgentService) executeStreamRun(
 ) (*AgentResult, int, error)
 ```
 
-实现要点（与今天 `ExecuteStream` 的 `run` 闭包逐条对应）：
+实现要点的第 0 条（在其余各条之前）：
+
+```go
+	// 测试注入点：跨实例测试用假 LLM 替换整次执行，否则无法断言
+	// 「B 是续传而不是重新生成」。生产为 nil，走下面各条的真实路径。
+	if s.deps.StreamRunFn != nil {
+		return s.deps.StreamRunFn(ctx, agentID, req, meta, tokenCb)
+	}
+```
+
+其余要点（与今天 `ExecuteStream` 的 `run` 闭包逐条对应）：
 
 1. `a, req, meta, streamCtx, options, cfg, resuming, terminal, consumedApproval, err := s.prepareAgentExecution(ctx, agentID, req, meta, executionID)`，错误原样返回。
 2. 构造写流的 token 回调与 delegate 回调：
@@ -4023,7 +4047,7 @@ var _ = errors.Is
 var _ = time.Second
 ```
 
-> 若 `git grep` 显示仓库已有同名 stub（如 `agent_handler_extra_test.go` 的 `fakeCheckpointStore`），复用它而不是新增 `stubCheckpointStore`；两者同包，重名会编译失败。
+> `api/http/handler/agent_handler_extra_test.go:110` 已有 `fakeCheckpointStore`，但它的 `GetLatest` 恒返回 `(nil, nil)`（专为 Pause/Resume 失败路径而写），**无法**支撑本任务的归属断言——两条用例都会落到 404 分支，`TestStopExecutionPublishesStop` 会假红。因此新增 `stubCheckpointStore` 是必要的，且与既有名字不冲突。若实现时发现你想改名，避免用 `fakeCheckpointStore`（已占用，重名编译失败）。
 
 - [ ] **Step 7: 运行测试确认失败→通过**
 
