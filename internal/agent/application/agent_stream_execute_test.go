@@ -78,12 +78,17 @@ func (streamNoopCheckpointStore) AdvanceRunGeneration(context.Context, string, s
 }
 func (streamNoopCheckpointStore) Terminate(context.Context, string, string, string) error { return nil }
 
+// streamResumableCheckpointOwner 是续跑替身 checkpoint 的归属人。既有 execution 的
+// 续跑/接管必须通过归属校验（与 stop 同源 fail closed），因此所有以既有 executionID
+// 发起续跑的用例都必须用同一身份，否则会合法地收到 ErrNotFound。
+const streamResumableCheckpointOwner = "u1"
+
 // streamResumableCheckpointStore 是「租户限定查询查得到」的替身，用于续跑路径。
 // 嵌入 streamNoopCheckpointStore 只为继承其余 8 个方法——本用例只走 GetLatest。
 type streamResumableCheckpointStore struct{ streamNoopCheckpointStore }
 
 func (streamResumableCheckpointStore) GetLatest(context.Context, string, string) (*domain.AgentExecutionCheckpoint, error) {
-	return &domain.AgentExecutionCheckpoint{}, nil
+	return &domain.AgentExecutionCheckpoint{UserID: streamResumableCheckpointOwner}, nil
 }
 
 // readFrame 有界读取一帧；ok=false 表示通道已关闭（订阅收敛）。
@@ -120,7 +125,7 @@ func TestOpenStreamSubscriptionTailsWhenLeaseActive(t *testing.T) {
 	svc.deps.LeaseRepo = lease
 	svc.deps.CheckpointStore = streamResumableCheckpointStore{}
 
-	sub, err := svc.OpenStreamSubscription(ctx, "agent-1", ExecRequest{},
+	sub, err := svc.OpenStreamSubscription(ctx, "agent-1", ExecRequest{UserID: streamResumableCheckpointOwner},
 		ExecMeta{TenantID: "t1", ExecutionID: "e1", Generation: 3, LastEventID: consumedID},
 		StreamSubscriptionConfig{Heartbeat: time.Hour, IdleExit: time.Hour, ReadBlock: 5})
 	if err != nil {
@@ -174,6 +179,54 @@ func TestOpenStreamSubscriptionRequiresCheckpointForResume(t *testing.T) {
 	// 租约查询，existence oracle 与无谓的 CAS 面都被放大。
 	if lease.statusCall != 0 || lease.claimCall != 0 {
 		t.Fatalf("租约被访问 %d(status)/%d(claim) 次, want 0/0", lease.statusCall, lease.claimCall)
+	}
+}
+
+// 裁定 9 同类前提：带 execution_id 的流式续跑与 resume 走同一条覆写路径——
+// runner 写入的 checkpoint 会把 user_id 覆写成调用者（Upsert 的
+// ON CONFLICT DO UPDATE SET 含 user_id）。既有的 execution 只有其所有者能续跑，
+// 否则同租户调用者可拿他人的 execution_id 把所有权转移给自己，stop 的 fail closed
+// 随之被绕过。查不到与不属于你一律 ErrNotFound（关闭 existence oracle）。
+func TestOpenStreamSubscriptionRejectsForeignOwnerOnResume(t *testing.T) {
+	cases := []struct {
+		name   string
+		userID string
+	}{
+		{name: "foreign user cannot resume another user's execution", userID: "u2"},
+		{name: "empty actor cannot resume a named owner's execution", userID: ""},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &fakeStreamStore{block: 5 * time.Millisecond}
+			lease := &fakeLeaseRepo{status: port.LeaseStatus{Generation: 3, Active: true}}
+			svc := NewAgentService(AgentServiceDeps{})
+			svc.deps.StreamStore = store
+			svc.deps.ControlBus = &fakeControlBus{}
+			svc.deps.LeaseRepo = lease
+			svc.deps.CheckpointStore = streamResumableCheckpointStore{}
+
+			sub, err := svc.OpenStreamSubscription(context.Background(), "agent-1",
+				ExecRequest{Query: "hi", UserID: tc.userID},
+				ExecMeta{TenantID: "t1", ExecutionID: "e1", Generation: 3},
+				StreamSubscriptionConfig{Heartbeat: time.Hour, IdleExit: time.Hour, ReadBlock: 5})
+
+			if sub != nil {
+				sub.Close()
+				t.Fatalf("越权续跑返回了句柄：%+v", sub)
+			}
+			if !errors.Is(err, ErrNotFound) {
+				t.Fatalf("err = %v, want ErrNotFound", err)
+			}
+			// 归属闸门必须排在任何接管动作之前：否则一次越权请求就能 CAS 抢占
+			// 正在跑的 runner 的租约，把它 fence 掉。
+			if lease.claimCall != 0 {
+				t.Fatalf("ClaimLease called %d times on a foreign resume, want 0", lease.claimCall)
+			}
+			if lease.statusCall != 0 {
+				t.Fatalf("LeaseStatus called %d times on a foreign resume, want 0", lease.statusCall)
+			}
+		})
 	}
 }
 
@@ -426,12 +479,28 @@ func (b *stopRecordingControlBus) stopCount() int {
 
 // stopCheckpointStore 返回固定 checkpoint，覆盖 StopExecution 的归属判定分支；
 // 嵌入 streamNoopCheckpointStore 只为继承其余 8 个方法。
+//
+// 记录收到的 (tenantID, executionID)：红线第 3 条要求租户作用域查询显式携带
+// tenant，桩若吞掉入参，删掉 StopExecution 的 tenant 透传不会有任何用例变红。
 type stopCheckpointStore struct {
 	streamNoopCheckpointStore
-	cp *domain.AgentExecutionCheckpoint
+	cp      *domain.AgentExecutionCheckpoint
+	loadErr error
+
+	gotTenantID    string
+	gotExecutionID string
+	calls          int
 }
 
-func (s stopCheckpointStore) GetLatest(context.Context, string, string) (*domain.AgentExecutionCheckpoint, error) {
+func (s *stopCheckpointStore) GetLatest(
+	_ context.Context, tenantID, executionID string,
+) (*domain.AgentExecutionCheckpoint, error) {
+	s.calls++
+	s.gotTenantID = tenantID
+	s.gotExecutionID = executionID
+	if s.loadErr != nil {
+		return nil, s.loadErr
+	}
 	return s.cp, nil
 }
 
@@ -489,9 +558,10 @@ func TestStopExecutionEnforcesOwnershipFailClosed(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			bus := &stopRecordingControlBus{}
+			store := &stopCheckpointStore{cp: tc.checkpoint}
 			svc := NewAgentService(AgentServiceDeps{
 				ControlBus:      bus,
-				CheckpointStore: stopCheckpointStore{cp: tc.checkpoint},
+				CheckpointStore: store,
 			})
 
 			err := svc.StopExecution(context.Background(), "t1", "e1", tc.userID)
@@ -505,6 +575,56 @@ func TestStopExecutionEnforcesOwnershipFailClosed(t *testing.T) {
 			}
 			if got := bus.stopCount(); got != tc.wantStops {
 				t.Fatalf("PublishStop calls = %d, want %d", got, tc.wantStops)
+			}
+			// 归属判定的输入来自租户限定查询：tenantID 必须逐字透传，executionID
+			// 必须是被请求的那条，不能查错行。
+			if store.calls != 1 {
+				t.Fatalf("checkpoint lookups = %d, want 1", store.calls)
+			}
+			if store.gotTenantID != "t1" || store.gotExecutionID != "e1" {
+				t.Fatalf("checkpoint lookup = (%q,%q), want (t1,e1)", store.gotTenantID, store.gotExecutionID)
+			}
+			// 发布点必须是请求的那条执行，且归属失败时不得发布。
+			for _, id := range bus.stops {
+				if id != "e1" {
+					t.Fatalf("PublishStop(%q), want e1", id)
+				}
+			}
+		})
+	}
+}
+
+// 基础设施故障必须向上传播，不得静默降级成 ErrNotFound（否则一次控制通道未装配
+// 或 DB 抖动会被前端读成「查无此执行」）。两个分支都返回普通 error，不匹配任何
+// sentinel，由 handler 映射成 5xx。
+func TestStopExecutionSurfacesInfrastructureFailures(t *testing.T) {
+	cases := []struct {
+		name string
+		deps AgentServiceDeps
+	}{
+		{
+			name: "control bus not configured",
+			deps: AgentServiceDeps{CheckpointStore: &stopCheckpointStore{
+				cp: &domain.AgentExecutionCheckpoint{ExecutionID: "e1", UserID: "u1"}}},
+		},
+		{
+			name: "checkpoint lookup fails",
+			deps: AgentServiceDeps{
+				ControlBus:      &stopRecordingControlBus{},
+				CheckpointStore: &stopCheckpointStore{loadErr: errors.New("checkpoint store down")},
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := NewAgentService(tc.deps)
+			err := svc.StopExecution(context.Background(), "t1", "e1", "u1")
+			if err == nil {
+				t.Fatal("err = nil, want an infrastructure error")
+			}
+			if errors.Is(err, ErrNotFound) {
+				t.Fatalf("err = %v: infrastructure failure must not masquerade as ErrNotFound", err)
 			}
 		})
 	}

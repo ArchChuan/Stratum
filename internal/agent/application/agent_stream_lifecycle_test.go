@@ -468,7 +468,7 @@ func TestStreamRunnerSurvivesRequestContextCancellation(t *testing.T) {
 	})
 
 	reqCtx, cancelReq := context.WithCancel(context.Background())
-	if _, err := svc.ExecuteStream(reqCtx, "a1", ExecRequest{Query: "hi"},
+	if _, err := svc.ExecuteStream(reqCtx, "a1", ExecRequest{Query: "hi", UserID: streamResumableCheckpointOwner},
 		ExecMeta{TenantID: "t1", ExecutionID: "e1", Generation: 1}); err != nil {
 		t.Fatalf("ExecuteStream: %v", err)
 	}
@@ -520,7 +520,7 @@ func TestStreamRunnerJoinsHeartbeatBeforeReleasingLease(t *testing.T) {
 		},
 	})
 
-	if _, err := svc.ExecuteStream(context.Background(), "a1", ExecRequest{Query: "hi"},
+	if _, err := svc.ExecuteStream(context.Background(), "a1", ExecRequest{Query: "hi", UserID: streamResumableCheckpointOwner},
 		ExecMeta{TenantID: "t1", ExecutionID: "e1", Generation: 1}); err != nil {
 		t.Fatalf("ExecuteStream: %v", err)
 	}

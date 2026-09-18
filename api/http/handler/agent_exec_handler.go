@@ -178,8 +178,9 @@ func (h *AgentHandler) ExecuteAgentStream(c *gin.Context) {
 		}
 	}()
 
-	// 客户端断开只结束本订阅：run 继续跑，viewer 由 runner 的自然超时摘除
-	// （spec §7.4）。停掉 run 的唯一途径是 stop 端点或孤儿超时。
+	// 断连不被检测（sse_writer 吞掉底层写错误，这里也没有 DisconnectNotify 分支）。
+	// 订阅只会在 run 走到终态、或空闲看门狗判定无新帧时结束，本 goroutine 随之退出；
+	// run 本身继续跑。停掉 run 的唯一途径是 stop 端点或孤儿超时（spec §7.4）。
 	writer.WriteUntilClosed(0)
 }
 

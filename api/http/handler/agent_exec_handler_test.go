@@ -149,11 +149,10 @@ func TestAgentExecutionErrorPayloadUsesPublicContract(t *testing.T) {
 //
 // 本用例此前钉的是「流开始前返回 503 JSON + ASSISTANT_MODEL_UNAVAILABLE」，但该错误
 // 已按裁定 9 从 HTTP 错误体改成**流内 error 帧**（前端靠 event.code 出告警），那条
-// 同步契约随之退役——错误码「不漂移」的守卫已迁到应用层，覆盖点：
-//   - internal/agent/application/agent_stream_execute_test.go:364
-//     TestErrorPayloadBytesPreservesMapperCode（断言 mapper 的 code 原样进入流内载荷）
-//   - api/http/handler/agent_exec_handler_test.go:104
-//     TestAgentExecutionErrorPayloadUsesPublicContract（断言 error 帧保留 code）
+// 同步契约随之退役——错误码「不漂移」的守卫已迁到应用层，覆盖点（按函数名引用，
+// 行号会随同文件其它改动持续漂移）：
+//   - application.TestErrorPayloadBytesPreservesMapperCode（断言 mapper 的 code 原样进入流内载荷）
+//   - handler.TestAgentExecutionErrorPayloadUsesPublicContract（断言 error 帧保留 code）
 func TestExecuteAgentStreamFailsClosedWithoutStreamDeps(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	repo := &settingsAgentRepo{cfg: &domain.AgentConfig{
@@ -186,8 +185,13 @@ func TestExecuteAgentStreamFailsClosedWithoutStreamDeps(t *testing.T) {
 	if got := response.Header().Get("Content-Type"); got != "application/json; charset=utf-8" {
 		t.Fatalf("content type = %q, want application/json", got)
 	}
-	if got := response.Header().Get("Content-Type"); strings.Contains(got, "text/event-stream") {
-		t.Fatalf("content type = %q: stream opened despite missing stream dependencies", got)
+	// 第三条断言必须有独立判别力：上一个断言已钉死 content-type 不等于
+	// text/event-stream，再 Contains 一次恒假。改成直接查 SSE 体征——一旦实现
+	// 提前开了流，响应体里必然出现 `data:` 行，这条就会变红。
+	for _, line := range strings.Split(response.Body.String(), "\n") {
+		if strings.HasPrefix(line, "data:") {
+			t.Fatalf("SSE data frame emitted despite missing stream dependencies: %q", line)
+		}
 	}
 }
 

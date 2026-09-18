@@ -272,7 +272,14 @@ func (h *AgentHandler) ResumeExecution(c *gin.Context) {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
-	userID, _ := userIDFromCtx(c)
+	// fail closed：ok 只表示类型断言成功，sub 为空串时 ok 仍为 true（JWT 中间件
+	// 不校验 sub 非空）。resume 会以调用者身份执行并覆写 checkpoint 的 user_id，
+	// 身份缺失必须在 HTTP 层拦下，与 StopExecution 的处理对称。
+	userID, ok := userIDFromCtx(c)
+	if !ok || userID == "" {
+		respondMissingUser(c)
+		return
+	}
 
 	result, _, err := h.svc.ResumeExecution(c.Request.Context(), id, agent.ExecRequest{
 		Query:          req.Query,

@@ -369,7 +369,12 @@ func (s *AgentService) ExecuteStream(
 		if err != nil {
 			return nil, fmt.Errorf("agent: execute stream: load checkpoint: %w", err)
 		}
-		if cp == nil {
+		// 归属校验与 StopExecution / ResumeExecution 同源 fail closed：既有
+		// execution 只有其所有者能续跑/接管。缺这层，同租户调用者可拿他人的
+		// execution_id 走续跑，runner 写入的 checkpoint 会把 user_id 覆写为
+		// 自己（Upsert 的 ON CONFLICT DO UPDATE SET 含 user_id），从而绕过 stop
+		// 的所有权模型。两侧都非空且严格相等才放行。
+		if cp == nil || req.UserID == "" || cp.UserID != req.UserID {
 			return nil, ErrNotFound
 		}
 	}
@@ -798,10 +803,23 @@ func (s *AgentService) PauseExecution(ctx context.Context, tenantID, executionID
 }
 
 // ResumeExecution restarts a paused execution from its last checkpoint.
-// The executionID must refer to a paused checkpoint.
-
+// The executionID must refer to a paused checkpoint owned by the caller.
+//
+// 归属校验必须先于任何写副作用（UpdateStatus），且与 StopExecution 逐字同源：
+// cp.UserID 是 stop 端点的所有权依据，而 checkpoint 的 Upsert 是
+// ON CONFLICT DO UPDATE SET user_id = EXCLUDED.user_id——resume 若不校验，
+// 同租户的调用者会把所有权转移给自己（A 停不了自己的执行，B 反而能停），
+// stop 的 fail closed 随之被绕过。两侧都非空且严格相等才放行；查不到与不属于你
+// 一律 ErrNotFound，不区分两者（关闭 existence oracle）。
 func (s *AgentService) ResumeExecution(ctx context.Context, agentID string, req ExecRequest, meta ExecMeta, executionID string) (*AgentResult, int, error) {
 	if s.deps.CheckpointStore != nil {
+		cp, err := s.deps.CheckpointStore.GetLatest(ctx, meta.TenantID, executionID)
+		if err != nil {
+			return nil, 0, fmt.Errorf("resume execution: load checkpoint: %w", err)
+		}
+		if cp == nil || req.UserID == "" || cp.UserID != req.UserID {
+			return nil, 0, ErrNotFound
+		}
 		if err := s.deps.CheckpointStore.UpdateStatus(ctx, meta.TenantID, executionID, "running"); err != nil {
 			return nil, 0, fmt.Errorf("resume execution: %w", err)
 		}
