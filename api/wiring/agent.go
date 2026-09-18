@@ -25,7 +25,6 @@ import (
 	pipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
 	parametersapp "github.com/byteBuilderX/stratum/internal/parameters/application"
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
-	versioningpersistence "github.com/byteBuilderX/stratum/internal/versioning/infrastructure/persistence"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
@@ -304,8 +303,12 @@ func (c *Container) buildAgent(ctx context.Context) error {
 		a.TracePayloadStore = store
 		a.RevisionObjectStore = c.RevisionObjectStore
 	}
+	// checkpointStore 在块外声明：deps 在下方 if 之外构造，执行租约必须复用同一个
+	// PgCheckpointStore 实例（checkpoint 与租约同源）。
+	var checkpointStore *persistence.PgCheckpointStore
 	if db != nil {
-		a.CheckpointStore = persistence.NewPgCheckpointStore(db)
+		checkpointStore = persistence.NewPgCheckpointStore(db)
+		a.CheckpointStore = checkpointStore
 		a.TaskStore = persistence.NewPgTaskRepo(db)
 		// 任务持久化经 Registry 注入每个 hydrate 的 agent（persistTaskSnapshot
 		// 与恢复链路依赖 BaseAgent.TaskStore，必须与仓库实例同源）。
@@ -364,12 +367,7 @@ func (c *Container) buildAgent(ctx context.Context) error {
 		FailureAudit:              failureRecorderOf(c),
 		Logger:                    c.Logger,
 	}
-	if db != nil {
-		deps.ResourceEditorRepo = persistence.NewPgResourceEditorRepo(db)
-		// 通用产品版本历史（read-only）+ created_by 昵称解析，未装配 fail-closed。
-		deps.VersionRepo = versioningpersistence.NewPgVersionRepo(db)
-		deps.ActorNameResolver = iampersistence.NewPgActorNameResolver(db)
-	}
+	wireAgentRepoDeps(db, &deps, checkpointStore)
 	if c.Memory != nil {
 		deps.MemoryInjector = c.Memory.Injector
 		deps.RecallMemory = c.Memory.RecallFn
@@ -398,6 +396,7 @@ func (c *Container) buildAgent(ctx context.Context) error {
 	a.DiagnosticProvider = newDiagnosticProvider(c, a)
 	deps.OfficialDocsSearch = officialdocs.Search
 	deps.DiagnosticProvider = a.DiagnosticProvider
+	wireAgentStreamResume(c, a, &deps)
 	a.Service = agent.NewAgentService(withPublicErrorMapper(deps))
 	if db != nil && c.Skill != nil && c.MCP != nil && c.Knowledge != nil &&
 		c.Skill.VersionService != nil && c.MCP.Service != nil && c.Knowledge.WorkspaceService != nil {
