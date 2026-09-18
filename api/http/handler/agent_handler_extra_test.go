@@ -470,6 +470,46 @@ func TestAgentHandlerResumeExecutionRejectsMissingIdentity(t *testing.T) {
 	}
 }
 
+// 裁定 11：execute 与 stream 两个入口同样要 fail closed。空身份走 NEW 路径会写出
+// user_id = "" 的 checkpoint 行，该行 stop/resume 都要求两侧非空且严格相等，谁也接
+// 不了手，只能等孤儿超时清理；经 /execute 覆写他人行时写入的更是 ""，把受害者一并
+// 锁在门外。两个入口 × 两种身份缺失形态都要 401。
+func TestAgentHandlerExecuteRejectsMissingIdentity(t *testing.T) {
+	h := newTestAgentHandler(t, &mockAgentRepo{}, nil, nil)
+
+	identities := []struct {
+		name string
+		auth gin.HandlerFunc
+	}{
+		{name: "sub key absent", auth: withTenantOnly("t1")},
+		{name: "sub is empty string", auth: withEmptySub("t1")},
+	}
+	endpoints := []struct {
+		name   string
+		path   string
+		handle gin.HandlerFunc
+	}{
+		{name: "sync execute", path: "/agents/a1/execute", handle: h.ExecuteAgent},
+		{name: "stream execute", path: "/agents/a1/execute/stream", handle: h.ExecuteAgentStream},
+	}
+
+	for _, id := range identities {
+		for _, ep := range endpoints {
+			t.Run(id.name+"/"+ep.name, func(t *testing.T) {
+				gin.SetMode(gin.TestMode)
+				router := gin.New()
+				router.Use(middleware.ErrorHandler(zap.NewNop()))
+				router.Use(id.auth)
+				router.POST("/agents/:id/execute", h.ExecuteAgent)
+				router.POST("/agents/:id/execute/stream", h.ExecuteAgentStream)
+
+				w := doAgentReq(t, router, http.MethodPost, ep.path, `{"query":"q"}`)
+				require.Equal(t, http.StatusUnauthorized, w.Code, "body=%s", w.Body.String())
+			})
+		}
+	}
+}
+
 func TestAgentHandlerListExecutions(t *testing.T) {
 	created := time.Now()
 	evidence := &fakeEvidence{

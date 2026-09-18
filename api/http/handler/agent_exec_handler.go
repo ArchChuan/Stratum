@@ -28,13 +28,21 @@ func (h *AgentHandler) ExecuteAgent(c *gin.Context) {
 		respondMissingTenant(c)
 		return
 	}
+	// fail closed：ok 只表示类型断言成功，sub 为空串时 ok 仍为 true（JWT 中间件
+	// 不校验 sub 非空）。空身份会在 NEW 路径写出 user_id = "" 的 checkpoint 行——
+	// 那行 stop/resume 都要求两侧非空且严格相等，谁也接不了手，只能等孤儿超时清理；
+	// 经 /execute 覆写他人行时写入的更是 ""，把受害者一并锁在门外。与 stop/resume 对称拦截。
+	userID, ok := userIDFromCtx(c)
+	if !ok || userID == "" {
+		respondMissingUser(c)
+		return
+	}
 	id := c.Param("id")
 	var req ExecuteAgentRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
-	userID, _ := userIDFromCtx(c)
 
 	result, _, err := h.svc.Execute(c.Request.Context(), id, agent.ExecRequest{
 		Query:          req.Query,
@@ -115,13 +123,19 @@ func (h *AgentHandler) ExecuteAgentStream(c *gin.Context) {
 		respondMissingTenant(c)
 		return
 	}
+	// 与 ExecuteAgent 同源 fail closed：空身份不得进入流式路径，否则 NEW 分支会
+	// 写出 user_id = "" 的 checkpoint 行，该行此后无人能 stop/resume。
+	userID, ok := userIDFromCtx(c)
+	if !ok || userID == "" {
+		respondMissingUser(c)
+		return
+	}
 	id := c.Param("id")
 	var req ExecuteAgentRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
-	userID, _ := userIDFromCtx(c)
 
 	// 带 execution_id 的请求是续接：先做租户限定的存在性判断，查不到即 404
 	// （不区分「不存在」与「不属于你」），避免把 read 失败当成「无活跃执行」

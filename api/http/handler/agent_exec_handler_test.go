@@ -166,6 +166,10 @@ func TestExecuteAgentStreamFailsClosedWithoutStreamDeps(t *testing.T) {
 	router.Use(func(c *gin.Context) {
 		ctx := reqctx.WithTenantID(c.Request.Context(), "tenant-1")
 		c.Request = c.Request.WithContext(ctx)
+		// 裁定 11：execute/stream 入口现在先做身份闸门。本用例测的是「stream
+		// 依赖未装配必须 fail closed」，必须先给出合法身份，否则会在闸门处
+		// 401，测不到后面那条契约（缺身份 → 401 由专属用例覆盖）。
+		c.Set(middleware.ContextKeySub, "u1")
 		c.Next()
 	})
 	router.POST("/agents/:id/execute/stream", handler.ExecuteAgentStream)

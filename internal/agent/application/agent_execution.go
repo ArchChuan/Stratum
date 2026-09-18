@@ -297,7 +297,33 @@ func recordExecutionPreparationFailure(ctx context.Context, start time.Time, sta
 	span.SetStatus(codes.Error, "agent resource preparation failed")
 }
 
+// executeOwnershipGate 是 Execute 的归属闸门（SECURITY-HIGH）：meta.ExecutionID 是
+// 客户端可控的。若它指向他人的 checkpoint，本轮执行会 resumeFromCheckpoint 读走他人
+// messages/plan 快照，并在 Upsert 时借 ON CONFLICT 的 user_id = EXCLUDED.user_id 改写
+// 归属、进而可 stop 受害者执行。与 stop/resume 同源同语义：两侧都必须非空且严格相等
+// 才放行，不区分「不存在」与「不属于你」（存在性 oracle 关闭）。
+//
+// 必须由调用方放在任何副作用之前（先授权、后读取与写入），否则读取腿已经完成泄露。
+// CheckpointStore 为 nil 时不存在任何持久化行（writeInitialCheckpoint 与
+// resumeFromCheckpoint 均提前返回），无可劫持目标，故直接放行。
+func (s *AgentService) executeOwnershipGate(ctx context.Context, req ExecRequest, meta ExecMeta) error {
+	if meta.ExecutionID == "" || s.deps.CheckpointStore == nil {
+		return nil
+	}
+	cp, err := s.deps.CheckpointStore.GetLatest(ctx, meta.TenantID, meta.ExecutionID)
+	if err != nil {
+		return fmt.Errorf("execute: get checkpoint: %w", err)
+	}
+	if cp == nil || req.UserID == "" || cp.UserID != req.UserID {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequest, meta ExecMeta) (*AgentResult, int, error) {
+	if err := s.executeOwnershipGate(ctx, req, meta); err != nil {
+		return nil, 0, err
+	}
 	executionID := executionIDOrNew(meta.ExecutionID)
 	a, req, meta, _, options, cfg, resuming, terminal, consumedApproval, err := s.prepareAgentExecution(ctx, agentID, req, meta, executionID)
 	if err != nil {
