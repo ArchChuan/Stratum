@@ -340,6 +340,13 @@ type StreamHandle struct {
 	Generation  int
 }
 
+// streamDepsReady 判定续传路径的依赖是否齐全。CheckpointStore 同样必需：
+// NEW 分支要先建 init checkpoint 行，缺失即整条路径无意义。
+func (s *AgentService) streamDepsReady() bool {
+	return s.deps.StreamStore != nil && s.deps.ControlBus != nil &&
+		s.deps.LeaseRepo != nil && s.deps.CheckpointStore != nil
+}
+
 // ExecuteStream 为一条 SSE 请求确定订阅坐标：NEW 建流开跑、租约有效则 TAIL、
 // 租约失效则抢占（CAS 胜者跑，败者 TAIL）。
 //
@@ -348,7 +355,7 @@ type StreamHandle struct {
 func (s *AgentService) ExecuteStream(
 	ctx context.Context, agentID string, req ExecRequest, meta ExecMeta,
 ) (*StreamHandle, error) {
-	if s.deps.StreamStore == nil || s.deps.ControlBus == nil || s.deps.LeaseRepo == nil {
+	if !s.streamDepsReady() {
 		return nil, fmt.Errorf("agent: execute stream: stream dependencies not configured")
 	}
 	cfg := s.streamRunnerConfig()
@@ -388,6 +395,12 @@ func (s *AgentService) settleGeneration(
 	executionID string, newExecution bool, cfg StreamRunnerConfig,
 ) (generation int, startRunner bool, err error) {
 	if newExecution {
+		// 先建 checkpoint 行再盖章：StampLease 是纯 UPDATE，行不存在即失败，
+		// 而行的唯一创建者在 runner 内部——顺序反了会让 NEW 路径 100% 失败（C-1）。
+		// 写失败必须硬失败：此时尚未启动 runner，fail closed 不会留下孤儿执行。
+		if err := s.writeInitialCheckpoint(ctx, meta, req, agentID, executionID); err != nil {
+			return 0, false, fmt.Errorf("agent: execute stream: init checkpoint: %w", err)
+		}
 		gen, err := s.deps.LeaseRepo.StampLease(ctx, meta.TenantID, executionID, cfg.LeaseTTL)
 		if err != nil {
 			return 0, false, fmt.Errorf("agent: execute stream: stamp lease: %w", err)
@@ -419,10 +432,28 @@ func (s *AgentService) settleGeneration(
 	return latest.Generation, false, nil
 }
 
+// 逐字段回落而不是整体判定：部分填充的配置会留下 OrphanTimeout=0 /
+// ViewerTimeout=0，让首个 tick 静默杀掉 run。
 func (s *AgentService) streamRunnerConfig() StreamRunnerConfig {
 	cfg := s.deps.StreamRunnerCfg
+	def := DefaultStreamRunnerConfig()
 	if cfg.LeaseTTL <= 0 {
-		return DefaultStreamRunnerConfig()
+		cfg.LeaseTTL = def.LeaseTTL
+	}
+	if cfg.LeaseRenew <= 0 {
+		cfg.LeaseRenew = def.LeaseRenew
+	}
+	if cfg.ViewerTimeout <= 0 {
+		cfg.ViewerTimeout = def.ViewerTimeout
+	}
+	if cfg.OrphanTimeout <= 0 {
+		cfg.OrphanTimeout = def.OrphanTimeout
+	}
+	if cfg.StreamTTL <= 0 {
+		cfg.StreamTTL = def.StreamTTL
+	}
+	if cfg.StreamMaxLen <= 0 {
+		cfg.StreamMaxLen = def.StreamMaxLen
 	}
 	return cfg
 }
@@ -437,7 +468,6 @@ func (s *AgentService) streamRunnerConfig() StreamRunnerConfig {
 // tokenCb 每个 LLM token 调用一次，必须能与本调用的 goroutine 并发使用。返回的
 // context 携带 per-tenant LLM completer（供内层流式 RAG / 工具调用），transport
 // 必须用它做 SSE 写出循环；cancel() 释放 per-call 期限。
-
 func (s *AgentService) ExecuteWithDeltas(
 	ctx context.Context, agentID string, req ExecRequest, meta ExecMeta, tokenCb func(string),
 ) (execCtx context.Context, cancel context.CancelFunc, run func() (*AgentResult, int, error), executionID string, err error) {

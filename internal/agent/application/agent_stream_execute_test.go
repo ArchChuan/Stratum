@@ -15,12 +15,13 @@ import (
 
 // fakeLeaseRepo 是租约端口的内存替身，用于验证三路分支的判定。
 type fakeLeaseRepo struct {
-	status    port.LeaseStatus
-	claimGen  int
-	claimErr  error
-	stampGen  int
-	stampErr  error
-	claimCall int
+	status     port.LeaseStatus
+	claimGen   int
+	claimErr   error
+	stampGen   int
+	stampErr   error
+	claimCall  int
+	statusCall int
 }
 
 func (f *fakeLeaseRepo) StampLease(context.Context, string, string, time.Duration) (int, error) {
@@ -42,6 +43,7 @@ func (f *fakeLeaseRepo) RenewLease(context.Context, string, string, int, time.Du
 func (f *fakeLeaseRepo) ReleaseLease(context.Context, string, string, int) error { return nil }
 
 func (f *fakeLeaseRepo) LeaseStatus(context.Context, string, string) (port.LeaseStatus, error) {
+	f.statusCall++
 	return f.status, nil
 }
 
@@ -83,11 +85,33 @@ func (streamResumableCheckpointStore) GetLatest(context.Context, string, string)
 	return &domain.AgentExecutionCheckpoint{}, nil
 }
 
+// readFrame 有界读取一帧；ok=false 表示通道已关闭（订阅收敛）。
+func readFrame(t *testing.T, frames <-chan StreamFrame) (StreamFrame, bool) {
+	t.Helper()
+	select {
+	case f, ok := <-frames:
+		return f, ok
+	case <-time.After(5 * time.Second):
+		t.Fatal("订阅未在 5s 内产出帧：计划/起点实现被改坏会让回放读不到任何条目")
+		return StreamFrame{}, false
+	}
+}
+
 func TestOpenStreamSubscriptionTailsWhenLeaseActive(t *testing.T) {
 	store := &fakeStreamStore{block: 5 * time.Millisecond}
 	lease := &fakeLeaseRepo{status: port.LeaseStatus{Generation: 3, Active: true}}
-	_, _ = store.Append(context.Background(), "e1", 3, port.StreamEntry{
+	ctx := context.Background()
+	// 两条条目：已消费的 token + 终态 done。客户端游标停在 token 上。
+	consumedID, err := store.Append(ctx, "e1", 3, port.StreamEntry{
+		Event: port.StreamEventToken, Payload: `{"token":"已消费"}`})
+	if err != nil {
+		t.Fatalf("seed token: %v", err)
+	}
+	terminalID, err := store.Append(ctx, "e1", 3, port.StreamEntry{
 		Event: port.StreamEventDone, Payload: `{"done":true}`})
+	if err != nil {
+		t.Fatalf("seed done: %v", err)
+	}
 
 	svc := NewAgentService(AgentServiceDeps{})
 	svc.deps.StreamStore = store
@@ -95,13 +119,28 @@ func TestOpenStreamSubscriptionTailsWhenLeaseActive(t *testing.T) {
 	svc.deps.LeaseRepo = lease
 	svc.deps.CheckpointStore = streamResumableCheckpointStore{}
 
-	sub, err := svc.OpenStreamSubscription(context.Background(), "agent-1", ExecRequest{},
-		ExecMeta{TenantID: "t1", ExecutionID: "e1", Generation: 3},
+	sub, err := svc.OpenStreamSubscription(ctx, "agent-1", ExecRequest{},
+		ExecMeta{TenantID: "t1", ExecutionID: "e1", Generation: 3, LastEventID: consumedID},
 		StreamSubscriptionConfig{Heartbeat: time.Hour, IdleExit: time.Hour, ReadBlock: 5})
 	if err != nil {
 		t.Fatalf("OpenStreamSubscription: %v", err)
 	}
 	defer sub.Close()
+
+	// 起点断言：客户端游标与服务端 generation 相等 → 增量回放，首帧必须是游标
+	// **之后**的 done。若实现忽略游标（全量回放）则首帧会是 token；若 generation
+	// 取错则 plan 会退化成 reset 帧——两种改坏都会在这里变红。
+	first, ok := readFrame(t, sub.Frames())
+	if !ok {
+		t.Fatal("订阅在回放任何帧之前就关闭了")
+	}
+	if first.ID != terminalID || first.Event != port.StreamEventDone || first.Data != `{"done":true}` {
+		t.Fatalf("首帧 = %+v, want 仅回放游标之后的 done(id=%s)", first, terminalID)
+	}
+	// 终态帧之后订阅必须收敛，不再产出。
+	if extra, ok := readFrame(t, sub.Frames()); ok {
+		t.Fatalf("终态帧之后仍产出帧：%+v", extra)
+	}
 
 	// 租约有效时**不得**发起抢占：抢占会把正在跑的 runner fence 掉。
 	if lease.claimCall != 0 {
@@ -111,18 +150,29 @@ func TestOpenStreamSubscriptionTailsWhenLeaseActive(t *testing.T) {
 
 func TestOpenStreamSubscriptionRequiresCheckpointForResume(t *testing.T) {
 	store := &fakeStreamStore{block: 5 * time.Millisecond}
+	lease := &fakeLeaseRepo{}
 	svc := NewAgentService(AgentServiceDeps{})
 	svc.deps.StreamStore = store
 	svc.deps.ControlBus = &fakeControlBus{}
-	svc.deps.LeaseRepo = &fakeLeaseRepo{}
+	svc.deps.LeaseRepo = lease
 	svc.deps.CheckpointStore = &streamNoopCheckpointStore{}
 
 	// 带 execution_id 但租户限定查询查不到 → 404 语义，且不区分
-	// 「不存在」与「不属于你」（spec D4）。
-	if _, err := svc.OpenStreamSubscription(context.Background(), "agent-1", ExecRequest{},
+	// 「不存在」与「不属于你」（spec D4）。断言到具体 sentinel：只判 err != nil
+	// 会把「DB 故障」之类的 5xx 也放行，前端就拿不到 404 而与重复开跑混淆。
+	sub, err := svc.OpenStreamSubscription(context.Background(), "agent-1", ExecRequest{},
 		ExecMeta{TenantID: "t1", ExecutionID: "ghost"},
-		StreamSubscriptionConfig{Heartbeat: time.Hour, IdleExit: time.Hour}); err == nil {
-		t.Fatal("expected error for execution_id without a tenant-scoped checkpoint")
+		StreamSubscriptionConfig{Heartbeat: time.Hour, IdleExit: time.Hour})
+	if sub != nil {
+		t.Fatalf("查不到 checkpoint 时不得返回句柄：%+v", sub)
+	}
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+	// checkpoint 闸门必须排在租约操作之前：否则每次未知 execution_id 都会打一次
+	// 租约查询，existence oracle 与无谓的 CAS 面都被放大。
+	if lease.statusCall != 0 || lease.claimCall != 0 {
+		t.Fatalf("租约被访问 %d(status)/%d(claim) 次, want 0/0", lease.statusCall, lease.claimCall)
 	}
 }
 
@@ -209,6 +259,77 @@ func TestAppendStreamTerminalRendersApprovalAsApprovalFrame(t *testing.T) {
 	}
 }
 
+// I-4：appendStreamTerminal 的 done / stopped / error 三个分支此前零覆盖。
+// 每个分支都有一条**改坏即变红**的断言：done 断言 output 透传，stopped 断言
+// 逐字形状（前端按 data 字段嗅探，形状即契约），error 断言走公开映射而非原文。
+func TestAppendStreamTerminalSelectsFrameByOutcome(t *testing.T) {
+	cases := []struct {
+		name        string
+		result      *AgentResult
+		runErr      error
+		wantEvent   string
+		wantPayload string
+	}{
+		{
+			name:        "success writes done with output",
+			result:      &AgentResult{Output: "答案", Steps: 3, TokensUsed: 11},
+			wantEvent:   port.StreamEventDone,
+			wantPayload: `"output":"答案"`,
+		},
+		{
+			name:        "cancellation writes stopped",
+			result:      nil,
+			runErr:      fmt.Errorf("agent: run: %w", context.Canceled),
+			wantEvent:   port.StreamEventStopped,
+			wantPayload: `{"done":true,"stopped":true}`,
+		},
+		{
+			name:      "failure writes error",
+			result:    nil,
+			runErr:    errors.New("provider exploded"),
+			wantEvent: port.StreamEventError,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &fakeStreamStore{}
+			svc := NewAgentService(AgentServiceDeps{})
+			svc.deps.StreamStore = store
+
+			svc.appendStreamTerminal(context.Background(), "e1", 1, tc.result, tc.runErr)
+
+			entries := store.snapshot()
+			if len(entries) != 1 {
+				t.Fatalf("wrote %d stream entries, want 1", len(entries))
+			}
+			got := entries[0]
+			if got.Event != tc.wantEvent {
+				t.Fatalf("event = %q, want %q (payload=%s)", got.Event, tc.wantEvent, got.Payload)
+			}
+			if tc.wantPayload == "" {
+				// error 分支：无 mapper 时只能是通用文案，绝不能是上游原文。
+				if strings.Contains(got.Payload, "provider exploded") {
+					t.Fatalf("error 帧泄漏上游原文：%s", got.Payload)
+				}
+				if decodeJSONPayload(t, got.Payload)["error"] != streamGenericErrorMessage {
+					t.Fatalf("error = %s, want 通用文案", got.Payload)
+				}
+				return
+			}
+			if got.Payload != tc.wantPayload {
+				// stopped 形状必须逐字命中；done 载荷含 JSON 键序，改用子串定位。
+				if tc.wantEvent == port.StreamEventStopped {
+					t.Fatalf("stopped 载荷 = %s, want %s", got.Payload, tc.wantPayload)
+				}
+				if !strings.Contains(got.Payload, tc.wantPayload) {
+					t.Fatalf("载荷 = %s, want 含 %s", got.Payload, tc.wantPayload)
+				}
+			}
+		})
+	}
+}
+
 // 裁定 9 安全红线（经人类批准的 brief 外新增）：PublicErrorMapper 为 nil 时，
 // **任何路径**都不得回落到 err.Error()。用带可辨识子串的哨兵模拟上游错误原文，
 // 断言这些子串不出现在流内 error 帧里。
@@ -216,7 +337,7 @@ func TestErrorPayloadBytesDoesNotLeakRawErrorWithoutMapper(t *testing.T) {
 	svc := NewAgentService(AgentServiceDeps{})
 
 	raw := fmt.Errorf("dial tcp 10.11.12.13:6379: %w", errors.New("connection refused"))
-	payload := string(svc.errorPayloadBytes(raw))
+	payload := string(svc.ErrorPayloadBytes(raw))
 
 	for _, leak := range []string{"10.11.12.13", "6379", "connection refused", "dial tcp"} {
 		if strings.Contains(payload, leak) {
@@ -246,7 +367,7 @@ func TestErrorPayloadBytesPreservesMapperCode(t *testing.T) {
 		},
 	})
 
-	payload := string(svc.errorPayloadBytes(
+	payload := string(svc.ErrorPayloadBytes(
 		fmt.Errorf("resolve assistant model: %w", domain.ErrAssistantModelUnavailable)))
 	decoded := decodeJSONPayload(t, payload)
 	if decoded["code"] != wantCode {
@@ -264,7 +385,7 @@ func TestErrorPayloadBytesFallsBackToGenericWhenMapperReturnsEmpty(t *testing.T)
 		PublicErrorMapper: func(error) (string, string) { return "", "" },
 	})
 
-	payload := string(svc.errorPayloadBytes(
+	payload := string(svc.ErrorPayloadBytes(
 		fmt.Errorf(`pgx: FATAL: password authentication failed for user "stratum"`)))
 	if strings.Contains(payload, "password authentication") {
 		t.Fatalf("error frame leaks raw error text: %s", payload)

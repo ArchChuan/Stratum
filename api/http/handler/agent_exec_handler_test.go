@@ -30,7 +30,7 @@ func TestExecuteAgentAndStreamDoneUseSameArtifactShape(t *testing.T) {
 	result := &domain.AgentResult{AgentID: "a1", Input: "q", Output: "ok", Steps: 1, Duration: time.Second,
 		Artifacts: []domain.ExecutionArtifact{{Type: "diagnostic_report", ProfileVersion: "v1", DiagnosticReport: &domain.DiagnosticReport{Facts: []domain.DiagnosticFact{}, Inferences: []string{}, EvidenceGaps: []domain.EvidenceGap{}, RecommendedActions: []string{}, Citations: []domain.Citation{}, Steps: []domain.DiagnosticStep{}}}}}
 	syncDTO := agentExecutionResultDTO(result)
-	done := agentExecutionDonePayload(result)
+	done := payloadTestHandler(t).agentExecutionDonePayload(result)
 	var decoded map[string]any
 	if err := json.Unmarshal(done, &decoded); err != nil {
 		t.Fatal(err)
@@ -129,7 +129,7 @@ func TestAgentExecutionErrorPayloadUsesPublicContract(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			payload := agentExecutionErrorPayload(tt.err)
+			payload := payloadTestHandler(t).agentExecutionErrorPayload(tt.err)
 			var decoded map[string]string
 			if err := json.Unmarshal(payload, &decoded); err != nil {
 				t.Fatal(err)
@@ -186,7 +186,7 @@ func TestAgentExecutionDonePayloadSourcesSerializeAsArray(t *testing.T) {
 	// Without sources the payload must carry "sources":[] — never null — so
 	// the frontend can treat done.sources as a list during rolling upgrades.
 	result := &domain.AgentResult{AgentID: "a1", Output: "ok"}
-	done := agentExecutionDonePayload(result)
+	done := payloadTestHandler(t).agentExecutionDonePayload(result)
 	if !strings.Contains(string(done), `"sources":[]`) {
 		t.Fatalf("done payload must serialize empty sources as []: %s", done)
 	}
@@ -199,7 +199,7 @@ func TestAgentExecutionDonePayloadSourcesSerializeAsArray(t *testing.T) {
 		WorkspaceID: "ws-1", WorkspaceName: "legal", ChunkID: "chunk-1",
 		DocumentID: "doc-1", DocumentTitle: "policy.pdf", Snippet: "must be short",
 	}}
-	done = agentExecutionDonePayload(result)
+	done = payloadTestHandler(t).agentExecutionDonePayload(result)
 	var decoded map[string]any
 	if err := json.Unmarshal(done, &decoded); err != nil {
 		t.Fatal(err)
@@ -235,7 +235,7 @@ func TestAgentExecutionDonePayloadFactCheckAndDegraded(t *testing.T) {
 				},
 			},
 		}
-		done := agentExecutionDonePayload(result)
+		done := payloadTestHandler(t).agentExecutionDonePayload(result)
 		var decoded map[string]any
 		if err := json.Unmarshal(done, &decoded); err != nil {
 			t.Fatal(err)
@@ -274,7 +274,7 @@ func TestAgentExecutionDonePayloadFactCheckAndDegraded(t *testing.T) {
 				UnverifiedClaims: []string{"已发送通知"},
 			},
 		}
-		done := agentExecutionDonePayload(result)
+		done := payloadTestHandler(t).agentExecutionDonePayload(result)
 		var decoded map[string]any
 		if err := json.Unmarshal(done, &decoded); err != nil {
 			t.Fatal(err)
@@ -309,7 +309,7 @@ func TestAgentExecutionDonePayloadFactCheckAndDegraded(t *testing.T) {
 				Checked: true, IsValid: true, Claims: []domain.ClaimVerdict{},
 			},
 		}
-		done := agentExecutionDonePayload(result)
+		done := payloadTestHandler(t).agentExecutionDonePayload(result)
 		var decoded map[string]any
 		if err := json.Unmarshal(done, &decoded); err != nil {
 			t.Fatal(err)
@@ -331,7 +331,7 @@ func TestAgentExecutionDonePayloadFactCheckAndDegraded(t *testing.T) {
 
 	t.Run("fact_check absent when not checked", func(t *testing.T) {
 		result := &domain.AgentResult{AgentID: "a1", Output: "ok"}
-		done := agentExecutionDonePayload(result)
+		done := payloadTestHandler(t).agentExecutionDonePayload(result)
 		if strings.Contains(string(done), "factCheck") {
 			t.Fatalf("done payload must omit factCheck when nil: %s", done)
 		}
@@ -346,7 +346,7 @@ func TestAgentExecutionDonePayloadFactCheckAndDegraded(t *testing.T) {
 				Claims: []domain.ClaimVerdict{{Text: "c1", Verdict: "SUPPORTED", Risk: 0}},
 			},
 		}
-		done := agentExecutionDonePayload(result)
+		done := payloadTestHandler(t).agentExecutionDonePayload(result)
 		var decoded map[string]any
 		if err := json.Unmarshal(done, &decoded); err != nil {
 			t.Fatal(err)
@@ -372,7 +372,7 @@ func TestAgentExecutionDonePayloadWhitelistsTaskSnapshot(t *testing.T) {
 	result.Metadata[constants.TaskMetadataKey] = map[string]interface{}{"id": "task-1", "status": "in_progress"}
 	result.Metadata["admin_token"] = "sekrit"
 
-	done := agentExecutionDonePayload(result)
+	done := payloadTestHandler(t).agentExecutionDonePayload(result)
 	var decoded map[string]any
 	if err := json.Unmarshal(done, &decoded); err != nil {
 		t.Fatal(err)

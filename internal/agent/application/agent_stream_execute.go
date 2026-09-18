@@ -57,13 +57,21 @@ func (s *AgentService) launchStreamRunner(
 	return nil
 }
 
-// runStreamRunner 是 runner 的主循环：写 meta 帧 → 跑 run → 写终态帧 → 释放租约。
-// 租约续租心跳与控制消息在 run 期间并行消费。
+// runStreamRunner 是 runner 的主循环：写 meta 帧 → 跑 run → join 后台 goroutine →
+// 写终态帧 → 释放租约。租约续租心跳与控制消息在 run 期间并行消费。
 func (s *AgentService) runStreamRunner(
 	ctx context.Context, agentID string, req ExecRequest, meta ExecMeta,
 	executionID string, generation int, cfg StreamRunnerConfig,
 	viewers *viewerRegistry, msgCh <-chan port.ControlMessage,
 ) {
+	// ctx 是 launchStreamRunner 已解绑过的那条：它不随 HTTP 断开而取消（spec §4.1），
+	// 但会被 runnerSet.CancelAll（pod 关闭）取消。脱钩只做一次、且只做在最外层——
+	// 这里再套 WithoutCancel 会切断 cancelRun 与 CancelAll 的链，心跳 CAS 失败 /
+	// 孤儿超时 / 控制通道 stop / CancelAll 四个取消源又会退回 no-op（C-2）。
+	// cancelRun 因此是本 runner 唯一的取消 handle。
+	runCtx, cancelRun := context.WithCancel(ctx)
+	defer cancelRun()
+
 	// meta 帧必须是流的第一条：订阅侧据此得知 generation，前端据此获得恢复键。
 	s.appendStreamEntry(ctx, executionID, generation, port.StreamEntry{
 		Event: port.StreamEventMeta,
@@ -73,18 +81,31 @@ func (s *AgentService) runStreamRunner(
 		}),
 	})
 
-	runCtx, cancelRun := context.WithCancel(ctx)
-	defer cancelRun()
-
 	// 续租、控制消息、孤儿计时共用一条 tick：三者语义相同（"我还活着" /
 	// "你还在看着"），拆成三个 timer 只增加竞态面（spec §6.7）。
+	var wg sync.WaitGroup
 	stopHeartbeat := make(chan struct{})
-	go s.streamRunnerHeartbeat(runCtx, cancelRun, meta.TenantID, executionID, generation, cfg, viewers, stopHeartbeat)
-	go consumeControlMessages(runCtx, viewers, msgCh, cancelRun)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		s.streamRunnerHeartbeat(runCtx, cancelRun, meta.TenantID, executionID, generation, cfg, viewers, stopHeartbeat)
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		consumeControlMessages(runCtx, viewers, msgCh, cancelRun)
+	}()
 
 	result, _, runErr := s.executeStreamRun(runCtx, agentID, req, meta, executionID, generation)
 
+	cancelRun()
 	close(stopHeartbeat)
+	// 必须先 join 再写终态帧/释放租约：心跳里在飞的 RenewLease 不改 generation，
+	// 若越过 ReleaseLease 提交就会把已释放的租约复活（I-1）。
+	wg.Wait()
+
+	// 终态帧与释放租约刻意用未随 run 取消的 ctx：用户点「停止生成」后 runCtx 已
+	// Done，用它写帧/释放租约会失败，订阅侧只会在末尾悬挂等着孤儿超时。
 	// 无论成功、报错还是被取消，都写终态帧到流——订阅侧据此收敛，不会无限跟流。
 	s.appendStreamTerminal(ctx, executionID, generation, result, runErr)
 
@@ -121,8 +142,10 @@ func consumeControlMessages(
 // streamRunnerHeartbeat 续租并维护 viewer 集合。续租 CAS 失败意味着已被抢占，
 // 立刻自取消——僵尸 runner 不得继续烧 token（spec D3）。
 //
-// tenantID 必须由调用方传入而非从 ctx 取：runCtx 来自 context.WithoutCancel，
-// 不带租户上下文，从 ctx 取会在错的租户命名空间上操作。
+// tenantID 由调用方显式传入而非从 ctx 取：租户是租约操作的显式入参（port 契约），
+// 依赖 ctx 里的值会在中间件或脱钩层变化时静默落到错的命名空间。
+// 注：context.WithoutCancel 只剪断取消链、保留 Value——「脱钩会丢租户」是错的，
+// 别用它当理由。
 func (s *AgentService) streamRunnerHeartbeat(
 	ctx context.Context, cancel context.CancelFunc, tenantID, executionID string,
 	generation int, cfg StreamRunnerConfig, viewers *viewerRegistry, stop <-chan struct{},
@@ -224,7 +247,10 @@ func (s *AgentService) executeStreamRun(
 		WithExecutionID(executionID),
 	)
 
-	execCtx, cancel := context.WithCancel(context.WithoutCancel(streamCtx))
+	// 继承 streamCtx（= runStreamRunner 的 runCtx）的取消链：取消必须抵达 a.Execute，
+	// 否则「停止生成」/心跳 CAS 失败/孤儿超时/CancelAll 全是 no-op（C-2）。
+	// 脱钩由最外层负责，这里只做 per-call 派生。
+	execCtx, cancel := context.WithCancel(streamCtx)
 	defer cancel()
 	// P1b：与 Execute 路径一致的规则拦截累积器注入（§4.1）。
 	blocks := &[]domain.RuleBlock{}
@@ -310,7 +336,7 @@ func (s *AgentService) appendStreamTerminal(
 	switch {
 	case runErr == nil && result != nil:
 		s.appendStreamEntry(ctx, executionID, generation, port.StreamEntry{
-			Event: port.StreamEventDone, Payload: string(s.donePayloadBytes(result)),
+			Event: port.StreamEventDone, Payload: string(s.DonePayloadBytes(result)),
 		})
 	case errors.Is(runErr, context.Canceled):
 		s.appendStreamEntry(ctx, executionID, generation, port.StreamEntry{
@@ -319,7 +345,7 @@ func (s *AgentService) appendStreamTerminal(
 		})
 	default:
 		s.appendStreamEntry(ctx, executionID, generation, port.StreamEntry{
-			Event: port.StreamEventError, Payload: string(s.errorPayloadBytes(runErr)),
+			Event: port.StreamEventError, Payload: string(s.ErrorPayloadBytes(runErr)),
 		})
 	}
 }
@@ -341,7 +367,7 @@ func approvalErrorsOf(runErr error) ([]port.ToolApprovalRequiredError, bool) {
 // ApprovalRequiredPayloadBytes 渲染 approval_required 帧载荷：与 HTTP 202 体同构
 // （approvals 数组 + 首条镜像），前端据此批量渲染审批卡并等待全部终态后续跑。
 //
-// 与 donePayloadBytes/errorPayloadBytes 同源：原本实现在 api/http/handler 的
+// 与 DonePayloadBytes/ErrorPayloadBytes 同源：原本实现在 api/http/handler 的
 // approvalRequiredSSEPayload。改成流内帧之后 handler 只转发，这里必须是唯一实现，
 // handler 侧保留一行薄包装（非流式 202 路径仍复用），避免出现两份会漂移的真相。
 // 入参本来就是 port 类型，搬迁无阻抗。
@@ -372,9 +398,10 @@ func (s *AgentService) appendStreamEntry(
 	}
 }
 
-// donePayloadBytes 渲染 done 终态帧载荷。字段与 handler 的 agentExecutionDonePayload
-// 逐字段对齐——那是同一条 wire 契约，前端按 data 字段嗅探分发。
-func (s *AgentService) donePayloadBytes(result *AgentResult) []byte {
+// DonePayloadBytes 渲染 done 终态帧载荷，是同一条 wire 契约的**唯一**实现；
+// handler 侧只做一行薄包装委托（范式同 ApprovalRequiredPayloadBytes）。
+// 前端按 data 字段嗅探分发，字段形状即契约，改动必须同步契约测试。
+func (s *AgentService) DonePayloadBytes(result *AgentResult) []byte {
 	thoughtsJSON, _ := json.Marshal(result.Thoughts)
 	toolCallsJSON, _ := json.Marshal(result.ToolCalls)
 	metadata := map[string]interface{}{
@@ -417,7 +444,7 @@ func (s *AgentService) donePayloadBytes(result *AgentResult) []byte {
 	if err != nil {
 		// 载荷里的值都来自本包可控的类型，marshal 失败只可能是极端情况；
 		// 真失败也只能降级成错误帧，不能让 runner 崩掉。
-		return s.errorPayloadBytes(fmt.Errorf("agent: encode done payload: %w", err))
+		return s.ErrorPayloadBytes(fmt.Errorf("agent: encode done payload: %w", err))
 	}
 	return payload
 }
@@ -425,7 +452,8 @@ func (s *AgentService) donePayloadBytes(result *AgentResult) []byte {
 // streamGenericErrorMessage 是公开错误映射不可用时的兜底文案。
 const streamGenericErrorMessage = "执行失败，请稍后重试"
 
-// errorPayloadBytes 渲染 error 终态帧载荷。
+// ErrorPayloadBytes 渲染 error 终态帧载荷，是同一条 wire 契约的**唯一**实现；
+// handler 侧只做一行薄包装委托（范式同 ApprovalRequiredPayloadBytes）。
 //
 // 安全红线（硬约束）：PublicErrorMapper 的返回值是**唯一**允许进入流内 error 帧的
 // 错误文本来源。任何路径都禁止回落到 err.Error()——run 在 runner 内部执行，错误链
@@ -435,7 +463,7 @@ const streamGenericErrorMessage = "执行失败，请稍后重试"
 // 为什么需要注入而不是本包自己映射：公开文案与 code 的事实源在
 // api/middleware.DescribePublicError + MapErrorToStatus，而 application 不可反向
 // 依赖 api 层（DDD 依赖方向）。由 api/wiring 做薄 ACL 装配注入，sentinel 表不下沉。
-func (s *AgentService) errorPayloadBytes(err error) []byte {
+func (s *AgentService) ErrorPayloadBytes(err error) []byte {
 	message, code := "", ""
 	if s.deps.PublicErrorMapper != nil {
 		message, code = s.deps.PublicErrorMapper(err)

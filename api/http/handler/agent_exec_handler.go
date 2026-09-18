@@ -213,24 +213,23 @@ func (h *AgentHandler) ExecuteAgentStream(c *gin.Context) {
 				return
 			}
 			h.logger.Error("agent stream execution failed", zap.String("agentId", id), zap.Error(runErr))
-			writer.EnqueueData(string(agentExecutionErrorPayload(runErr)))
+			writer.EnqueueData(string(h.agentExecutionErrorPayload(runErr)))
 			return
 		}
-		donePayload := agentExecutionDonePayload(result)
+		donePayload := h.agentExecutionDonePayload(result)
 		writer.EnqueueData(string(donePayload))
 	}()
 
 	writer.WriteUntilClosed(0)
 }
 
-func agentExecutionErrorPayload(err error) []byte {
-	descriptor := middleware.DescribePublicError(err, middleware.MapErrorToStatus(err))
-	payload := map[string]string{"error": descriptor.Message}
-	if descriptor.Code != "" {
-		payload["code"] = descriptor.Code
-	}
-	encoded, _ := json.Marshal(payload)
-	return encoded
+// agentExecutionErrorPayload SSE error 帧载荷薄包装。
+//
+// 真实现在应用层（agent.AgentService.ErrorPayloadBytes）：run 改由 runner 内执行后
+// 流内帧必须由它写出，两处若各留一份实现必然漂移（I-2）。安全红线同样在应用层——
+// mapper 是错误文本的唯一来源，本层不得回落到 err.Error()。
+func (h *AgentHandler) agentExecutionErrorPayload(err error) []byte {
+	return h.svc.ErrorPayloadBytes(err)
 }
 
 func agentExecutionResultDTO(result *agent.AgentResult) AgentExecutionResult {
@@ -255,30 +254,10 @@ func executionArtifactsResponse(artifacts []domain.ExecutionArtifact) []domain.E
 	return artifacts
 }
 
-func agentExecutionDonePayload(result *agent.AgentResult) []byte {
-	dto := agentExecutionResultDTO(result)
-	// Sources must serialize as an empty array, never null: the frontend
-	// reads done.sources as a list and treats [] and null differently during
-	// rolling upgrades.
-	sources := result.Sources
-	if sources == nil {
-		sources = []agentport.RAGSearchSource{}
-	}
-	payload, _ := json.Marshal(struct {
-		Done          bool                        `json:"done"`
-		Output        string                      `json:"output"`
-		Steps         int                         `json:"steps"`
-		TokensUsed    int                         `json:"tokensUsed"`
-		Duration      string                      `json:"duration"`
-		Artifacts     []domain.ExecutionArtifact  `json:"artifacts"`
-		Sources       []agentport.RAGSearchSource `json:"sources"`
-		Degraded      bool                        `json:"degraded"`
-		DegradeReason string                      `json:"degradeReason,omitempty"`
-		FactCheck     *domain.FactCheckReport     `json:"factCheck,omitempty"`
-		NoAnswer      *domain.NoAnswerInfo        `json:"noAnswer,omitempty"`
-		Metadata      map[string]interface{}      `json:"metadata,omitempty"`
-	}{true, dto.Output, dto.Steps, dto.TokensUsed, dto.Duration, dto.Artifacts, sources, result.Degraded, result.DegradeReason, result.FactCheck, result.NoAnswer, dto.Metadata})
-	return payload
+// agentExecutionDonePayload SSE done 帧载荷薄包装：真实现在应用层
+// （agent.AgentService.DonePayloadBytes），理由同 agentExecutionErrorPayload。
+func (h *AgentHandler) agentExecutionDonePayload(result *agent.AgentResult) []byte {
+	return h.svc.DonePayloadBytes(result)
 }
 
 // approvalAcceptedResponse 非流式 /execute 的 202 审批等待体：approvals 数组携带
