@@ -491,8 +491,12 @@ func mustJSON(v any) string {
 // StopExecution 校验所有权后向控制通道发布取消消息。
 //
 // 授权必须在发布之前完成——Pub/Sub 通道本身不承载鉴权（spec §9）。
-// 归属判定复用租户限定的 checkpoint 查询：查不到或 user_id 不匹配都返回
+// 归属判定复用租户限定的 checkpoint 查询：查不到或 user_id 不属于调用方都返回
 // ErrNotFound，不区分两者，关闭 existence oracle。
+//
+// 归属判定按严格相等 fail closed：调用方必须携带非空 userID，且必须与
+// checkpoint 的 UserID 完全一致。任何一侧为空都不放行——空 checkpoint UserID
+// 不属于任何人，空 userID 是身份缺失（risk harness 第 1 条：授权失败禁止默认放行）。
 func (s *AgentService) StopExecution(
 	ctx context.Context, tenantID, executionID, userID string,
 ) error {
@@ -506,7 +510,9 @@ func (s *AgentService) StopExecution(
 	if cp == nil {
 		return ErrNotFound
 	}
-	if cp.UserID != "" && userID != "" && cp.UserID != userID {
+	// userID "" 必须单独判：两侧同为空时 `cp.UserID != userID` 为假，只写相等判定
+	// 会让「无身份 actor 停无主执行」这条分支漏过去（裁定 8 也要求两侧都非空）。
+	if userID == "" || cp.UserID != userID {
 		return ErrNotFound
 	}
 	if err := s.deps.ControlBus.PublishStop(ctx, executionID); err != nil {

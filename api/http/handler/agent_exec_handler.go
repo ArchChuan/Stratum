@@ -209,7 +209,14 @@ func (h *AgentHandler) StopExecution(c *gin.Context) {
 		respondMissingTenant(c)
 		return
 	}
-	userID, _ := userIDFromCtx(c)
+	// fail closed：userIDFromCtx 的 ok 只表示类型断言成功，值为空字符串时
+	// ok 仍为 true（JWT 中间件对 sub 不做非空校验）。必须显式判空，否则
+	// sub="" 的令牌会以空 actor 身份通过归属判定、停掉同租户内任意执行。
+	userID, ok := userIDFromCtx(c)
+	if !ok || userID == "" {
+		respondMissingUser(c)
+		return
+	}
 	executionID := c.Param("executionID")
 
 	// 授权在 HTTP 层完成：Pub/Sub 通道不承载鉴权，发布前必须确认 actor 对该

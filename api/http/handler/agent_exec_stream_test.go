@@ -95,6 +95,39 @@ func TestStopExecutionHidesForeignExecution(t *testing.T) {
 	}
 }
 
+// 裁定 8：JWT 中间件无条件 c.Set(ContextKeySub, claims.Sub)，sub 为空串时
+// userIDFromCtx 仍返回 ok=true（类型断言成功）。handler 必须显式判空，否则
+// 空 actor 会穿过归属判定停掉同租户内任意执行。
+func TestStopExecutionRejectsEmptyActor(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	bus := &stopControlBus{}
+	svc := agent.NewAgentService(agent.AgentServiceDeps{
+		ControlBus:      bus,
+		CheckpointStore: &stubCheckpointStore{userID: "u1"},
+	})
+	h := &AgentHandler{svc: svc, logger: zap.NewNop()}
+
+	router := gin.New()
+	router.Use(middleware.ErrorHandler(zap.NewNop()))
+	router.Use(func(c *gin.Context) {
+		c.Request = c.Request.WithContext(reqctx.WithTenantID(c.Request.Context(), "t1"))
+		// 空 sub：ok 为 true 但值为空——只判 !ok 堵不住这个缺陷。
+		c.Set(middleware.ContextKeySub, "")
+		c.Next()
+	})
+	router.POST("/agents/:id/executions/:executionID/stop", h.StopExecution)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/agents/a1/executions/e1/stop", nil))
+
+	if len(bus.stops) != 0 {
+		t.Fatalf("stop published for an empty actor: %v", bus.stops)
+	}
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 for an empty actor", rec.Code)
+	}
+}
+
 // stubCheckpointStore 只实现 StopExecution 需要的 GetLatest。
 type stubCheckpointStore struct {
 	userID string

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -393,5 +394,118 @@ func TestErrorPayloadBytesFallsBackToGenericWhenMapperReturnsEmpty(t *testing.T)
 	decoded := decodeJSONPayload(t, payload)
 	if decoded["error"] != streamGenericErrorMessage {
 		t.Fatalf("error = %v, want fail-safe %q", decoded["error"], streamGenericErrorMessage)
+	}
+}
+
+// stopRecordingControlBus 记录 PublishStop 的调用。归属判定失败时「零调用」才是
+// 本组用例要守住的断言——只断言错误值会把「放行但报错」这类缺陷漏过去。
+type stopRecordingControlBus struct {
+	mu    sync.Mutex
+	stops []string
+}
+
+func (b *stopRecordingControlBus) PublishStop(_ context.Context, executionID string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.stops = append(b.stops, executionID)
+	return nil
+}
+
+func (b *stopRecordingControlBus) PublishViewer(context.Context, string, string) error { return nil }
+
+func (b *stopRecordingControlBus) Subscribe(context.Context, string) (<-chan port.ControlMessage, func(), error) {
+	ch := make(chan port.ControlMessage)
+	return ch, func() {}, nil
+}
+
+func (b *stopRecordingControlBus) stopCount() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.stops)
+}
+
+// stopCheckpointStore 返回固定 checkpoint，覆盖 StopExecution 的归属判定分支；
+// 嵌入 streamNoopCheckpointStore 只为继承其余 8 个方法。
+type stopCheckpointStore struct {
+	streamNoopCheckpointStore
+	cp *domain.AgentExecutionCheckpoint
+}
+
+func (s stopCheckpointStore) GetLatest(context.Context, string, string) (*domain.AgentExecutionCheckpoint, error) {
+	return s.cp, nil
+}
+
+// 裁定 8：归属判定必须严格相等 fail closed。任一为空都不放行，相等才发布停止。
+func TestStopExecutionEnforcesOwnershipFailClosed(t *testing.T) {
+	cases := []struct {
+		name       string
+		checkpoint *domain.AgentExecutionCheckpoint
+		userID     string
+		wantErr    error
+		wantStops  int
+	}{
+		{
+			name:       "owner stops own execution",
+			checkpoint: &domain.AgentExecutionCheckpoint{ExecutionID: "e1", UserID: "u1"},
+			userID:     "u1",
+			wantStops:  1,
+		},
+		{
+			name:       "foreign user cannot stop another user's execution",
+			checkpoint: &domain.AgentExecutionCheckpoint{ExecutionID: "e1", UserID: "u1"},
+			userID:     "u2",
+			wantErr:    ErrNotFound,
+			wantStops:  0,
+		},
+		{
+			name:       "empty actor cannot stop a named owner's execution",
+			checkpoint: &domain.AgentExecutionCheckpoint{ExecutionID: "e1", UserID: "u1"},
+			userID:     "",
+			wantErr:    ErrNotFound,
+			wantStops:  0,
+		},
+		{
+			name:       "ownerless checkpoint is stoppable by nobody",
+			checkpoint: &domain.AgentExecutionCheckpoint{ExecutionID: "e1"},
+			userID:     "u1",
+			wantErr:    ErrNotFound,
+			wantStops:  0,
+		},
+		{
+			name:       "empty actor cannot stop an ownerless checkpoint",
+			checkpoint: &domain.AgentExecutionCheckpoint{ExecutionID: "e1"},
+			userID:     "",
+			wantErr:    ErrNotFound,
+			wantStops:  0,
+		},
+		{
+			name:      "missing checkpoint is not found",
+			userID:    "u1",
+			wantErr:   ErrNotFound,
+			wantStops: 0,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			bus := &stopRecordingControlBus{}
+			svc := NewAgentService(AgentServiceDeps{
+				ControlBus:      bus,
+				CheckpointStore: stopCheckpointStore{cp: tc.checkpoint},
+			})
+
+			err := svc.StopExecution(context.Background(), "t1", "e1", tc.userID)
+
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("err = %v, want %v", err, tc.wantErr)
+				}
+			} else if err != nil {
+				t.Fatalf("err = %v, want nil", err)
+			}
+			if got := bus.stopCount(); got != tc.wantStops {
+				t.Fatalf("PublishStop calls = %d, want %d", got, tc.wantStops)
+			}
+		})
 	}
 }
