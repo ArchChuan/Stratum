@@ -304,23 +304,11 @@ func approvalAcceptedResponse(approvals []agentport.ToolApprovalRequiredError) g
 
 // approvalRequiredSSEPayload SSE approval_required 帧：与 202 体同构（approvals
 // 数组 + 首条镜像），单/批共一帧，前端据此批量渲染审批卡并等待全部终态后续跑。
+//
+// 薄包装：真实现在应用层（agent.ApprovalRequiredPayloadBytes），run 改由 runner 内执行
+// 后流内帧必须由它写出，两处若各留一份实现必然漂移。本函数保留只为既有调用点/用例稳定。
 func approvalRequiredSSEPayload(approvals []agentport.ToolApprovalRequiredError) []byte {
-	items := make([]map[string]any, 0, len(approvals))
-	for _, a := range approvals {
-		items = append(items, map[string]any{
-			"approvalId": a.ApprovalID, "toolCallId": a.ToolCallID,
-			"serverId": a.ServerID, "toolName": a.ToolName, "riskLevel": a.RiskLevel,
-		})
-	}
-	payload := map[string]any{"status": "waiting_approval", "approvals": items}
-	if len(approvals) > 0 {
-		first := items[0]
-		for _, k := range []string{"approvalId", "toolCallId", "serverId", "toolName", "riskLevel"} {
-			payload[k] = first[k]
-		}
-	}
-	encoded, _ := json.Marshal(payload)
-	return encoded
+	return agent.ApprovalRequiredPayloadBytes(approvals)
 }
 
 // intOption pulls a numeric option from req.Options. Returns 0 when

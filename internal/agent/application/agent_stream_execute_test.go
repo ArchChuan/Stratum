@@ -2,6 +2,10 @@ package application
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -119,5 +123,154 @@ func TestOpenStreamSubscriptionRequiresCheckpointForResume(t *testing.T) {
 		ExecMeta{TenantID: "t1", ExecutionID: "ghost"},
 		StreamSubscriptionConfig{Heartbeat: time.Hour, IdleExit: time.Hour}); err == nil {
 		t.Fatal("expected error for execution_id without a tenant-scoped checkpoint")
+	}
+}
+
+// snapshot 在锁内复制一份条目快照，避免断言读取与 Append 并发。
+func (f *fakeStreamStore) snapshot() []port.StreamEntry {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]port.StreamEntry(nil), f.entries...)
+}
+
+func decodeJSONPayload(t *testing.T, payload string) map[string]any {
+	t.Helper()
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(payload), &decoded); err != nil {
+		t.Fatalf("decode payload %q: %v", payload, err)
+	}
+	return decoded
+}
+
+// 裁定 8（经人类批准的 brief 外新增）：审批待决是**可恢复的暂停**而非失败。
+// 审批错误是普通 runErr，若被 appendStreamTerminal 当 error 分流，工具审批就
+// 退化成 error 帧，前端审批卡片（ChatStreamContext 的 approval_required 分支）
+// 再也不渲染。本用例同时覆盖单条与批量两种错误形态。
+func TestAppendStreamTerminalRendersApprovalAsApprovalFrame(t *testing.T) {
+	first := port.ToolApprovalRequiredError{
+		ApprovalID: "ap-1", ToolCallID: "tc-1", ServerID: "srv-1",
+		ToolName: "delete_workspace", RiskLevel: domain.ToolRiskDestructive,
+	}
+	second := port.ToolApprovalRequiredError{
+		ApprovalID: "ap-2", ToolCallID: "tc-2", ServerID: "srv-2",
+		ToolName: "drop_table", RiskLevel: domain.ToolRiskWriteReversible,
+	}
+	batchErr := &port.BatchToolApprovalRequiredError{
+		Errors: []port.ToolApprovalRequiredError{first, second},
+	}
+
+	cases := []struct {
+		name      string
+		runErr    error
+		approvals []port.ToolApprovalRequiredError
+	}{
+		{name: "single approval", runErr: &first, approvals: []port.ToolApprovalRequiredError{first}},
+		{name: "batch approvals", runErr: batchErr, approvals: batchErr.Errors},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &fakeStreamStore{}
+			svc := NewAgentService(AgentServiceDeps{})
+			svc.deps.StreamStore = store
+
+			// result=nil 且 runErr 非 nil：若审批分支不是最高优先级，这一组合
+			// 必然落进 default 的 error 帧——正是本断言要咬住的回归。
+			svc.appendStreamTerminal(context.Background(), "e1", 1, nil, tc.runErr)
+
+			entries := store.snapshot()
+			if len(entries) != 1 {
+				t.Fatalf("wrote %d stream entries, want 1", len(entries))
+			}
+			got := entries[0]
+			if got.Event == port.StreamEventError {
+				t.Fatalf("approval pending degraded to error frame: %s", got.Payload)
+			}
+			if got.Event != port.StreamEventApprovalRequired {
+				t.Fatalf("event = %q, want %q", got.Event, port.StreamEventApprovalRequired)
+			}
+			want := string(ApprovalRequiredPayloadBytes(tc.approvals))
+			if got.Payload != want {
+				t.Fatalf("payload = %s, want %s", got.Payload, want)
+			}
+			decoded := decodeJSONPayload(t, got.Payload)
+			if decoded["status"] != "waiting_approval" {
+				t.Fatalf("status = %v, want waiting_approval", decoded["status"])
+			}
+			approvals, _ := decoded["approvals"].([]any)
+			if len(approvals) != len(tc.approvals) {
+				t.Fatalf("approvals len = %d, want %d", len(approvals), len(tc.approvals))
+			}
+			// 首条镜像：非流式 202 体与偶一帧共用同一形状，旧前端读顶层 approvalId。
+			if decoded["approvalId"] != tc.approvals[0].ApprovalID {
+				t.Fatalf("top-level approvalId = %v, want %s", decoded["approvalId"], tc.approvals[0].ApprovalID)
+			}
+		})
+	}
+}
+
+// 裁定 9 安全红线（经人类批准的 brief 外新增）：PublicErrorMapper 为 nil 时，
+// **任何路径**都不得回落到 err.Error()。用带可辨识子串的哨兵模拟上游错误原文，
+// 断言这些子串不出现在流内 error 帧里。
+func TestErrorPayloadBytesDoesNotLeakRawErrorWithoutMapper(t *testing.T) {
+	svc := NewAgentService(AgentServiceDeps{})
+
+	raw := fmt.Errorf("dial tcp 10.11.12.13:6379: %w", errors.New("connection refused"))
+	payload := string(svc.errorPayloadBytes(raw))
+
+	for _, leak := range []string{"10.11.12.13", "6379", "connection refused", "dial tcp"} {
+		if strings.Contains(payload, leak) {
+			t.Fatalf("error frame leaks raw error text %q: %s", leak, payload)
+		}
+	}
+	decoded := decodeJSONPayload(t, payload)
+	if decoded["error"] != streamGenericErrorMessage {
+		t.Fatalf("error = %v, want fail-safe %q", decoded["error"], streamGenericErrorMessage)
+	}
+	if _, ok := decoded["code"]; ok {
+		t.Fatalf("code must be absent without a mapper, got %v", decoded["code"])
+	}
+}
+
+// 裁定 9：装配 mapper 后其返回的 code 必须原样透出——前端按 code 分支
+// （agent.api.ts 消费 code，AgentChatPage 处理 ASSISTANT_MODEL_UNAVAILABLE），
+// 丢 code 等于把可编程错误退化成纯文案。
+func TestErrorPayloadBytesPreservesMapperCode(t *testing.T) {
+	const wantCode = "ASSISTANT_MODEL_UNAVAILABLE"
+	svc := NewAgentService(AgentServiceDeps{
+		PublicErrorMapper: func(err error) (string, string) {
+			if errors.Is(err, domain.ErrAssistantModelUnavailable) {
+				return "系统助手模型不可用", wantCode
+			}
+			return "", ""
+		},
+	})
+
+	payload := string(svc.errorPayloadBytes(
+		fmt.Errorf("resolve assistant model: %w", domain.ErrAssistantModelUnavailable)))
+	decoded := decodeJSONPayload(t, payload)
+	if decoded["code"] != wantCode {
+		t.Fatalf("code = %v, want %s", decoded["code"], wantCode)
+	}
+	if decoded["error"] != "系统助手模型不可用" {
+		t.Fatalf("error = %v, want mapper message", decoded["error"])
+	}
+}
+
+// 裁定 9：mapper 命中失败（返回空文案）时回落固定文案，而不是 err.Error()。
+// 这是「宁可给通用文案，也不给原文」的第二道闸。
+func TestErrorPayloadBytesFallsBackToGenericWhenMapperReturnsEmpty(t *testing.T) {
+	svc := NewAgentService(AgentServiceDeps{
+		PublicErrorMapper: func(error) (string, string) { return "", "" },
+	})
+
+	payload := string(svc.errorPayloadBytes(
+		fmt.Errorf(`pgx: FATAL: password authentication failed for user "stratum"`)))
+	if strings.Contains(payload, "password authentication") {
+		t.Fatalf("error frame leaks raw error text: %s", payload)
+	}
+	decoded := decodeJSONPayload(t, payload)
+	if decoded["error"] != streamGenericErrorMessage {
+		t.Fatalf("error = %v, want fail-safe %q", decoded["error"], streamGenericErrorMessage)
 	}
 }

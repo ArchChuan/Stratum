@@ -114,6 +114,13 @@ type AgentServiceDeps struct {
 	// 跨实例测试（Task 17）注入假 LLM 以断言「LLM 调用次数 == 1」——这是 spec
 	// §11.2 那条北极星断言能在本地跑起来的前提。
 	StreamRunFn func(context.Context, string, ExecRequest, ExecMeta, func(string)) (*domain.AgentResult, int, error)
+	// PublicErrorMapper 把 error 翻成 (公开文案, 公开 code)。事实源在 api/middleware
+	// 的公开错误映射，application 不可反向依赖 api 层，故由 api/wiring 做薄 ACL
+	// 装配注入（sentinel 表不下沉）。
+	//
+	// 它的返回值是**唯一**允许进入流内 error 帧的错误文本来源：nil / 返回空文案时
+	// fail-safe 回落固定文案，绝不回落到 err.Error()（内部错误原文不得泄给客户端）。
+	PublicErrorMapper func(err error) (message string, code string)
 }
 
 // AgentService aggregates agent CRUD + Execute/ExecuteStream and shields

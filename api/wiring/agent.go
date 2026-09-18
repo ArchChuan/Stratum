@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/byteBuilderX/stratum/api/middleware"
 	agent "github.com/byteBuilderX/stratum/internal/agent/application"
 	"github.com/byteBuilderX/stratum/internal/agent/application/factcheck"
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
@@ -397,7 +398,7 @@ func (c *Container) buildAgent(ctx context.Context) error {
 	a.DiagnosticProvider = newDiagnosticProvider(c, a)
 	deps.OfficialDocsSearch = officialdocs.Search
 	deps.DiagnosticProvider = a.DiagnosticProvider
-	a.Service = agent.NewAgentService(deps)
+	a.Service = agent.NewAgentService(withPublicErrorMapper(deps))
 	if db != nil && c.Skill != nil && c.MCP != nil && c.Knowledge != nil &&
 		c.Skill.VersionService != nil && c.MCP.Service != nil && c.Knowledge.WorkspaceService != nil {
 		c.injectTenantRoleResolvers(a)
@@ -420,6 +421,22 @@ func (c *Container) buildAgent(ctx context.Context) error {
 	wireAgentObservability(c, a, deps.Metrics)
 	c.Agent = a
 	return nil
+}
+
+// withPublicErrorMapper 注入流内 error 帧的公开文案/code 映射。
+//
+// 事实源是 api/middleware 的公开错误表：流内帧必须与 HTTP 错误体同源，否则同一条
+// 错误在流式/非流式两条路径上会对客户端出现两种表述。application 不可反向依赖 api
+// 层（DDD 依赖方向），故由 wiring 做薄 ACL 组合注入——sentinel 表留在 middleware，
+// 不下沉为第二份真相。
+//
+// 独立成函数而非内联：buildAgent 是存量超长函数，棘轮禁止其继续增长。
+func withPublicErrorMapper(deps agent.AgentServiceDeps) agent.AgentServiceDeps {
+	deps.PublicErrorMapper = func(err error) (string, string) {
+		descriptor := middleware.DescribePublicError(err, middleware.MapErrorToStatus(err))
+		return descriptor.Message, descriptor.Code
+	}
+	return deps
 }
 
 // injectTenantRoleResolvers hands one DB-backed role adapter to every service

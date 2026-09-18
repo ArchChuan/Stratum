@@ -297,14 +297,17 @@ func (s *AgentService) OpenStreamSubscription(
 func (s *AgentService) appendStreamTerminal(
 	ctx context.Context, executionID string, generation int, result *AgentResult, runErr error,
 ) {
-	switch {
-	case isApprovalPending(runErr):
-		// 审批待决是**可恢复的暂停**而不是错误：今天由 handler 把类型化错误翻成
-		// approval_required 帧，改版后 handler 只转发帧，这段翻译必须落在 runner。
-		// 载荷与 handler 的 approvalRequiredSSEPayload 同构（前端据此渲染审批卡）。
+	// 审批待决必须最先判定：它是一个**可恢复的暂停**而不是失败，且审批错误是普通
+	// runErr——排在 done/stopped/error 之后会被当成执行失败吞掉，工具审批就此退化成
+	// error 帧，前端的审批卡片再也不渲染。
+	if approvals, ok := approvalErrorsOf(runErr); ok {
 		s.appendStreamEntry(ctx, executionID, generation, port.StreamEntry{
-			Event: port.StreamEventApprovalRequired, Payload: approvalRequiredPayload(runErr),
+			Event: port.StreamEventApprovalRequired, Payload: string(ApprovalRequiredPayloadBytes(approvals)),
 		})
+		return
+	}
+
+	switch {
 	case runErr == nil && result != nil:
 		s.appendStreamEntry(ctx, executionID, generation, port.StreamEntry{
 			Event: port.StreamEventDone, Payload: string(s.donePayloadBytes(result)),
@@ -321,20 +324,28 @@ func (s *AgentService) appendStreamTerminal(
 	}
 }
 
-// isApprovalPending 判定执行是否停在「等工具审批」这个可恢复的状态上。
-func isApprovalPending(runErr error) bool {
+// approvalErrorsOf 从错误链里取出待审批工具列表。批量错误携带全部条目，单条错误
+// 只携带一个——两者共用同一帧形状（单/批共一帧）。ok=false 表示不是审批待决。
+func approvalErrorsOf(runErr error) ([]port.ToolApprovalRequiredError, bool) {
 	var batchErr *port.BatchToolApprovalRequiredError
 	if errors.As(runErr, &batchErr) {
-		return true
+		return batchErr.Errors, true
 	}
-	var singleErr *port.ToolApprovalRequiredError
-	return errors.As(runErr, &singleErr)
+	var approvalErr *port.ToolApprovalRequiredError
+	if errors.As(runErr, &approvalErr) {
+		return []port.ToolApprovalRequiredError{*approvalErr}, true
+	}
+	return nil, false
 }
 
-// approvalRequiredPayload 渲染 approval_required 帧载荷：与 HTTP 202 体同构
+// ApprovalRequiredPayloadBytes 渲染 approval_required 帧载荷：与 HTTP 202 体同构
 // （approvals 数组 + 首条镜像），前端据此批量渲染审批卡并等待全部终态后续跑。
-func approvalRequiredPayload(runErr error) string {
-	approvals := approvalErrorsOf(runErr)
+//
+// 与 donePayloadBytes/errorPayloadBytes 同源：原本实现在 api/http/handler 的
+// approvalRequiredSSEPayload。改成流内帧之后 handler 只转发，这里必须是唯一实现，
+// handler 侧保留一行薄包装（非流式 202 路径仍复用），避免出现两份会漂移的真相。
+// 入参本来就是 port 类型，搬迁无阻抗。
+func ApprovalRequiredPayloadBytes(approvals []port.ToolApprovalRequiredError) []byte {
 	items := make([]map[string]any, 0, len(approvals))
 	for _, a := range approvals {
 		items = append(items, map[string]any{
@@ -348,21 +359,8 @@ func approvalRequiredPayload(runErr error) string {
 			payload[k] = items[0][k]
 		}
 	}
-	return mustJSON(payload)
-}
-
-// approvalErrorsOf 从错误链里取出待审批工具列表。批量错误携带全部条目，
-// 单条错误只携带一个——两者共用同一帧形状（单/批共一帧）。
-func approvalErrorsOf(runErr error) []port.ToolApprovalRequiredError {
-	var batchErr *port.BatchToolApprovalRequiredError
-	if errors.As(runErr, &batchErr) {
-		return batchErr.Errors
-	}
-	var singleErr *port.ToolApprovalRequiredError
-	if errors.As(runErr, &singleErr) {
-		return []port.ToolApprovalRequiredError{*singleErr}
-	}
-	return nil
+	encoded, _ := json.Marshal(payload)
+	return encoded
 }
 
 // appendStreamEntry 写一条流条目。写流是尽力而为的显示缓冲，失败不阻断 run。
@@ -424,45 +422,30 @@ func (s *AgentService) donePayloadBytes(result *AgentResult) []byte {
 	return payload
 }
 
-// 流内错误帧的公开文案与 code。措辞逐字对齐 api/middleware 的公开错误映射
-// （DescribePublicError / Code* 常量）——那是同一条对客户端的 wire 契约，
-// 前端按 code 分支（AgentChatPage 识别 ASSISTANT_MODEL_UNAVAILABLE）。
-const (
-	streamCodeAssistantModelUnavailable     = "ASSISTANT_MODEL_UNAVAILABLE"
-	streamCodeSystemPromptNotConfigured     = "SYSTEM_PROMPT_NOT_CONFIGURED"
-	streamCodeCompactionPromptNotConfigured = "COMPACTION_PROMPT_NOT_CONFIGURED"
-	// streamGenericErrorMessage 是未命中已知 sentinel 时的兜底文案。
-	// 主路径不返回它——见 errorPayloadBytes 的语义说明。
-	streamGenericErrorMessage = "执行失败，请稍后重试"
-)
+// streamGenericErrorMessage 是公开错误映射不可用时的兜底文案。
+const streamGenericErrorMessage = "执行失败，请稍后重试"
 
 // errorPayloadBytes 渲染 error 终态帧载荷。
 //
-// 为什么这里要重做一遍公开化而不是直接 err.Error()：run 在 runner 内部执行，
-// 错误不再经过 HTTP handler，而错误链里常带上游响应体、内部 BaseURL 等细节，
-// 直接透出等于把内部信息送到客户端（本仓库安全红线）。
+// 安全红线（硬约束）：PublicErrorMapper 的返回值是**唯一**允许进入流内 error 帧的
+// 错误文本来源。任何路径都禁止回落到 err.Error()——run 在 runner 内部执行，错误链
+// 里常带上游响应体、内部 BaseURL、连接串等细节，透出等于把内部信息送到客户端。
+// 正确行为是「宁可给通用文案，也不给原文」。
 //
-// 为什么不能复用 api/middleware.DescribePublicError：application 不可反向依赖
-// api 层（DDD 依赖方向）。因此这里只覆盖**本域可判定**的 fail-closed sentinel，
-// 其余一律收敛为固定兜底文案——降级方向是「少说」而不是「多说」，宁可少给一句
-// 可读性，也不泄露内部错误文本。
-//
-// 代价与去向：非 sentinel 的 4xx 语义文案（如参数校验细节）在流内会退化为兜底
-// 文案。彻底等价需要把 MapErrorToStatus/DescribePublicError 下沉或被注入（例如
-// wiring 装配一个 PublicErrorMapper 注入本服务），那超出本任务范围，已在报告
-// Concerns 中显式登记。
+// 为什么需要注入而不是本包自己映射：公开文案与 code 的事实源在
+// api/middleware.DescribePublicError + MapErrorToStatus，而 application 不可反向
+// 依赖 api 层（DDD 依赖方向）。由 api/wiring 做薄 ACL 装配注入，sentinel 表不下沉。
 func (s *AgentService) errorPayloadBytes(err error) []byte {
-	payload := map[string]string{"error": streamGenericErrorMessage}
-	switch {
-	case errors.Is(err, domain.ErrAssistantModelUnavailable):
-		payload["error"] = "该 Agent 尚未配置可用模型"
-		payload["code"] = streamCodeAssistantModelUnavailable
-	case errors.Is(err, domain.ErrSystemPromptNotConfigured):
-		payload["error"] = "平台未配置全局系统提示词（agent.system_prompt），请联系平台管理员在参数配置中补全后重试"
-		payload["code"] = streamCodeSystemPromptNotConfigured
-	case errors.Is(err, domain.ErrCompactionPromptNotConfigured):
-		payload["error"] = "平台未配置对话历史压缩提示词（agent.compaction_prompt），请联系平台管理员在参数配置中补全后重试"
-		payload["code"] = streamCodeCompactionPromptNotConfigured
+	message, code := "", ""
+	if s.deps.PublicErrorMapper != nil {
+		message, code = s.deps.PublicErrorMapper(err)
+	}
+	if message == "" {
+		message = streamGenericErrorMessage
+	}
+	payload := map[string]string{"error": message}
+	if code != "" {
+		payload["code"] = code
 	}
 	return []byte(mustJSON(payload))
 }
