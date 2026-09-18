@@ -10,6 +10,7 @@ package application
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/agent/application/factcheck"
@@ -99,6 +100,8 @@ type AgentServiceDeps struct {
 	// ActorNameResolver 解析版本 created_by 的展示名（display_name > github_login
 	// > actor_id），与审批/提案列表共用同一 IAM 解析器；nil 时回退 actor_id 原文。
 	ActorNameResolver port.ActorNameResolver
+	// StreamRunnerSet 是进程内 runner 集合，供关闭时统一取消。内部惰性初始化。
+	StreamRunnerSet *runnerSet
 }
 
 // AgentService aggregates agent CRUD + Execute/ExecuteStream and shields
@@ -106,6 +109,7 @@ type AgentServiceDeps struct {
 
 type AgentService struct {
 	deps AgentServiceDeps
+	mu   sync.Mutex // 保护 StreamRunnerSet 的惰性初始化
 }
 
 // NewAgentService wires an AgentService. Logger defaults to NopLogger
