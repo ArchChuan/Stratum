@@ -112,6 +112,68 @@ func TestShutdownStreamRunnersNoopWhenUnwired(t *testing.T) {
 	NewAgentService(AgentServiceDeps{}).ShutdownStreamRunners()
 }
 
+// 装配路径（SIGTERM 真正会走的那条）必须取消已登记的 runner 并等它注销：
+// 上面的 no-op 用例覆盖不到 localRunnerSet() 拿到的那个集合。
+func TestShutdownStreamRunnersCancelsTrackedRunners(t *testing.T) {
+	svc := NewAgentService(AgentServiceDeps{})
+	rs := svc.localRunnerSet()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	run := rs.track("exec-1", 1, cancel)
+	if run == nil {
+		t.Fatal("未进入关闭流程的集合不应拒绝 track")
+	}
+	// runner 的退出路径由持有 ctx 的 goroutine 代表：ctx 被取消即退出。
+	exited := make(chan struct{})
+	go func() {
+		<-ctx.Done()
+		rs.untrack(run)
+		close(exited)
+	}()
+
+	svc.ShutdownStreamRunners()
+
+	if !errors.Is(ctx.Err(), context.Canceled) {
+		t.Fatalf("ShutdownStreamRunners 后 ctx.Err() = %v, want context.Canceled", ctx.Err())
+	}
+	select {
+	case <-exited:
+	case <-time.After(time.Second):
+		t.Fatal("ShutdownStreamRunners 返回后 runner 仍未退出")
+	}
+	rs.mu.Lock()
+	remaining := len(rs.runs)
+	rs.mu.Unlock()
+	if remaining != 0 {
+		t.Fatalf("ShutdownStreamRunners 后 runs 剩余 %d 条，want 0", remaining)
+	}
+}
+
+// 关闭闸门回归锁：CancelAll 之后再 track 必须被拒绝。放行的 runner 不在取消
+// 遍历的快照里，既不会被取消也不会被等待，会把关闭路径的 wg.Wait() 拖到它
+// 自然结束——pod 关闭时这是 hang 不是泄漏。
+//
+// 用例是确定性的：CancelAll 返回意味着 wg 已归零，之后的 track 与之无时序竞争。
+func TestRunnerSetTrackRejectedAfterCancelAll(t *testing.T) {
+	rs := newRunnerSet()
+	rs.CancelAll()
+
+	cancelConsumed := false
+	run := rs.track("late", 1, func() { cancelConsumed = true })
+	if run != nil {
+		t.Fatalf("closing 后 track 返回 %+v，want nil", run)
+	}
+	if cancelConsumed {
+		t.Fatal("被拒绝的 track 不应消费调用方的 cancel")
+	}
+	rs.mu.Lock()
+	remaining := len(rs.runs)
+	rs.mu.Unlock()
+	if remaining != 0 {
+		t.Fatalf("被拒绝的 track 仍写入了 runs：剩余 %d 条，want 0", remaining)
+	}
+}
+
 func TestRunnerSetCancelAllUnblocksRunners(t *testing.T) {
 	rs := newRunnerSet()
 	ctx, cancel := context.WithCancel(context.Background())

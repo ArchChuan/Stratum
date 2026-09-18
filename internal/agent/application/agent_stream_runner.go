@@ -102,6 +102,10 @@ type runnerSet struct {
 	mu   sync.Mutex
 	runs map[string]*localRunner
 	wg   sync.WaitGroup
+	// closing 是关闭闸门：一旦置位就不再接受新登记（见 track）。它与 runs、wg
+	// 同受 mu 保护，三者必须一起看——只加锁不改闸门挡不住「取消快照之后才进门」
+	// 的 runner。
+	closing bool
 }
 
 func newRunnerSet() *runnerSet {
@@ -121,17 +125,27 @@ func (s *AgentService) localRunnerSet() *runnerSet {
 	return s.deps.StreamRunnerSet
 }
 
-// track 登记一个 runner 并返回其句柄。
+// track 登记一个 runner 并返回其句柄。返回 nil 表示集合已进入关闭流程。
+//
+// nil 是**关闭信号而非错误**：集合已经取消过一轮，此刻登记的 runner 不在那次
+// 取消的遍历快照里，既不会被取消、也不会被等待，只会让关闭路径的 wg.Wait()
+// 一直挂着。调用方必须据此放弃启动 runner，并且不得对 nil 调用 untrack。
 func (rs *runnerSet) track(executionID string, generation int, cancel context.CancelFunc) *localRunner {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if rs.closing {
+		return nil
+	}
 	r := &localRunner{
 		executionID: executionID,
 		generation:  generation,
 		cancel:      cancel,
 		done:        make(chan struct{}),
 	}
-	rs.mu.Lock()
 	rs.runs[executionID] = r
-	rs.mu.Unlock()
+	// Add 必须在锁内：Add 与 Wait 的交叉是 Go 明文禁止的误用（计数归零时的
+	// Add 会 panic），且锁内 Add 保证「map 里可见」与「wg 计数」两个状态始终
+	// 一致——CancelAll 拿着同一把锁，看到的要么是完整的登记，要么什么都没有。
 	rs.wg.Add(1)
 	return r
 }
@@ -149,8 +163,14 @@ func (rs *runnerSet) untrack(r *localRunner) {
 
 // CancelAll 取消本进程所有在跑的 run 并等待它们退出（pod SIGTERM 路径）。
 // run 中断时 upper 层保留 checkpoint，新 pod 可续（spec §7.4）。
+//
+// closing 闸门与取消遍历在同一临界区内置位，这是 Wait 能收敛的原因：先拿到锁的
+// track 在锁内完成 Add，其登记与本次取消构成 happens-before；后到的 track 看到
+// closing 直接返回 nil。缺了闸门，取消遍历之后登记的 runner 会溜进 Wait 的等待
+// 集合里等死（pod 关闭 hang）。
 func (rs *runnerSet) CancelAll() {
 	rs.mu.Lock()
+	rs.closing = true
 	for _, r := range rs.runs {
 		r.cancel()
 	}
