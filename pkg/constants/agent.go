@@ -352,6 +352,12 @@ const (
 	// 空切片，让订阅循环有机会检查 ctx 与写心跳。
 	AgentStreamReadBlock = 1 * time.Second
 
+	// AgentStreamFrameBufferSize 是订阅侧帧通道的容量，即「transport 写出落后
+	// 于流」时可缓冲的帧数。128 帧 ≈ 一次答案的几轮 token 批次，足以吸收慢
+	// 客户端的小抖动而不阻塞；缓冲满时 emit 阻塞，背压只停住该连接自己的订阅
+	// goroutine（spec §4.4）。
+	AgentStreamFrameBufferSize = 128
+
 	// AgentStreamIdleExit 是订阅侧的看门狗上限：租约已失效且流持续无新条目超过
 	// 该时长即结束订阅。只在 runner 被 SIGKILL（无终态帧）时兜底，避免前端
 	// 无限 spinner。

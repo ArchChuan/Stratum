@@ -13,6 +13,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 )
 
 // 错误终态帧载荷。订阅侧有三条错误路径（回放失败、跟流失败、缺口重放失败）
@@ -64,6 +65,7 @@ type ExecutionSubscriptionDeps struct {
 	Plan        StreamPlan
 	Cfg         StreamSubscriptionConfig
 	ViewerID    string
+	Logger      *zap.Logger
 }
 
 // ExecutionSubscription 是一次订阅的句柄。handler 只消费 Frames()，
@@ -102,9 +104,14 @@ func NewExecutionSubscription(deps ExecutionSubscriptionDeps) *ExecutionSubscrip
 	if viewerID == "" {
 		viewerID = NewViewerID()
 	}
+	// 归一化 deps 本身而非另存局部变量：下游 runSubscription 收到的是 deps，
+	// 只有写回它才能让每个失败点都拿到可用的 Logger（测试也不必逐点注入）。
+	if deps.Logger == nil {
+		deps.Logger = zap.NewNop()
+	}
 
 	sub := &ExecutionSubscription{
-		frames: make(chan StreamFrame, 128),
+		frames: make(chan StreamFrame, constants.AgentStreamFrameBufferSize),
 		done:   make(chan struct{}),
 	}
 	sub.ctx, sub.cancel = subscriptionContext()
@@ -187,6 +194,8 @@ func tailOnce(
 	if err != nil {
 		// Redis 掉线：订阅侧降级，不阻塞 run。发一条错误终态帧后退出——
 		// 持续重试只会在前端留下一个不再前进的流。
+		deps.Logger.Warn("agent stream: tail failed",
+			zap.String("execution_id", deps.ExecutionID), zap.Error(err))
 		emitStreamError(ctx, out)
 		return cursor, idleSince, false
 	}
@@ -237,7 +246,10 @@ func replay(
 	if !ok {
 		return "", false, false
 	}
-	return emitEntries(ctx, out, "", entries)
+	// 游标种子必须是客户端的续传游标：批次为空时（客户端已追平流尾、重连无新
+	// 条目）游标保持此值，Tail 才会从正确位置续读；写死 "" 会被 Tail 规范化成
+	// "0-0" 并从流头重读，把整条流重复下发（F5 重连的必经路径）。
+	return emitEntries(ctx, out, deps.Plan.AfterID, entries)
 }
 
 // handleReplayGap 检测裁剪缺口并在命中时先 reset 再全量重放。第二个返回值
@@ -277,7 +289,10 @@ func replayGapDetected(ctx context.Context, deps ExecutionSubscriptionDeps) bool
 	oldestID, err := deps.Stream.FirstID(ctx, deps.ExecutionID, deps.Generation)
 	if err != nil {
 		// 查询失败时 fail closed：宁可多发一次 reset 走全量重放，也不要把
-		// 可能带洞的半截答案交给用户。
+		// 可能带洞的半截答案交给用户。降级方向与 idleExceeded 相反且各自正确，
+		// 但「静默激活」不可接受，必须留痕。
+		deps.Logger.Warn("agent stream: oldest stream id query failed",
+			zap.String("execution_id", deps.ExecutionID), zap.Error(err))
 		return true
 	}
 	return HasReplayGap(deps.Plan.AfterID, oldestID)
@@ -321,6 +336,8 @@ func idleExceeded(
 	if err != nil {
 		// 查询失败时 fail open（不退出）：宁可多等，也不要把一个仍在跑的
 		// 执行误判为中断而关闭用户的流。
+		deps.Logger.Warn("agent stream: lease status query failed",
+			zap.String("execution_id", deps.ExecutionID), zap.Error(err))
 		return false
 	}
 	return !status.Active
