@@ -50,6 +50,9 @@ type StreamEntry struct {
 // 经过租户命名空间，且订阅前还有一次租户限定的 checkpoint 查询。
 type AgentStreamStore interface {
 	// Append 追加一条事件并返回其流内 ID。
+	//
+	// ID 由存储在写入时分配（Redis 生成的 entry ID）。调用方传入的 e.ID 被忽略：
+	// 需要这条新条目的 ID 只能取返回值，写进 e.ID 没有作用。
 	Append(ctx context.Context, executionID string, generation int, e StreamEntry) (string, error)
 	// Replay 全量回放该 generation 的流（从最老条目开始）。
 	Replay(ctx context.Context, executionID string, generation int) ([]StreamEntry, error)
@@ -57,7 +60,22 @@ type AgentStreamStore interface {
 	ReplayAfter(ctx context.Context, executionID string, generation int, afterID string) ([]StreamEntry, error)
 	// FirstID 返回流最老条目的 ID；空流返回 ""。用于裁剪缺口判定。
 	FirstID(ctx context.Context, executionID string, generation int) (string, error)
-	// Tail 从 afterID 之后阻塞读取至多 block 时长；无新条目返回空切片。
+	// Tail 从 afterID 之后阻塞读取至多 block 毫秒；无新条目返回空切片与 nil error。
+	//
+	// block 的单位是毫秒，与 Redis `XREAD ... BLOCK` 的参数语义逐字对齐：实现把它
+	// 原样透传给 XREAD，不做单位换算。读错单位不会报错，只会静默劣化——把秒当毫秒
+	// （传 15 想要 15s）退化成 15ms 的热轮询；把毫秒当秒则挂起千倍时长。
+	//
+	// 调用方通常传 0，表示「按实现的默认读周期阻塞」——实现回落到
+	// pkg/constants.AgentStreamReadBlock（1s）。因此在本端口上 block <= 0 是一次
+	// 正常的阻塞读，不是非阻塞读。
+	//
+	// 这与 pkg/storage/redis.StreamStore.Tail 的内部归一化不同：后者确实把 block <= 0
+	// 变成省略 BLOCK 的非阻塞读。那是本端口之下的实现细节，端口调用方观察不到，也不
+	// 得依赖——同一个 <= 0 在两层的含义恰好相反。
+	//
+	// 正值是自定义毫秒数：需要显式控制读周期时，用 pkg/constants 中的 time.Duration
+	// 常量（如 AgentStreamReadBlock）取 .Milliseconds() 传入。
 	Tail(ctx context.Context, executionID string, generation int, afterID string, block int) ([]StreamEntry, error)
 	// RefreshTTL 刷新流的存活时长。
 	RefreshTTL(ctx context.Context, executionID string, generation int) error
