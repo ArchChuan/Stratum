@@ -1,4 +1,4 @@
-import { SendOutlined } from '@ant-design/icons';
+import { SendOutlined, StopOutlined } from '@ant-design/icons';
 import { Button, Input } from 'antd';
 
 const { TextArea } = Input;
@@ -11,6 +11,8 @@ interface Props {
   loading?: boolean;
   onSend: () => void;
   isMobile?: boolean;
+  streaming?: boolean;
+  onStop?: () => void;
 }
 
 export const ChatComposer = ({
@@ -21,6 +23,8 @@ export const ChatComposer = ({
   loading = false,
   onSend,
   isMobile = false,
+  streaming = false,
+  onStop,
 }: Props) => (
   <div
     className="chat-composer"
@@ -48,16 +52,22 @@ export const ChatComposer = ({
         disabled={!selectedConv || sending || loading}
         style={{ flex: 1, resize: 'none', fontSize: 14 }}
       />
-      <Button
-        type="primary"
-        icon={<SendOutlined />}
-        onClick={onSend}
-        loading={sending}
-        disabled={!selectedConv || !input.trim()}
-        aria-label="发送消息"
-      >
-        {isMobile ? null : '发送'}
-      </Button>
+      {streaming ? (
+        <Button danger icon={<StopOutlined />} onClick={onStop} aria-label="停止生成">
+          {isMobile ? null : '停止'}
+        </Button>
+      ) : (
+        <Button
+          type="primary"
+          icon={<SendOutlined />}
+          onClick={onSend}
+          loading={sending}
+          disabled={!selectedConv || !input.trim()}
+          aria-label="发送消息"
+        >
+          {isMobile ? null : '发送'}
+        </Button>
+      )}
     </div>
   </div>
 );

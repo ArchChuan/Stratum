@@ -83,6 +83,10 @@ export const agentApi = {
 	},
 	pauseExecution: (agentId: string, executionId: string) =>
 		api.post(`/agents/${agentId}/executions/${executionId}/pause`),
+	// stopAgentExecution 请求停止一次在跑的流式执行。服务端发布控制通道消息，
+	// 由持有租约的 runner 收到后取消——对 run 在别的 pod 上同样有效。handler 不读请求体。
+	stopAgentExecution: (agentId: string, executionId: string) =>
+		api.post(`/agents/${agentId}/executions/${executionId}/stop`),
 	resumeExecution: (agentId: string, executionId: string, payload: ExecuteAgentPayload) =>
 		api.post(`/agents/${agentId}/executions/${executionId}/resume`, payload, { timeout: 0 }),
 	// 会话"进行中执行"视图：404（含不存在/无活跃/越权 fail-closed 哨兵）→ null；

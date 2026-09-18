@@ -1,3 +1,4 @@
+import { message } from 'antd';
 import {
   createContext,
   useCallback,
@@ -9,7 +10,7 @@ import {
   type ReactNode,
 } from 'react';
 
-import { executeAgentStream } from '../api/agent.api';
+import { agentApi, executeAgentStream } from '../api/agent.api';
 import type {
   AgentExecutionFailure,
   AgentExecutionResult,
@@ -199,12 +200,22 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
 
   const cancelStream = useCallback(() => {
     const s = stateRef.current;
-    if (s.ctrl) {
-      s.ctrl.abort();
-      s.ctrl = null;
-      s.delegateStatus = null;
-      s.done = true;
-      notify();
+    if (!s.ctrl) return;
+    // 保留恢复键：停止后前端不回退渲染，但服务端仍会写终态帧、保留 checkpoint。
+    const executionId = s.executionId;
+    const agentId = s.agentId;
+    s.ctrl.abort();
+    s.ctrl = null;
+    s.delegateStatus = null;
+    s.done = true;
+    notify();
+    // 通知服务端真正停掉 run：只 abort 本地 fetch 不会让 runner 退出
+    // （run 的生命周期已与 HTTP 请求解绑）。失败只提示，不回滚本地状态——
+    // 用户已经看到停止生效，孤儿超时会在 2 分钟内兜底取消。
+    if (executionId && agentId) {
+      agentApi.stopAgentExecution(agentId, executionId).catch((err) => {
+        message.error({ content: err.response?.data?.error || '停止失败', duration: 3 });
+      });
     }
   }, [notify]);
 
