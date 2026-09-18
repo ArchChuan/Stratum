@@ -1054,3 +1054,35 @@ func TestTenantSchemaAddsOperationProposalCancelledState(t *testing.T) {
 		t.Fatalf("operation_proposals status constraint must be dropped before it is rebuilt")
 	}
 }
+
+func TestTenantSchemaAddsCheckpointLeaseColumn(t *testing.T) {
+	data, err := os.ReadFile("tenant_schema.sql")
+	require.NoError(t, err)
+	sql := string(data)
+
+	// 先抽出 agent_execution_checkpoints 的建表语句体再做断言：lease_expires_at
+	// 在别的表（agent_tasks / workflow_runs / workflow_node_attempts）也有同名列，
+	// 不对表限定就会被别的表喂饱，断言恒真。`[^;]*` 跨越换行但不跨越语句结束符，
+	// 因此天然限定在这一条 CREATE TABLE 内。
+	bodyRe := regexp.MustCompile(`CREATE TABLE IF NOT EXISTS agent_execution_checkpoints\s*\(([^;]*)\);`)
+	m := bodyRe.FindStringSubmatch(sql)
+	require.NotEmpty(t, m, "tenant schema must define agent_execution_checkpoints")
+	body := m[1]
+
+	// CREATE TABLE 内嵌新列只对新租户生效，存量租户必须靠 ADD COLUMN IF NOT EXISTS
+	// 补齐。两者缺一都会让一半租户的租约查询报 column does not exist。
+	// 用 \s+ 而不是对齐后的字面空格：列对齐宽度会随最长列名变化，写死空格数会让
+	// 断言在无关的格式化改动后静默失效。
+	require.Regexp(t, `lease_expires_at\s+TIMESTAMPTZ`, body)
+
+	alter := "ALTER TABLE agent_execution_checkpoints ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ;"
+	require.Contains(t, sql, alter)
+
+	// 新列必须排在依赖它的索引/约束之前：保持历史 schema 顺序（先建表/补列，后建索引）。
+	require.Less(t, strings.Index(sql, alter),
+		strings.Index(sql, "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_execution_checkpoints_execution"))
+
+	// 可空且无 DEFAULT 是刻意的：NULL 表示「无 runner 持有」，与
+	// lease_expires_at <= NOW() 的「租约过期」是两种不同状态。
+	require.NotRegexp(t, `lease_expires_at\s+TIMESTAMPTZ\s+NOT NULL`, body)
+}
