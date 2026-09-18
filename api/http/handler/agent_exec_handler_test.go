@@ -144,7 +144,17 @@ func TestAgentExecutionErrorPayloadUsesPublicContract(t *testing.T) {
 	}
 }
 
-func TestExecuteAgentStreamReturnsJSONContractBeforeStreamStarts(t *testing.T) {
+// stream 依赖未装配时必须 fail closed：返回 5xx JSON，而**不是**开出一条 200 的
+// SSE 流。静默开流会让「wiring 配错」退化成前端永远等不到终态的黑洞。
+//
+// 本用例此前钉的是「流开始前返回 503 JSON + ASSISTANT_MODEL_UNAVAILABLE」，但该错误
+// 已按裁定 9 从 HTTP 错误体改成**流内 error 帧**（前端靠 event.code 出告警），那条
+// 同步契约随之退役——错误码「不漂移」的守卫已迁到应用层，覆盖点：
+//   - internal/agent/application/agent_stream_execute_test.go:364
+//     TestErrorPayloadBytesPreservesMapperCode（断言 mapper 的 code 原样进入流内载荷）
+//   - api/http/handler/agent_exec_handler_test.go:104
+//     TestAgentExecutionErrorPayloadUsesPublicContract（断言 error 帧保留 code）
+func TestExecuteAgentStreamFailsClosedWithoutStreamDeps(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	repo := &settingsAgentRepo{cfg: &domain.AgentConfig{
 		ID: domain.SystemAssistantID,
@@ -170,15 +180,14 @@ func TestExecuteAgentStreamReturnsJSONContractBeforeStreamStarts(t *testing.T) {
 	request.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(response, request)
 
-	if response.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want %d", response.Code, http.StatusServiceUnavailable)
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusInternalServerError)
 	}
 	if got := response.Header().Get("Content-Type"); got != "application/json; charset=utf-8" {
 		t.Fatalf("content type = %q, want application/json", got)
 	}
-	wantBody := "{\"code\":\"ASSISTANT_MODEL_UNAVAILABLE\",\"error\":\"该 Agent 尚未配置可用模型\"}"
-	if response.Body.String() != wantBody {
-		t.Fatalf("body = %q, want %q", response.Body.String(), wantBody)
+	if got := response.Header().Get("Content-Type"); strings.Contains(got, "text/event-stream") {
+		t.Fatalf("content type = %q: stream opened despite missing stream dependencies", got)
 	}
 }
 

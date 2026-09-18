@@ -487,3 +487,30 @@ func mustJSON(v any) string {
 	}
 	return string(encoded)
 }
+
+// StopExecution 校验所有权后向控制通道发布取消消息。
+//
+// 授权必须在发布之前完成——Pub/Sub 通道本身不承载鉴权（spec §9）。
+// 归属判定复用租户限定的 checkpoint 查询：查不到或 user_id 不匹配都返回
+// ErrNotFound，不区分两者，关闭 existence oracle。
+func (s *AgentService) StopExecution(
+	ctx context.Context, tenantID, executionID, userID string,
+) error {
+	if s.deps.ControlBus == nil {
+		return fmt.Errorf("agent: stop execution: control bus not configured")
+	}
+	cp, err := s.deps.CheckpointStore.GetLatest(ctx, tenantID, executionID)
+	if err != nil {
+		return fmt.Errorf("agent: stop execution: load checkpoint: %w", err)
+	}
+	if cp == nil {
+		return ErrNotFound
+	}
+	if cp.UserID != "" && userID != "" && cp.UserID != userID {
+		return ErrNotFound
+	}
+	if err := s.deps.ControlBus.PublishStop(ctx, executionID); err != nil {
+		return fmt.Errorf("agent: stop execution: publish: %w", err)
+	}
+	return nil
+}

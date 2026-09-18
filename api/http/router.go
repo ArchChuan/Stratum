@@ -547,6 +547,7 @@ func registerAgents(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 		agents.POST("/:id/execute/stream", requireActive, execRateLimit, agentHandler.ExecuteAgentStream)
 		agents.POST("/:id/executions/:executionID/pause", requireActive, agentHandler.PauseExecution)
 		agents.POST("/:id/executions/:executionID/resume", requireActive, agentHandler.ResumeExecution)
+		agents.POST("/:id/executions/:executionID/stop", requireActive, agentHandler.StopExecution)
 		// P1/P2：白名单成员可编辑——update 门控放宽到 member+，真实鉴权由 service
 		// ownership 矩阵完成（owner/admin/creator/白名单 editor 放行，其余 ErrForbidden）；
 		// editors 管理同样放宽，SetEditors 内部仍限 creator/owner（editors=nil 拒编辑人委托）。
