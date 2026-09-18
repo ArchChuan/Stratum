@@ -44,3 +44,11 @@ func (c *Client) Close() error {
 func Wrap(c *goredis.Client) *Client {
 	return &Client{client: c}
 }
+
+// Duplicate 返回共享同一份连接参数、但拥有独立连接池的新 Client。
+// go-redis 的 Pub/Sub 独占一条连接，控制通道必须与 Stream 命令分开实例，
+// 否则订阅期间普通命令会在同一连接上排队饿死。
+// 调用方负责关闭返回的实例。
+func (c *Client) Duplicate() *Client {
+	return &Client{client: goredis.NewClient(c.client.Options()), logger: c.logger}
+}
