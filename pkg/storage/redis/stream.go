@@ -22,6 +22,11 @@ type StreamEntry struct {
 const (
 	streamFieldEvent   = "e"
 	streamFieldPayload = "d"
+
+	// streamNonBlocking 是 XReadArgs.Block 的哨兵值：go-redis 只在 Block < 0 时
+	// 完全省略 BLOCK 参数，而 Block == 0 会被原样拼成 `BLOCK 0`——Redis 语义是
+	// 「永不超时」，连接会被无限期占用。
+	streamNonBlocking = -1
 )
 
 // StreamStore 是 Redis Streams 的薄封装。它只做 IO——key 由调用方构造
@@ -61,15 +66,24 @@ func (s *StreamStore) append(ctx context.Context, key string, maxLen int64, valu
 	return id, nil
 }
 
-// Range 返回 afterID 之后的条目。afterID 为空时从头全量回放。count <= 0
-// 表示不限条数。游标是「已渲染到的最后一条」，因此范围**排他**——包含它会
-// 让重连后的第一格重复渲染。
+// Range 返回 afterID 之后的条目。afterID 为空时从头全量回放，count <= 0 表示
+// 不限条数：XRangeN 会无条件拼出 `COUNT <n>`，而真实 Redis 对 `COUNT 0` 返回的是
+// null array（被客户端映射成 redis.Nil），所以不限条数必须走不带 COUNT 的 XRange。
+// 游标是「已渲染到的最后一条」，因此范围**排他**——包含它会让重连后的第一格重复渲染。
 func (s *StreamStore) Range(ctx context.Context, key, afterID string, count int64) ([]StreamEntry, error) {
 	start := "-"
 	if afterID != "" {
 		start = "(" + afterID
 	}
-	msgs, err := s.client.XRangeN(ctx, key, start, "+", count).Result()
+	var (
+		msgs []goredis.XMessage
+		err  error
+	)
+	if count > 0 {
+		msgs, err = s.client.XRangeN(ctx, key, start, "+", count).Result()
+	} else {
+		msgs, err = s.client.XRange(ctx, key, start, "+").Result()
+	}
 	if err != nil {
 		return nil, fmt.Errorf("redis: xrange %q: %w", key, err)
 	}
@@ -89,13 +103,18 @@ func (s *StreamStore) FirstID(ctx context.Context, key string) (string, error) {
 	return msgs[0].ID, nil
 }
 
-// Tail 从 afterID 之后阻塞读取至多 block 时长。阻塞到期无新条目返回空切片
-// 与 nil error——调用方据此检查 ctx 并写心跳，而不是当成失败。
+// Tail 从 afterID 之后读取至多 block 时长的新条目。block <= 0 表示非阻塞读——
+// Go 的零值惯用法必须落在「立刻返回」上，而不是落到 Redis 的 `BLOCK 0`（永不超时）。
+// 无新条目时返回空切片与 nil error——调用方据此检查 ctx 并写心跳，而不是当成失败；
+// 空切片而非 nil 是契约的一部分，nil 序列化出去是 null，调用方拿到的是 []。
 func (s *StreamStore) Tail(
 	ctx context.Context, key, afterID string, count int64, block time.Duration,
 ) ([]StreamEntry, error) {
 	if afterID == "" {
 		afterID = "0-0"
+	}
+	if block <= 0 {
+		block = streamNonBlocking
 	}
 	msgs, err := s.client.XRead(ctx, &goredis.XReadArgs{
 		Streams: []string{key, afterID},
@@ -103,13 +122,13 @@ func (s *StreamStore) Tail(
 		Block:   block,
 	}).Result()
 	if errors.Is(err, goredis.Nil) {
-		return nil, nil
+		return []StreamEntry{}, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("redis: xread %q: %w", key, err)
 	}
 	if len(msgs) == 0 {
-		return nil, nil
+		return []StreamEntry{}, nil
 	}
 	return toEntries(msgs[0].Messages), nil
 }
