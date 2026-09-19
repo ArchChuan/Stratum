@@ -1,0 +1,29 @@
+[
+  {
+    "name": "default-unauth",
+    "method": "POST",
+    "path": "/agents/:id/executions/:executionID/stop",
+    "body": {
+      "error": "missing bearer token"
+    },
+    "want_status": 401
+  },
+  {
+    "name": "authenticated-running",
+    "method": "POST",
+    "path": "/agents/contract-id/executions/contract-exec-running/stop",
+    "want_status": 200,
+    "want_body": {
+      "status": "stopping"
+    }
+  },
+  {
+    "name": "authenticated-unknown-execution",
+    "method": "POST",
+    "path": "/agents/contract-id/executions/contract-exec-unknown/stop",
+    "want_status": 404,
+    "want_body": {
+      "error": "agent not found"
+    }
+  }
+]

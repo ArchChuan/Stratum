@@ -93,7 +93,12 @@ func TestContracts(t *testing.T) {
 			for _, c := range cases {
 				req := httptest.NewRequest(c.Method, c.Path, bytes.NewReader(c.Body))
 
-				useDDD := strings.Contains(c.Path, "/self-modify")
+				// spec §496-500：stop 端点带具体 ID 的用例必须走 DDD router 才穿得过认证
+				// 抵达 AgentHandler.StopExecution，否则该端点在契约层是裸的。占位符路径
+				// （:id/:executionID）刻意留在默认分支——DDD 分支会为用例注入合法 token，
+				// 把 401 断言换成 handler 响应；pause/resume 的 401 因此不受影响。
+				useDDD := strings.Contains(c.Path, "/self-modify") ||
+					strings.HasPrefix(c.Path, "/agents/contract-id/executions/")
 				for _, prefix := range dddPrefixes {
 					if strings.HasPrefix(c.Path, prefix) {
 						useDDD = true

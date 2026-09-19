@@ -94,12 +94,18 @@ type AgentResponse struct {
 }
 
 type ExecuteAgentRequest struct {
-	Query          string                 `json:"query"`
-	ConversationID string                 `json:"conversation_id"`
-	ExecutionID    string                 `json:"execution_id"`
-	UserID         string                 `json:"user_id"`
-	Context        map[string]interface{} `json:"context"`
-	Options        map[string]interface{} `json:"options"`
+	Query          string `json:"query"`
+	ConversationID string `json:"conversation_id"`
+	ExecutionID    string `json:"execution_id"`
+	// Generation / LastEventID 是断线续传的游标（spec §6.4）。二者都是
+	// wire-only 字段：本结构体是 agent execute 路由的实际绑定点，proto 中的
+	// ExecuteAgentRequest 是零引用的死代码（spec §11.4）。
+	// LastEventID 只存在于会话内，F5 后前端不发它 → 服务端全量回放。
+	Generation  int                    `json:"generation"`
+	LastEventID string                 `json:"last_event_id"`
+	UserID      string                 `json:"user_id"`
+	Context     map[string]interface{} `json:"context"`
+	Options     map[string]interface{} `json:"options"`
 }
 
 type AgentExecutionResult struct {

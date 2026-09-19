@@ -333,3 +333,47 @@ func DynamicCompactionMaxTokens(maxContextTokens int) int {
 	}
 	return derived
 }
+
+// Agent 执行流续传（spec §6.7）。租约、viewer、孤儿超时三者共同决定 runner
+// 的生命周期——它与任何 HTTP 连接都无关。
+const (
+	// AgentStreamTTL 是执行输出流在 Redis 中的存活时长。创建时设一次，
+	// runner 续租心跳搭车 EXPIRE 刷新，订阅者 attach 时也续一次。
+	AgentStreamTTL = 1 * time.Hour
+
+	// AgentStreamMaxLen 是流的近似最大长度（XADD MAXLEN ~）。取 20000 而非
+	// 10000：F5 场景需要全量回放，裁剪造成的缺口会直接截断用户看到的答案。
+	AgentStreamMaxLen = 20000
+
+	// AgentStreamReplayBatch 是单次 XRANGE 回放的最大条数，与 MAXLEN 对齐。
+	AgentStreamReplayBatch = 20000
+
+	// AgentStreamReadBlock 是 XREAD BLOCK 的单次阻塞时长。到期无新条目即返回
+	// 空切片，让订阅循环有机会检查 ctx 与写心跳。
+	AgentStreamReadBlock = 1 * time.Second
+
+	// AgentStreamFrameBufferSize 是订阅侧帧通道的容量，即「transport 写出落后
+	// 于流」时可缓冲的帧数。128 帧 ≈ 一次答案的几轮 token 批次，足以吸收慢
+	// 客户端的小抖动而不阻塞；缓冲满时 emit 阻塞，背压只停住该连接自己的订阅
+	// goroutine（spec §4.4）。
+	AgentStreamFrameBufferSize = 128
+
+	// AgentStreamIdleExit 是订阅侧的看门狗上限：租约已失效且流持续无新条目超过
+	// 该时长即结束订阅。只在 runner 被 SIGKILL（无终态帧）时兜底，避免前端
+	// 无限 spinner。
+	AgentStreamIdleExit = 2 * time.Minute
+
+	// AgentExecutionLeaseTTL 是执行租约的有效期。续租 CAS 失败意味着另一个
+	// runner 已抢占，僵尸 runner 必须立刻自取消。
+	AgentExecutionLeaseTTL = 30 * time.Second
+
+	// AgentExecutionLeaseRenewInterval 是续租间隔，取租约的 1/3。
+	AgentExecutionLeaseRenewInterval = 10 * time.Second
+
+	// AgentViewerTimeout 是订阅者无心跳后被摘除的时长。崩溃/断网自然过期，
+	// runner 不需要查询 Redis。
+	AgentViewerTimeout = 15 * time.Second
+
+	// AgentExecutionOrphanTimeout 是无活跃订阅者后 run 被取消的时长。
+	AgentExecutionOrphanTimeout = 2 * time.Minute
+)

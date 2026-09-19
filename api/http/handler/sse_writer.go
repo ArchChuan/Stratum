@@ -8,6 +8,9 @@ import (
 )
 
 type sseEvent struct {
+	// id 是 Redis Stream entry ID，逐字作为 SSE 的 id: 行。不做任何编码——
+	// 客户端原样回传即可用作断线续传游标，服务端可直接喂给 XRANGE。
+	id      string
 	comment string
 	name    string
 	data    string
@@ -40,6 +43,11 @@ func (w *sseEventWriter) EnqueueData(data string) bool {
 
 func (w *sseEventWriter) EnqueueComment(comment string) bool {
 	return w.enqueue(sseEvent{comment: comment})
+}
+
+// EnqueueStreamFrame 入队一条带游标的 SSE 帧。name 为空则省略 event: 行。
+func (w *sseEventWriter) EnqueueStreamFrame(id, name, data string) bool {
+	return w.enqueue(sseEvent{id: id, name: name, data: data})
 }
 
 func (w *sseEventWriter) enqueue(ev sseEvent) bool {
@@ -88,6 +96,9 @@ func (w *sseEventWriter) write(ev sseEvent) {
 	if ev.comment != "" {
 		_, _ = fmt.Fprintf(w.w, ": %s\n\n", ev.comment)
 	} else {
+		if ev.id != "" {
+			_, _ = fmt.Fprintf(w.w, "id: %s\n", ev.id)
+		}
 		if ev.name != "" {
 			_, _ = fmt.Fprintf(w.w, "event: %s\n", ev.name)
 		}

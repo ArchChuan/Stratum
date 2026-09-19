@@ -54,6 +54,7 @@ export const AgentChatPage = ({
     resumeBlocked,
     resumeBlockedLabel,
     streaming,
+    cancelStream,
     delegateStatus,
     manualResumeWaiting,
     cancelWaitingApproval,
@@ -176,6 +177,8 @@ export const AgentChatPage = ({
           loading={loadingConvs}
           onSend={handleSend}
           isMobile={isMobile}
+          streaming={streaming}
+          onStop={cancelStream}
         />
       </div>
     </div>

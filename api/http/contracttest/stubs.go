@@ -305,6 +305,62 @@ func (contractAgentRepo) Rollback(context.Context, *agentdomain.AgentConfig, *au
 	return nil
 }
 
+// ── 流式执行控制面 stubs（stop 端点契约，spec §496-500） ────────────────────
+//
+// stop 端点先判 ControlBus 非 nil、再用 CheckpointStore 做归属判定，两者任一缺失
+// 都只会给出错误响应，契约 golden 拿不到 200/404。这里给确定性替身：只有
+// ContractRunningExecutionID 存在归属 ContractActorID 的 checkpoint，其余
+// executionID 一律返回 nil（handler 映射为 404，不区分"不存在"与"不属于你"）。
+
+// ContractActorID 与 contract_test.go / record-contracts.go 签发的 JWT sub 同值：
+// 归属判定按严格相等，两者一旦漂移，成功路径会立刻掉到 404 让用例变红（非静默）。
+const ContractActorID = "contract-admin"
+
+// ContractRunningExecutionID 是 harness 认定的「在跑执行」：stop 成功路径的靶子。
+const ContractRunningExecutionID = "contract-exec-running"
+
+type contractCheckpointRepo struct{}
+
+func (contractCheckpointRepo) GetLatest(_ context.Context, _, executionID string) (*agentdomain.AgentExecutionCheckpoint, error) {
+	if executionID != ContractRunningExecutionID {
+		return nil, nil
+	}
+	return &agentdomain.AgentExecutionCheckpoint{
+		ID: "contract-checkpoint", ExecutionID: executionID,
+		UserID: ContractActorID, Status: "running",
+	}, nil
+}
+func (contractCheckpointRepo) Upsert(context.Context, string, agentdomain.AgentExecutionCheckpoint) error {
+	return nil
+}
+func (contractCheckpointRepo) MarkCompleted(context.Context, string, string) error { return nil }
+func (contractCheckpointRepo) UpdateStatus(context.Context, string, string, string) error {
+	return nil
+}
+func (contractCheckpointRepo) DeleteExpired(context.Context, string) (int64, error) { return 0, nil }
+func (contractCheckpointRepo) GetLatestActiveByConversation(context.Context, string, string) (*agentdomain.AgentExecutionCheckpoint, error) {
+	return nil, nil
+}
+func (contractCheckpointRepo) UpdateStatusFrom(context.Context, string, string, string, string) error {
+	return nil
+}
+func (contractCheckpointRepo) AdvanceRunGeneration(context.Context, string, string, int) error {
+	return nil
+}
+func (contractCheckpointRepo) Terminate(context.Context, string, string, string) error { return nil }
+
+// contractControlBus 实现 port.AgentControlBus。stop 端点只用到 PublishStop；
+// 订阅侧不参与该端点，返回已关闭通道 + no-op 取消函数（不会悬挂等待者）。
+type contractControlBus struct{}
+
+func (contractControlBus) PublishStop(context.Context, string) error           { return nil }
+func (contractControlBus) PublishViewer(context.Context, string, string) error { return nil }
+func (contractControlBus) Subscribe(context.Context, string) (<-chan agentport.ControlMessage, func(), error) {
+	ch := make(chan agentport.ControlMessage)
+	close(ch)
+	return ch, func() {}, nil
+}
+
 // Operation gate stubs: self-modify always lands as a pending proposal, so
 // the recorded response is the deterministic 202 pending_approval shape.
 type contractOpPropRepo struct{}

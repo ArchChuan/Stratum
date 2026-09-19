@@ -458,8 +458,22 @@ func (s *AgentService) populateApprovalStatus(ctx context.Context, tenantID stri
 // simply does not exist, so nothing can be mis-resumed.
 
 func (s *AgentService) ensureInitialCheckpoint(ctx context.Context, meta ExecMeta, req ExecRequest, agentID, executionID string) {
+	if err := s.writeInitialCheckpoint(ctx, meta, req, agentID, executionID); err != nil {
+		s.deps.Logger.Warn("agent: initial checkpoint failed",
+			zap.String("execution_id", executionID),
+			zap.Error(err))
+	}
+}
+
+// writeInitialCheckpoint 建 init checkpoint 行并返回错误。ensureInitialCheckpoint
+// 对错误 fail-open（非流式路径不变），但流式 NEW 路径必须 fail closed：租约的
+// StampLease 是纯 UPDATE，缺行即失败，所以「先建行、写失败硬失败」是走通 NEW
+// 路径的前提（C-1：先盖章后建行会让新会话 100% 失败）。
+func (s *AgentService) writeInitialCheckpoint(
+	ctx context.Context, meta ExecMeta, req ExecRequest, agentID, executionID string,
+) error {
 	if meta.ExecutionID != "" || s.deps.CheckpointStore == nil {
-		return
+		return nil
 	}
 	markCtx, markCancel := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)
 	defer markCancel()
@@ -476,10 +490,9 @@ func (s *AgentService) ensureInitialCheckpoint(ctx context.Context, meta ExecMet
 		RunGeneration:  1,
 	}
 	if err := s.deps.CheckpointStore.Upsert(markCtx, meta.TenantID, checkpoint); err != nil {
-		s.deps.Logger.Warn("agent: initial checkpoint failed",
-			zap.String("execution_id", executionID),
-			zap.Error(err))
+		return fmt.Errorf("agent: upsert initial checkpoint: %w", err)
 	}
+	return nil
 }
 
 // approvalResumeEntry 是审批续跑的一条恢复条目：已批准（Terminal=false，工具可

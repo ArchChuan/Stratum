@@ -91,3 +91,29 @@ func TestCollectionName(t *testing.T) {
 		})
 	}
 }
+
+func TestAgentLeaseRenewIntervalIsOneThirdOfTTL(t *testing.T) {
+	// 续租间隔必须是租约的 1/3：单次续租失败仍有 2 次重试，同时把僵尸 runner
+	// 的窗口压到 TTL/3（spec §6.7 D3）。
+	if AgentExecutionLeaseRenewInterval*3 != AgentExecutionLeaseTTL {
+		t.Fatalf("renew interval %v is not TTL/3 of lease %v",
+			AgentExecutionLeaseRenewInterval, AgentExecutionLeaseTTL)
+	}
+}
+
+func TestAgentViewerTimeoutIsShorterThanOrphanTimeout(t *testing.T) {
+	// viewer 无心跳摘除必须显著早于孤儿取消，否则一个刚崩溃的订阅者会立刻
+	// 触发孤儿计时（spec §7.1）。
+	if AgentViewerTimeout >= AgentExecutionOrphanTimeout {
+		t.Fatalf("viewer timeout %v must be shorter than orphan timeout %v",
+			AgentViewerTimeout, AgentExecutionOrphanTimeout)
+	}
+}
+
+func TestAgentStreamMaxLenCoversFullReplay(t *testing.T) {
+	// MAXLEN 取 20000 而非 10000：F5 需要全量回放，裁剪造成的缺口会直接
+	// 截断用户看到的答案（spec §6.5）。
+	if AgentStreamMaxLen < 20000 {
+		t.Fatalf("stream max len %d is too small for full replay", AgentStreamMaxLen)
+	}
+}

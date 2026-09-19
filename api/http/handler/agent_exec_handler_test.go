@@ -30,7 +30,7 @@ func TestExecuteAgentAndStreamDoneUseSameArtifactShape(t *testing.T) {
 	result := &domain.AgentResult{AgentID: "a1", Input: "q", Output: "ok", Steps: 1, Duration: time.Second,
 		Artifacts: []domain.ExecutionArtifact{{Type: "diagnostic_report", ProfileVersion: "v1", DiagnosticReport: &domain.DiagnosticReport{Facts: []domain.DiagnosticFact{}, Inferences: []string{}, EvidenceGaps: []domain.EvidenceGap{}, RecommendedActions: []string{}, Citations: []domain.Citation{}, Steps: []domain.DiagnosticStep{}}}}}
 	syncDTO := agentExecutionResultDTO(result)
-	done := agentExecutionDonePayload(result)
+	done := payloadTestHandler(t).agentExecutionDonePayload(result)
 	var decoded map[string]any
 	if err := json.Unmarshal(done, &decoded); err != nil {
 		t.Fatal(err)
@@ -129,7 +129,7 @@ func TestAgentExecutionErrorPayloadUsesPublicContract(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			payload := agentExecutionErrorPayload(tt.err)
+			payload := payloadTestHandler(t).agentExecutionErrorPayload(tt.err)
 			var decoded map[string]string
 			if err := json.Unmarshal(payload, &decoded); err != nil {
 				t.Fatal(err)
@@ -144,7 +144,16 @@ func TestAgentExecutionErrorPayloadUsesPublicContract(t *testing.T) {
 	}
 }
 
-func TestExecuteAgentStreamReturnsJSONContractBeforeStreamStarts(t *testing.T) {
+// stream 依赖未装配时必须 fail closed：返回 5xx JSON，而**不是**开出一条 200 的
+// SSE 流。静默开流会让「wiring 配错」退化成前端永远等不到终态的黑洞。
+//
+// 本用例此前钉的是「流开始前返回 503 JSON + ASSISTANT_MODEL_UNAVAILABLE」，但该错误
+// 已按裁定 9 从 HTTP 错误体改成**流内 error 帧**（前端靠 event.code 出告警），那条
+// 同步契约随之退役——错误码「不漂移」的守卫已迁到应用层，覆盖点（按函数名引用，
+// 行号会随同文件其它改动持续漂移）：
+//   - application.TestErrorPayloadBytesPreservesMapperCode（断言 mapper 的 code 原样进入流内载荷）
+//   - handler.TestAgentExecutionErrorPayloadUsesPublicContract（断言 error 帧保留 code）
+func TestExecuteAgentStreamFailsClosedWithoutStreamDeps(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	repo := &settingsAgentRepo{cfg: &domain.AgentConfig{
 		ID: domain.SystemAssistantID,
@@ -157,6 +166,10 @@ func TestExecuteAgentStreamReturnsJSONContractBeforeStreamStarts(t *testing.T) {
 	router.Use(func(c *gin.Context) {
 		ctx := reqctx.WithTenantID(c.Request.Context(), "tenant-1")
 		c.Request = c.Request.WithContext(ctx)
+		// 裁定 11：execute/stream 入口现在先做身份闸门。本用例测的是「stream
+		// 依赖未装配必须 fail closed」，必须先给出合法身份，否则会在闸门处
+		// 401，测不到后面那条契约（缺身份 → 401 由专属用例覆盖）。
+		c.Set(middleware.ContextKeySub, "u1")
 		c.Next()
 	})
 	router.POST("/agents/:id/execute/stream", handler.ExecuteAgentStream)
@@ -170,15 +183,19 @@ func TestExecuteAgentStreamReturnsJSONContractBeforeStreamStarts(t *testing.T) {
 	request.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(response, request)
 
-	if response.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want %d", response.Code, http.StatusServiceUnavailable)
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusInternalServerError)
 	}
 	if got := response.Header().Get("Content-Type"); got != "application/json; charset=utf-8" {
 		t.Fatalf("content type = %q, want application/json", got)
 	}
-	wantBody := "{\"code\":\"ASSISTANT_MODEL_UNAVAILABLE\",\"error\":\"该 Agent 尚未配置可用模型\"}"
-	if response.Body.String() != wantBody {
-		t.Fatalf("body = %q, want %q", response.Body.String(), wantBody)
+	// 第三条断言必须有独立判别力：上一个断言已钉死 content-type 不等于
+	// text/event-stream，再 Contains 一次恒假。改成直接查 SSE 体征——一旦实现
+	// 提前开了流，响应体里必然出现 `data:` 行，这条就会变红。
+	for _, line := range strings.Split(response.Body.String(), "\n") {
+		if strings.HasPrefix(line, "data:") {
+			t.Fatalf("SSE data frame emitted despite missing stream dependencies: %q", line)
+		}
 	}
 }
 
@@ -186,7 +203,7 @@ func TestAgentExecutionDonePayloadSourcesSerializeAsArray(t *testing.T) {
 	// Without sources the payload must carry "sources":[] — never null — so
 	// the frontend can treat done.sources as a list during rolling upgrades.
 	result := &domain.AgentResult{AgentID: "a1", Output: "ok"}
-	done := agentExecutionDonePayload(result)
+	done := payloadTestHandler(t).agentExecutionDonePayload(result)
 	if !strings.Contains(string(done), `"sources":[]`) {
 		t.Fatalf("done payload must serialize empty sources as []: %s", done)
 	}
@@ -199,7 +216,7 @@ func TestAgentExecutionDonePayloadSourcesSerializeAsArray(t *testing.T) {
 		WorkspaceID: "ws-1", WorkspaceName: "legal", ChunkID: "chunk-1",
 		DocumentID: "doc-1", DocumentTitle: "policy.pdf", Snippet: "must be short",
 	}}
-	done = agentExecutionDonePayload(result)
+	done = payloadTestHandler(t).agentExecutionDonePayload(result)
 	var decoded map[string]any
 	if err := json.Unmarshal(done, &decoded); err != nil {
 		t.Fatal(err)
@@ -235,7 +252,7 @@ func TestAgentExecutionDonePayloadFactCheckAndDegraded(t *testing.T) {
 				},
 			},
 		}
-		done := agentExecutionDonePayload(result)
+		done := payloadTestHandler(t).agentExecutionDonePayload(result)
 		var decoded map[string]any
 		if err := json.Unmarshal(done, &decoded); err != nil {
 			t.Fatal(err)
@@ -274,7 +291,7 @@ func TestAgentExecutionDonePayloadFactCheckAndDegraded(t *testing.T) {
 				UnverifiedClaims: []string{"已发送通知"},
 			},
 		}
-		done := agentExecutionDonePayload(result)
+		done := payloadTestHandler(t).agentExecutionDonePayload(result)
 		var decoded map[string]any
 		if err := json.Unmarshal(done, &decoded); err != nil {
 			t.Fatal(err)
@@ -309,7 +326,7 @@ func TestAgentExecutionDonePayloadFactCheckAndDegraded(t *testing.T) {
 				Checked: true, IsValid: true, Claims: []domain.ClaimVerdict{},
 			},
 		}
-		done := agentExecutionDonePayload(result)
+		done := payloadTestHandler(t).agentExecutionDonePayload(result)
 		var decoded map[string]any
 		if err := json.Unmarshal(done, &decoded); err != nil {
 			t.Fatal(err)
@@ -331,7 +348,7 @@ func TestAgentExecutionDonePayloadFactCheckAndDegraded(t *testing.T) {
 
 	t.Run("fact_check absent when not checked", func(t *testing.T) {
 		result := &domain.AgentResult{AgentID: "a1", Output: "ok"}
-		done := agentExecutionDonePayload(result)
+		done := payloadTestHandler(t).agentExecutionDonePayload(result)
 		if strings.Contains(string(done), "factCheck") {
 			t.Fatalf("done payload must omit factCheck when nil: %s", done)
 		}
@@ -346,7 +363,7 @@ func TestAgentExecutionDonePayloadFactCheckAndDegraded(t *testing.T) {
 				Claims: []domain.ClaimVerdict{{Text: "c1", Verdict: "SUPPORTED", Risk: 0}},
 			},
 		}
-		done := agentExecutionDonePayload(result)
+		done := payloadTestHandler(t).agentExecutionDonePayload(result)
 		var decoded map[string]any
 		if err := json.Unmarshal(done, &decoded); err != nil {
 			t.Fatal(err)
@@ -372,7 +389,7 @@ func TestAgentExecutionDonePayloadWhitelistsTaskSnapshot(t *testing.T) {
 	result.Metadata[constants.TaskMetadataKey] = map[string]interface{}{"id": "task-1", "status": "in_progress"}
 	result.Metadata["admin_token"] = "sekrit"
 
-	done := agentExecutionDonePayload(result)
+	done := payloadTestHandler(t).agentExecutionDonePayload(result)
 	var decoded map[string]any
 	if err := json.Unmarshal(done, &decoded); err != nil {
 		t.Fatal(err)

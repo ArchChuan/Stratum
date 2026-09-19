@@ -417,13 +417,81 @@ jobs:
       - name: Run platform assistant PostgreSQL E2E
         run: bash scripts/test-platform-assistant-e2e.sh
 
+  agent-integration:
+    name: Agent Resume Integration
+    runs-on: ubuntu-latest
+    # 只在 PR 上跑(理由同 test/workflow-e2e):main push 由 build 冒烟兜底。
+    if: ${{ github.event_name == 'pull_request' }}
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: agent_integration_ci_only
+          POSTGRES_DB: stratum_agent_integration
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d stratum_agent_integration"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      STRATUM_TEST_POSTGRES_URL: postgres://postgres:agent_integration_ci_only@127.0.0.1:5432/stratum_agent_integration?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Generate proto contracts
+        run: make proto-gen
+
+      # 本 job 存在的理由:下面 -run 点名的 9 个用例在两支 PR 门禁里都不会真正执行,
+      # 但排除方式有两种,别混为一谈:
+      #   1) 编译期排除:agent_stream_cross_instance_integration_test.go 带
+      #      `//go:build integration`,不进默认测试二进制,只有 -tags=integration 才编译;
+      #   2) 运行期跳过:checkpoint_lease_integration_test.go 没有 build tag,会照常编进
+      #      默认二进制,但它只在 STRATUM_TEST_POSTGRES_URL 非空时开跑,而
+      #      scripts/quality/run-planned-checks.sh 显式 `env -u STRATUM_TEST_POSTGRES_URL`,
+      #      于是走 t.Skip——文件在二进制里,用例却不执行。
+      # 两条路径的净效果相同:checkpoint_lease.go 的五个租约方法
+      # (整支续传设计唯一的互斥源,PG CAS)执行覆盖率停在 0.0%。本 job 用真实 PG
+      # 补上这块;测试自带 ProvisionPublicSchema/ProvisionTenantSchema,库存在即可。
+      # Redis 无需 service:跨实例用例用进程内 miniredis 提供 Streams/Pub-Sub 语义。
+      - name: Vet integration-tagged agent packages
+        run: go vet -tags=integration ./internal/agent/...
+
+      # 用 -race:test job 的 `-race ./...` 看不到带 tag 的文件,这里是被 CAS 并发语义
+      # 唯一的 race 检测落点(用例内的超时预算本就是按 -race 抖动定的)。
+      # 只跑续传证据面:更宽的 ./internal/agent/... 集成面含一个与本支无关的存量失败
+      # (resource_change_proposal_repo_integration_test.go:55 期望 ErrNotFound,
+      # repo 返回 ErrProposalNotFound),待其单独修复后再放宽 -run。
+      - name: Run agent resume lease and cross-instance integration tests
+        run: |
+          set -o pipefail
+          go test -tags=integration ./internal/agent/... -count=1 -race -v \
+            -run '^(TestCrossInstance|TestResumeAtTail|TestLease)' | tee /tmp/agent-integration.log
+          # -run 是名字耦合的:用例一旦改名、或用例被删,本 job 会以「no tests to run」
+          # 静默变绿——那正是 C1 要根除的病。逐名核对承载 C1 的用例确实执行过。
+          for t in \
+            TestCrossInstanceResumeDoesNotRegenerate TestCrossInstanceFailurePaths \
+            TestResumeAtTailDoesNotReplayStream \
+            TestLeaseStampThenStatusActive TestLeaseStampOnMissingCheckpointFails \
+            TestLeaseClaimIsExclusive TestLeaseRenewFencesStaleRunner \
+            TestLeaseReleaseClearsActive TestLeaseStatusIsTenantScoped; do
+            grep -q -- "--- PASS: $t " /tmp/agent-integration.log ||
+              { echo "::error::$t did not execute"; exit 1; }
+          done
+
   build:
     name: Build
     runs-on: ubuntu-latest
-    needs: [guardrails, lint, test, contract, workflow-e2e, platform-assistant-e2e]
+    needs: [guardrails, lint, test, contract, workflow-e2e, platform-assistant-e2e, agent-integration]
     # PR 上保持原语义(所有依赖成功才跑);main push 上 test/workflow-e2e/
-    # platform-assistant-e2e 被跳过(PR 已验证),build 作为编译+vet 冒烟仍执行,
-    # 保证合并树 ./cmd/server 能编译,CD 不会在 build-backend 阶段才暴露。
+    # platform-assistant-e2e/agent-integration 被跳过(PR 已验证),build 作为编译+vet
+    # 冒烟仍执行,保证合并树 ./cmd/server 能编译,CD 不会在 build-backend 阶段才暴露。
     if: ${{ github.event_name != 'pull_request' || success() }}
     steps:
       - uses: actions/checkout@v4

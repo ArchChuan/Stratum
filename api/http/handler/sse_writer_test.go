@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -44,5 +45,42 @@ func TestSSEEventWriterSerializesQueuedEvents(t *testing.T) {
 	}
 	if w.flushes != 3 {
 		t.Fatalf("expected one flush per event, got %d", w.flushes)
+	}
+}
+
+func TestSSEWriterEmitsIDLine(t *testing.T) {
+	rec := httptest.NewRecorder()
+	w := newSSEEventWriter(rec)
+	w.EnqueueStreamFrame("1726483200000-37", "", `{"token":"a"}`)
+	w.Close()
+	w.WriteUntilClosed(0)
+	want := "id: 1726483200000-37\ndata: {\"token\":\"a\"}\n\n"
+	if got := rec.Body.String(); got != want {
+		t.Errorf("body = %q, want %q", got, want)
+	}
+}
+
+func TestSSEWriterEmitsIDAndEventLines(t *testing.T) {
+	rec := httptest.NewRecorder()
+	w := newSSEEventWriter(rec)
+	w.EnqueueStreamFrame("1726483200000-37", "meta", `{"execution_id":"e1"}`)
+	w.Close()
+	w.WriteUntilClosed(0)
+	want := "id: 1726483200000-37\nevent: meta\ndata: {\"execution_id\":\"e1\"}\n\n"
+	if got := rec.Body.String(); got != want {
+		t.Errorf("body = %q, want %q", got, want)
+	}
+}
+
+func TestSSEWriterOmitsIDLineWhenEmpty(t *testing.T) {
+	// 既有帧（如 reset 合成帧）不带游标，不能凭空多出一行 id:。
+	rec := httptest.NewRecorder()
+	w := newSSEEventWriter(rec)
+	w.EnqueueData(`{"done":true}`)
+	w.Close()
+	w.WriteUntilClosed(0)
+	want := "data: {\"done\":true}\n\n"
+	if got := rec.Body.String(); got != want {
+		t.Errorf("body = %q, want %q", got, want)
 	}
 }

@@ -153,6 +153,11 @@ func recordDDDRoute(router *gin.Engine, jwtSvc iamport.TokenService, method, rou
 		// Proposal ID is a random UUID: record a regex assertion instead
 		// of a byte-exact body so replay is deterministic.
 		recordSelfModifyRoute(router, jwtSvc, routePath, filename)
+	case routeKey == "POST /agents/:id/executions/:executionID/stop":
+		// spec §496-500：stop 端点只有 401 用例时在契约层是"裸"的——断言只看
+		// want_status/want_body，新增请求字段不会让它变红。补内容断言用例，否则
+		// 这条 golden 证明的只是认证中间件有效。
+		recordStopRoute(router, jwtSvc, filename)
 	default:
 		recordAuthOverride(router, jwtSvc, method, routePath, routeKey, filename)
 	}
@@ -317,6 +322,54 @@ func recordSelfModifyRoute(router http.Handler, tokens iamport.TokenService, rou
 		panic(fmt.Sprintf("self-modify: got status %d, want %d: %s", rec.Code, c.WantStatus, rec.Body.String()))
 	}
 	out, _ := json.MarshalIndent([]Case{c}, "", "  ")
+	writeGolden(outPath, out)
+}
+
+// recordStopRoute 录制 stop 端点的三条用例（spec §496-500）：未认证拦截、
+// 归属成功、归属失败。归属失败刻意与"不存在"同码（404）——不区分两者以关闭
+// existence oracle，故只录一条即可守住该语义。
+//
+// 未认证用例的路径保留占位符且不带 token：它断言的是认证中间件先于 handler 拦截，
+// 与其余两条走真实 handler 的用例互补。execution ID 取自 contracttest 常量，
+// 保证 golden 路径与 checkpoint stub 的归属矩阵同源、regen 可复现。
+func recordStopRoute(router http.Handler, tokens iamport.TokenService, outPath string) {
+	cases := []Case{
+		{
+			Name: "default-unauth", Method: http.MethodPost,
+			Path:       "/agents/:id/executions/:executionID/stop",
+			Body:       json.RawMessage(`{"error":"missing bearer token"}`),
+			WantStatus: http.StatusUnauthorized,
+		},
+		{
+			Name: "authenticated-running", Method: http.MethodPost,
+			Path:       "/agents/contract-id/executions/" + contracttest.ContractRunningExecutionID + "/stop",
+			WantStatus: http.StatusOK,
+			WantBody:   json.RawMessage(`{"status":"stopping"}`),
+		},
+		{
+			Name: "authenticated-unknown-execution", Method: http.MethodPost,
+			Path:       "/agents/contract-id/executions/contract-exec-unknown/stop",
+			WantStatus: http.StatusNotFound,
+			WantBody:   json.RawMessage(`{"error":"agent not found"}`),
+		},
+	}
+	token, err := tokens.Sign(iamport.TokenClaims{Sub: contracttest.ContractActorID, TenantID: "contract-tenant", Role: "admin"}, time.Hour)
+	if err != nil {
+		panic(err)
+	}
+	for i := range cases {
+		c := &cases[i]
+		req := httptest.NewRequest(c.Method, c.Path, bytes.NewReader(c.Body))
+		if !strings.Contains(c.Path, ":") {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != c.WantStatus {
+			panic(fmt.Sprintf("stop: %s: got status %d, want %d: %s", c.Name, rec.Code, c.WantStatus, rec.Body.String()))
+		}
+	}
+	out, _ := json.MarshalIndent(cases, "", "  ")
 	writeGolden(outPath, out)
 }
 

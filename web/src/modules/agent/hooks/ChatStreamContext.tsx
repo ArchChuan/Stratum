@@ -1,3 +1,4 @@
+import { message } from 'antd';
 import {
   createContext,
   useCallback,
@@ -9,7 +10,7 @@ import {
   type ReactNode,
 } from 'react';
 
-import { executeAgentStream } from '../api/agent.api';
+import { agentApi, executeAgentStream } from '../api/agent.api';
 import type {
   AgentExecutionFailure,
   AgentExecutionResult,
@@ -127,7 +128,10 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
 		s.error = null;
 		s.failure = null;
 		s.approvals = [];
-		s.executionId = null;
+		// 续跑路径(doApprovalResume/doFreshResume)的 payload 已携带 execution_id:
+		// 首帧 meta 到达前用户点停止也必须能发出 stop,否则整支落在「干等 2 分钟
+		// 孤儿超时」的旧回归里。全新执行 payload 无该字段,仍由首帧 onExecutionId 回填。
+		s.executionId = payload.execution_id ?? null;
 		s.delegateStatus = null;
 		s.conflict = false;
     notify();
@@ -199,13 +203,30 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
 
   const cancelStream = useCallback(() => {
     const s = stateRef.current;
-    if (s.ctrl) {
-      s.ctrl.abort();
-      s.ctrl = null;
-      s.delegateStatus = null;
-      s.done = true;
-      notify();
+    if (!s.ctrl) return;
+    // 保留恢复键：停止后前端不回退渲染，但服务端仍会写终态帧、保留 checkpoint。
+    const executionId = s.executionId;
+    const agentId = s.agentId;
+    s.ctrl.abort();
+    s.ctrl = null;
+    s.delegateStatus = null;
+    s.done = true;
+    notify();
+    // 通知服务端真正停掉 run：只 abort 本地 fetch 不会让 runner 退出
+    // （run 的生命周期已与 HTTP 请求解绑）。失败只提示，不回滚本地状态——
+    // 用户已经看到停止生效，孤儿超时会在 2 分钟内兜底取消。
+    if (executionId && agentId) {
+      agentApi.stopAgentExecution(agentId, executionId).catch((err) => {
+        message.error({ content: err.response?.data?.error || '停止失败', duration: 3 });
+      });
+      return;
     }
+    // 恢复键未就位（全新执行的首帧尚未到达）时 stop 无法投递。不给「稍后重试」这类
+    // 不可执行的动作指引：此处 s.done 已置 true、s.ctrl 已置 null，停止按钮随之下线，
+    // 用户没有重试入口。改为说明服务端会自行收敛——run 的生命周期与 HTTP 请求解绑，
+    // 孤儿超时到期后会兜底取消，不需要用户再做任何事。这是必须暴露的降级路径：
+    // 静默会让用户误以为已停止。
+    message.warning({ content: '停止请求未发送：执行尚未建立，服务端会自行结束该执行', duration: 3 });
   }, [notify]);
 
 	const clearStreamFailure = useCallback(() => {

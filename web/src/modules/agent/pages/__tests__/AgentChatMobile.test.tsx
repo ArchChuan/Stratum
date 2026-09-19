@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
 	navigate: vi.fn(),
 	streamFailure: null as null | { message: string; code?: string; status?: number },
 	clearStreamFailure: vi.fn(),
+	cancelStream: vi.fn(),
 	cancelWaitingApproval: vi.fn(),
 	resumeTerminal: vi.fn(),
 	resumeBlocked: false,
@@ -81,6 +82,7 @@ vi.mock('../../hooks/useChatPage', () => ({
 		manualResumeWaiting: mocks.manualResumeWaiting,
 		streamFailure: mocks.streamFailure,
 		clearStreamFailure: mocks.clearStreamFailure,
+		cancelStream: mocks.cancelStream,
 		terminalApprovals: mocks.terminalApprovals,
 		resumeBlocked: mocks.resumeBlocked,
 		resumeBlockedLabel: mocks.resumeBlockedLabel,
@@ -153,6 +155,22 @@ describe('AgentChatPage mobile layout', () => {
     expect(send).not.toHaveTextContent('发送');
     fireEvent.click(send);
     expect(mocks.send).toHaveBeenCalled();
+  });
+
+  it('wires the stop button to cancelStream while streaming', () => {
+    mocks.streaming = true;
+    render(<AgentChatPage />);
+    // F6 终段接线:停止按钮必须真正拿到 useChatPage 的 cancelStream,否则点击空转。
+    fireEvent.click(screen.getByRole('button', { name: '停止生成' }));
+    expect(mocks.cancelStream).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not render the stop button when the stream is idle', () => {
+    mocks.streaming = false;
+    render(<AgentChatPage />);
+    // 反向断言:非流式态不得出现停止入口(streaming 接线断开时此断言必须失败)。
+    expect(screen.queryByRole('button', { name: '停止生成' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '发送消息' })).toBeInTheDocument();
   });
 
   it('keeps the permanent sidebar and text send button on desktop', () => {

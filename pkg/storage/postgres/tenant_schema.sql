@@ -1035,6 +1035,10 @@ CREATE TABLE IF NOT EXISTS agent_execution_checkpoints (
     -- 抢占只有一方胜出）。
     user_query                TEXT        NOT NULL DEFAULT '',
     run_generation            INT         NOT NULL DEFAULT 1,
+    -- lease_expires_at: 执行租约（spec §6.7）。NULL 表示无 runner 持有；
+    -- 非 NULL 且 <= NOW() 表示租约过期但 runner 可能仍是僵尸。租约本身只是
+    -- 咨询性信号，真正的互斥来自 run_generation 的 CAS。
+    lease_expires_at          TIMESTAMPTZ,
     created_at                TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at                TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     expires_at                TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '24 hours'
@@ -1043,6 +1047,7 @@ CREATE TABLE IF NOT EXISTS agent_execution_checkpoints (
 -- ADD COLUMN IF NOT EXISTS 补齐，否则旧表缺列导致后续查询报错。
 ALTER TABLE agent_execution_checkpoints ADD COLUMN IF NOT EXISTS user_query TEXT NOT NULL DEFAULT '';
 ALTER TABLE agent_execution_checkpoints ADD COLUMN IF NOT EXISTS run_generation INT NOT NULL DEFAULT 1;
+ALTER TABLE agent_execution_checkpoints ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_execution_checkpoints_execution
     ON agent_execution_checkpoints (execution_id);
 CREATE INDEX IF NOT EXISTS idx_agent_execution_checkpoints_status

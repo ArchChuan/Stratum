@@ -1,4 +1,4 @@
-// Agent execution path: revision execution, Execute/ExecuteStream,
+// Agent execution path: revision execution, Execute/ExecuteWithDeltas/ExecuteStream,
 // logging and memory-buffer side effects.
 
 package application
@@ -123,10 +123,16 @@ type ExecRequest struct {
 // (tenant, trace) — never inferred from request body.
 
 type ExecMeta struct {
-	TenantID                   string
-	TraceID                    string
-	Stream                     bool
-	ExecutionID                string // optional; generated if empty, used for resume
+	TenantID    string
+	TraceID     string
+	Stream      bool
+	ExecutionID string // optional; generated if empty, used for resume
+	// Generation 是客户端上一次订阅时看到的分代（缺省 0 = 客户端未提供），
+	// 用于判定是否需要 reset（spec §6.4）。
+	Generation int
+	// LastEventID 是客户端内存持有的游标。仅存在于会话内，不跨页面重载——
+	// F5 后前端不发它，服务端因此走全量回放（spec §6.5）。
+	LastEventID                string
 	EvolutionTrace             EvolutionTraceMetadata
 	KnowledgeAssignmentsPinned bool
 	PinnedKnowledgeRevisions   map[string]port.KnowledgeRevisionPin
@@ -291,7 +297,48 @@ func recordExecutionPreparationFailure(ctx context.Context, start time.Time, sta
 	span.SetStatus(codes.Error, "agent resource preparation failed")
 }
 
+// executeOwnershipGate 是 Execute 的归属闸门（SECURITY-HIGH）：meta.ExecutionID 是
+// 客户端可控的。若它指向他人的 checkpoint，本轮执行会 resumeFromCheckpoint 读走他人
+// messages/plan 快照，并在 Upsert 时借 ON CONFLICT 的 user_id = EXCLUDED.user_id 改写
+// 归属、进而可 stop 受害者执行。与 stop/resume 同源同语义：两侧都必须非空且严格相等
+// 才放行，不区分「不存在」与「不属于你」（存在性 oracle 关闭）。
+//
+// 必须由调用方放在任何副作用之前（先授权、后读取与写入），否则读取腿已经完成泄露。
+//
+// 未指定 execution_id（全新执行）时门不进：没有目标可归属。除此之外一律 fail closed，
+// 包括 CheckpointStore 未装配——原实现以「没有 store 就没有持久化行，无可劫持目标」
+// 为由放行，该论证本身成立，但它把闸门的安全性寄托在「resumeFromCheckpoint 与
+// writeInitialCheckpoint 两处提前返回同时不变」这条耦合上。本分支其它降级点
+// （streamDepsReady、track == nil）都选择拒绝而不是默认放行，这里保持一致：
+// 授权所依赖的持久层不可用时，唯一安全的答案是「不放行」（risk harness 第 1 条）。
+//
+// 有意为之的行为变更（owner 裁定，spec §9.1）：闸门只看 userID，**不设角色豁免**，
+// 因此 admin/owner 不能再借 /execute 携带他人 execution_id 代执行。这是收紧而不是
+// 缺陷：去 cancel() 之后，越权续跑还会经 Upsert 的 user_id = EXCLUDED.user_id 把
+// checkpoint 归属改写成调用者，从而绕过 stop 的所有权模型——角色豁免会把这条
+// 绕过重新打开。未来任何委派/代执行能力必须显式重开此闸门（带独立的所有权判定
+// 与审计），不得在闸门内以「actor 是 admin/owner」放行。
+func (s *AgentService) executeOwnershipGate(ctx context.Context, req ExecRequest, meta ExecMeta) error {
+	if meta.ExecutionID == "" {
+		return nil
+	}
+	if s.deps.CheckpointStore == nil {
+		return ErrNotFound
+	}
+	cp, err := s.deps.CheckpointStore.GetLatest(ctx, meta.TenantID, meta.ExecutionID)
+	if err != nil {
+		return fmt.Errorf("execute: get checkpoint: %w", err)
+	}
+	if cp == nil || req.UserID == "" || cp.UserID != req.UserID {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequest, meta ExecMeta) (*AgentResult, int, error) {
+	if err := s.executeOwnershipGate(ctx, req, meta); err != nil {
+		return nil, 0, err
+	}
 	executionID := executionIDOrNew(meta.ExecutionID)
 	a, req, meta, _, options, cfg, resuming, terminal, consumedApproval, err := s.prepareAgentExecution(ctx, agentID, req, meta, executionID)
 	if err != nil {
@@ -327,13 +374,147 @@ func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequ
 	return result, durationMs, err
 }
 
-// ExecuteStream runs an agent with token streaming. tokenCb is invoked
-// per LLM token; it must be safe for concurrent use with this call's
-// goroutine. The returned context carries the per-tenant LLM completer
-// (for inner streaming RAG / tool calls) — transport must use it for
-// the SSE write loop. cancel() releases the per-call deadline.
+// StreamHandle 是一次流式执行的订阅坐标。它不返回 cancel——run 的取消由租约
+// 续租失败、控制通道 stop 消息与孤儿超时三者驱动，订阅侧只读不写（spec §4.2）。
+type StreamHandle struct {
+	ExecutionID string
+	Generation  int
+}
 
+// streamDepsReady 判定续传路径的依赖是否齐全。CheckpointStore 同样必需：
+// NEW 分支要先建 init checkpoint 行，缺失即整条路径无意义。
+func (s *AgentService) streamDepsReady() bool {
+	return s.deps.StreamStore != nil && s.deps.ControlBus != nil &&
+		s.deps.LeaseRepo != nil && s.deps.CheckpointStore != nil
+}
+
+// ExecuteStream 为一条 SSE 请求确定订阅坐标：NEW 建流开跑、租约有效则 TAIL、
+// 租约失效则抢占（CAS 胜者跑，败者 TAIL）。
+//
+// 全部帧（meta/token/delegate/done/error/approval_required）由 runner 写入流，
+// 本方法不再接收 tokenCb——执行侧不再直接写 socket（spec D1）。
 func (s *AgentService) ExecuteStream(
+	ctx context.Context, agentID string, req ExecRequest, meta ExecMeta,
+) (*StreamHandle, error) {
+	if !s.streamDepsReady() {
+		return nil, fmt.Errorf("agent: execute stream: stream dependencies not configured")
+	}
+	cfg := s.streamRunnerConfig()
+	executionID := executionIDOrNew(meta.ExecutionID)
+	newExecution := meta.ExecutionID == ""
+
+	if !newExecution {
+		// D4：订阅/续跑前必须做一次租户限定的 checkpoint 查询。查不到 → 404
+		// 语义，且不区分「不存在」与「不属于你」，关闭 existence oracle。
+		cp, err := s.deps.CheckpointStore.GetLatest(ctx, meta.TenantID, executionID)
+		if err != nil {
+			return nil, fmt.Errorf("agent: execute stream: load checkpoint: %w", err)
+		}
+		// 归属校验与 StopExecution / ResumeExecution 同源 fail closed：既有
+		// execution 只有其所有者能续跑/接管。缺这层，同租户调用者可拿他人的
+		// execution_id 走续跑，runner 写入的 checkpoint 会把 user_id 覆写为
+		// 自己（Upsert 的 ON CONFLICT DO UPDATE SET 含 user_id），从而绕过 stop
+		// 的所有权模型。两侧都非空且严格相等才放行。
+		if cp == nil || req.UserID == "" || cp.UserID != req.UserID {
+			return nil, ErrNotFound
+		}
+	}
+
+	generation, startRunner, err := s.settleGeneration(ctx, agentID, req, meta, executionID, newExecution, cfg)
+	if err != nil {
+		return nil, err
+	}
+	if !startRunner {
+		// 别的 runner 持有租约（本 pod 或别的 pod 都一样）：本请求只订阅。
+		return &StreamHandle{ExecutionID: executionID, Generation: generation}, nil
+	}
+	if err := s.launchStreamRunner(ctx, agentID, req, meta, executionID, generation, cfg); err != nil {
+		return nil, err
+	}
+	return &StreamHandle{ExecutionID: executionID, Generation: generation}, nil
+}
+
+// settleGeneration 决定本次请求是「读现有 generation」还是「抢占后开新 generation」。
+// 返回 startRunner=false 表示已有 runner 在跑，本请求只订阅。
+func (s *AgentService) settleGeneration(
+	ctx context.Context, agentID string, req ExecRequest, meta ExecMeta,
+	executionID string, newExecution bool, cfg StreamRunnerConfig,
+) (generation int, startRunner bool, err error) {
+	if newExecution {
+		// 先建 checkpoint 行再盖章：StampLease 是纯 UPDATE，行不存在即失败，
+		// 而行的唯一创建者在 runner 内部——顺序反了会让 NEW 路径 100% 失败（C-1）。
+		// 写失败必须硬失败：此时尚未启动 runner，fail closed 不会留下孤儿执行。
+		if err := s.writeInitialCheckpoint(ctx, meta, req, agentID, executionID); err != nil {
+			return 0, false, fmt.Errorf("agent: execute stream: init checkpoint: %w", err)
+		}
+		gen, err := s.deps.LeaseRepo.StampLease(ctx, meta.TenantID, executionID, cfg.LeaseTTL)
+		if err != nil {
+			return 0, false, fmt.Errorf("agent: execute stream: stamp lease: %w", err)
+		}
+		return gen, true, nil
+	}
+
+	status, err := s.deps.LeaseRepo.LeaseStatus(ctx, meta.TenantID, executionID)
+	if err != nil {
+		return 0, false, fmt.Errorf("agent: execute stream: lease status: %w", err)
+	}
+	if status.Active {
+		return status.Generation, false, nil
+	}
+	// 租约失效：CAS 抢占。两个实例同时走到这里，恰好一个拿到新 generation，
+	// 另一个收到 ErrLeaseConflict 并转入 TAIL 读赢家的流（spec §7.2）。
+	claimed, err := s.deps.LeaseRepo.ClaimLease(ctx, meta.TenantID, executionID, status.Generation, cfg.LeaseTTL)
+	if err == nil {
+		return claimed, true, nil
+	}
+	if !errors.Is(err, port.ErrLeaseConflict) {
+		return 0, false, fmt.Errorf("agent: execute stream: claim lease: %w", err)
+	}
+	// 没抢到：重读赢家的 generation 并订阅它。
+	latest, err := s.deps.LeaseRepo.LeaseStatus(ctx, meta.TenantID, executionID)
+	if err != nil {
+		return 0, false, fmt.Errorf("agent: execute stream: lease status after conflict: %w", err)
+	}
+	return latest.Generation, false, nil
+}
+
+// 逐字段回落而不是整体判定：部分填充的配置会留下 OrphanTimeout=0 /
+// ViewerTimeout=0，让首个 tick 静默杀掉 run。
+func (s *AgentService) streamRunnerConfig() StreamRunnerConfig {
+	cfg := s.deps.StreamRunnerCfg
+	def := DefaultStreamRunnerConfig()
+	if cfg.LeaseTTL <= 0 {
+		cfg.LeaseTTL = def.LeaseTTL
+	}
+	if cfg.LeaseRenew <= 0 {
+		cfg.LeaseRenew = def.LeaseRenew
+	}
+	if cfg.ViewerTimeout <= 0 {
+		cfg.ViewerTimeout = def.ViewerTimeout
+	}
+	if cfg.OrphanTimeout <= 0 {
+		cfg.OrphanTimeout = def.OrphanTimeout
+	}
+	if cfg.StreamTTL <= 0 {
+		cfg.StreamTTL = def.StreamTTL
+	}
+	if cfg.StreamMaxLen <= 0 {
+		cfg.StreamMaxLen = def.StreamMaxLen
+	}
+	return cfg
+}
+
+// ExecuteWithDeltas 是请求绑定的同步流式执行：调用方拿到 run 闭包后自行调用，
+// 并直接得到类型化的 *AgentResult 与错误。它服务于 workflow 节点执行器
+// （internal 之外的 api/wiring/workflow.go），那条路径需要 result.ToolCalls
+// 与 errors.As 可辨识的审批错误，二者的语义都无法从 SSE 帧里重建。
+//
+// 面向 SSE 的续传路径不走这里——它用 ExecuteStream 拿到订阅坐标后只读流。
+//
+// tokenCb 每个 LLM token 调用一次，必须能与本调用的 goroutine 并发使用。返回的
+// context 携带 per-tenant LLM completer（供内层流式 RAG / 工具调用），transport
+// 必须用它做 SSE 写出循环；cancel() 释放 per-call 期限。
+func (s *AgentService) ExecuteWithDeltas(
 	ctx context.Context, agentID string, req ExecRequest, meta ExecMeta, tokenCb func(string),
 ) (execCtx context.Context, cancel context.CancelFunc, run func() (*AgentResult, int, error), executionID string, err error) {
 	// 复用调用方传入的 execution_id（断线续接的恢复键）：非空则沿用同一执行
@@ -391,7 +572,7 @@ func (s *AgentService) ExecuteStream(
 	return execCtx, cancel, run, executionID, nil
 }
 
-// prepareAgentExecution 是 Execute/ExecuteStream 的公共准备链：Registry 解析
+// prepareAgentExecution 是 Execute/ExecuteWithDeltas/runner 的公共准备链：Registry 解析
 // Agent → ensure 会话与 init checkpoint → 实验 revision 解析 → 审批续跑抢占并
 // 重写 req/meta → assembleOptions → 追加恢复选项。返回重写后的 req/meta、
 // streamCtx（仅流式使用，供携带 per-tenant LLM completer）、options、cfg、
@@ -663,10 +844,23 @@ func (s *AgentService) PauseExecution(ctx context.Context, tenantID, executionID
 }
 
 // ResumeExecution restarts a paused execution from its last checkpoint.
-// The executionID must refer to a paused checkpoint.
-
+// The executionID must refer to a paused checkpoint owned by the caller.
+//
+// 归属校验必须先于任何写副作用（UpdateStatus），且与 StopExecution 逐字同源：
+// cp.UserID 是 stop 端点的所有权依据，而 checkpoint 的 Upsert 是
+// ON CONFLICT DO UPDATE SET user_id = EXCLUDED.user_id——resume 若不校验，
+// 同租户的调用者会把所有权转移给自己（A 停不了自己的执行，B 反而能停），
+// stop 的 fail closed 随之被绕过。两侧都非空且严格相等才放行；查不到与不属于你
+// 一律 ErrNotFound，不区分两者（关闭 existence oracle）。
 func (s *AgentService) ResumeExecution(ctx context.Context, agentID string, req ExecRequest, meta ExecMeta, executionID string) (*AgentResult, int, error) {
 	if s.deps.CheckpointStore != nil {
+		cp, err := s.deps.CheckpointStore.GetLatest(ctx, meta.TenantID, executionID)
+		if err != nil {
+			return nil, 0, fmt.Errorf("resume execution: load checkpoint: %w", err)
+		}
+		if cp == nil || req.UserID == "" || cp.UserID != req.UserID {
+			return nil, 0, ErrNotFound
+		}
 		if err := s.deps.CheckpointStore.UpdateStatus(ctx, meta.TenantID, executionID, "running"); err != nil {
 			return nil, 0, fmt.Errorf("resume execution: %w", err)
 		}

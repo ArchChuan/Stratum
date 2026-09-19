@@ -111,13 +111,17 @@ func (f *fakeEvidence) ResolveBatch(context.Context, string, []string) (map[stri
 // fakeCheckpointStore 让 Pause/Resume 的失败路径可测。
 type fakeCheckpointStore struct {
 	updateErr error
+	// latest 是 GetLatest 返回的 checkpoint。resume 的归属闸门排在任何写副作用
+	// 之前（裁定 9），所以要测「写失败 → 500」必须让查询先返回一条属于调用者的行，
+	// 否则会在闸门处短路成 404。
+	latest *domain.AgentExecutionCheckpoint
 }
 
 func (f fakeCheckpointStore) Upsert(context.Context, string, domain.AgentExecutionCheckpoint) error {
 	return nil
 }
 func (f fakeCheckpointStore) GetLatest(context.Context, string, string) (*domain.AgentExecutionCheckpoint, error) {
-	return nil, nil
+	return f.latest, nil
 }
 func (f fakeCheckpointStore) MarkCompleted(context.Context, string, string) error { return nil }
 func (f fakeCheckpointStore) UpdateStatus(context.Context, string, string, string) error {
@@ -402,18 +406,108 @@ func TestAgentHandlerPauseResumeExecution(t *testing.T) {
 	w := doAgentReq(t, authedRoutes(h), http.MethodPost, "/agents/a1/pause/exec-1", "")
 	require.Equal(t, http.StatusInternalServerError, w.Code)
 
-	// 极端情况：checkpoint 状态写失败 → Pause/Resume 均 500。
+	// 极端情况：checkpoint 状态写失败 → Pause/Resume 均 500。resume 的归属闸门
+	// 在写之前，查询必须返回一条属于调用者（u1，见 withAuth）的行才会走到写。
 	h = newTestAgentHandler(t, &mockAgentRepo{}, nil, func(deps *agent.AgentServiceDeps) {
-		deps.CheckpointStore = fakeCheckpointStore{updateErr: errors.New("db down")}
+		deps.CheckpointStore = fakeCheckpointStore{
+			updateErr: errors.New("db down"),
+			latest:    &domain.AgentExecutionCheckpoint{ExecutionID: "exec-1", UserID: "u1"},
+		}
 	})
 	w = doAgentReq(t, authedRoutes(h), http.MethodPost, "/agents/a1/pause/exec-1", "")
 	require.Equal(t, http.StatusInternalServerError, w.Code)
 	w = doAgentReq(t, authedRoutes(h), http.MethodPost, "/agents/a1/resume/exec-1", `{"query":"q"}`)
 	require.Equal(t, http.StatusInternalServerError, w.Code)
 
+	// 归属闸门：别人的执行 resume 必须 404（与 stop 同源的 fail closed），
+	// 且不得进入执行——否则同租户调用者能借 resume 把 checkpoint 的 user_id
+	// 覆写到自己名下，绕过 stop 的所有权模型。
+	h = newTestAgentHandler(t, &mockAgentRepo{}, nil, func(deps *agent.AgentServiceDeps) {
+		deps.CheckpointStore = fakeCheckpointStore{
+			latest: &domain.AgentExecutionCheckpoint{ExecutionID: "exec-1", UserID: "someone-else"},
+		}
+	})
+	w = doAgentReq(t, authedRoutes(h), http.MethodPost, "/agents/a1/resume/exec-1", `{"query":"q"}`)
+	require.Equal(t, http.StatusNotFound, w.Code)
+
 	// 极端情况：缺 tenant → 401。
 	w = doAgentReq(t, agentRoutes(h), http.MethodPost, "/agents/a1/pause/exec-1", "")
 	require.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+// withEmptySub 注入 tenant 但把 sub 设成空串：userIDFromCtx 的类型断言仍成功，
+// 因此 ok == true 而 userID == ""——只判 !ok 堵不住这条路径。
+func withEmptySub(tenantID string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ctx := reqctx.WithTenantID(c.Request.Context(), tenantID)
+		c.Request = c.Request.WithContext(ctx)
+		c.Set(middleware.ContextKeySub, "")
+		c.Next()
+	}
+}
+
+// 裁定 9：resume 会以调用者身份执行并覆写 checkpoint 的 user_id（Upsert 的
+// ON CONFLICT DO UPDATE SET 含 user_id），身份缺失必须在 HTTP 层拦下，与
+// StopExecution 对称 fail closed。缺 sub 与空 sub 都必须 401 而不是 404——
+// 404 会把身份问题伪装成「查无此执行」。
+func TestAgentHandlerResumeExecutionRejectsMissingIdentity(t *testing.T) {
+	h := newTestAgentHandler(t, &mockAgentRepo{}, nil, nil)
+
+	cases := []struct {
+		name string
+		auth gin.HandlerFunc
+	}{
+		{name: "sub key absent", auth: withTenantOnly("t1")},
+		{name: "sub is empty string", auth: withEmptySub("t1")},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := doAgentReq(t, agentRoutes(h, tc.auth), http.MethodPost,
+				"/agents/a1/resume/exec-1", `{"query":"q"}`)
+			require.Equal(t, http.StatusUnauthorized, w.Code, "body=%s", w.Body.String())
+		})
+	}
+}
+
+// 裁定 11：execute 与 stream 两个入口同样要 fail closed。空身份走 NEW 路径会写出
+// user_id = "" 的 checkpoint 行，该行 stop/resume 都要求两侧非空且严格相等，谁也接
+// 不了手，只能等孤儿超时清理；经 /execute 覆写他人行时写入的更是 ""，把受害者一并
+// 锁在门外。两个入口 × 两种身份缺失形态都要 401。
+func TestAgentHandlerExecuteRejectsMissingIdentity(t *testing.T) {
+	h := newTestAgentHandler(t, &mockAgentRepo{}, nil, nil)
+
+	identities := []struct {
+		name string
+		auth gin.HandlerFunc
+	}{
+		{name: "sub key absent", auth: withTenantOnly("t1")},
+		{name: "sub is empty string", auth: withEmptySub("t1")},
+	}
+	endpoints := []struct {
+		name   string
+		path   string
+		handle gin.HandlerFunc
+	}{
+		{name: "sync execute", path: "/agents/a1/execute", handle: h.ExecuteAgent},
+		{name: "stream execute", path: "/agents/a1/execute/stream", handle: h.ExecuteAgentStream},
+	}
+
+	for _, id := range identities {
+		for _, ep := range endpoints {
+			t.Run(id.name+"/"+ep.name, func(t *testing.T) {
+				gin.SetMode(gin.TestMode)
+				router := gin.New()
+				router.Use(middleware.ErrorHandler(zap.NewNop()))
+				router.Use(id.auth)
+				router.POST("/agents/:id/execute", h.ExecuteAgent)
+				router.POST("/agents/:id/execute/stream", h.ExecuteAgentStream)
+
+				w := doAgentReq(t, router, http.MethodPost, ep.path, `{"query":"q"}`)
+				require.Equal(t, http.StatusUnauthorized, w.Code, "body=%s", w.Body.String())
+			})
+		}
+	}
 }
 
 func TestAgentHandlerListExecutions(t *testing.T) {
