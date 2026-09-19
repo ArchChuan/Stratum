@@ -14,6 +14,10 @@ import (
 const (
 	ResetReasonGenerationChanged = "generation_changed"
 	ResetReasonStreamLost        = "stream_lost"
+	// ResetReasonGenerationMissing 与 GenerationChanged 分开：客户端**没带**
+	// generation（老客户端）与「服务端分代真的变了」都走 reset，但排障时把一次
+	// 缺字段误读成分代变更会指向错误的根因。
+	ResetReasonGenerationMissing = "generation_missing"
 )
 
 // StreamPlan 是一次订阅的行动计划。
@@ -33,11 +37,20 @@ type StreamPlan struct {
 //	genClient != genNow → reset + 全量回放当前 generation
 //	genClient == genNow → 有游标则增量回放，无游标则全量回放（F5 场景）
 //
-// 缺 generation（genClient == 0）一律 reset：连续性上 fail closed。老客户端
-// 恰好落在 F5 场景，全量回放正是它需要的（spec §10）。
+// 判据是「两侧是否相等」，不是「客户端是否带了 generation」：缺 generation 的
+// 老客户端（genClient == 0）之所以 fail closed，是因为服务端 genNow 恒 ≥ 1
+// （列默认 1 且 Upsert 归一），0 与它不等。genNow == 0 时缺字段与现状相等、
+// 不会 reset——该组合在生产不可达（generation 由服务端下发，不会为 0），
+// 这里按实际行为描述而不是按意图描述。老客户端恰好落在 F5 场景，全量回放
+// 正是它需要的（spec §10）。
 func PlanStream(genClient, genNow int, lastEventID string) StreamPlan {
 	if genClient != genNow {
-		return StreamPlan{Generation: genNow, Reset: true, ResetReason: ResetReasonGenerationChanged}
+		reason := ResetReasonGenerationChanged
+		if genClient == 0 {
+			// 客户端没带 generation 是「缺字段」，不是「分代变了」。
+			reason = ResetReasonGenerationMissing
+		}
+		return StreamPlan{Generation: genNow, Reset: true, ResetReason: reason}
 	}
 	return StreamPlan{Generation: genNow, AfterID: lastEventID}
 }

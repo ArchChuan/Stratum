@@ -54,11 +54,20 @@ func TestPlanStream(t *testing.T) {
 			wantReset: true, wantReason: "generation_changed", wantAfterID: "",
 		},
 		{
-			// 老客户端不传 generation：一律 reset（fail closed）。对 F5 场景
-			// 恰好正确——反正也是全量回放。
+			// 老客户端不传 generation：服务端 genNow ≥ 1，两侧不等 ⇒ reset
+			// （fail closed）。对 F5 场景恰好正确——反正也是全量回放。
+			// 原因与「分代真的变了」分开报，避免排障时把缺字段读成分代变更。
 			name:      "missing generation resets",
 			genClient: 0, genNow: 1, lastEventID: "",
-			wantReset: true, wantReason: "generation_changed", wantAfterID: "",
+			wantReset: true, wantReason: "generation_missing", wantAfterID: "",
+		},
+		{
+			// 两侧同为 0：判据是相等而非「缺字段」，故不 reset。该组合生产不可达
+			// （genNow 由服务端下发且列默认 1），本用例只是把实现行为钉死，
+			// 防止有人把注释里的「缺 generation 一律 reset」当成代码来改。
+			name:      "zero on both sides does not reset",
+			genClient: 0, genNow: 0, lastEventID: "",
+			wantReset: false, wantAfterID: "",
 		},
 	}
 	for _, tc := range cases {
