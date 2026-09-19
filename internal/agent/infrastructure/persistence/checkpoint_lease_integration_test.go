@@ -69,8 +69,11 @@ func TestLeaseStampThenStatusActive(t *testing.T) {
 
 func TestLeaseStampOnMissingCheckpointFails(t *testing.T) {
 	store, tenantID := newLeaseTestStore(t, "exec-present")
-	if _, err := store.StampLease(context.Background(), tenantID, "exec-absent", time.Minute); err == nil {
-		t.Fatal("expected error stamping lease on missing checkpoint")
+	// 断言领域哨兵而不是「有 error」：连接断开、search_path 未设、SQL 语法错
+	// 都满足后者，会让这条用例绿着通过。
+	_, err := store.StampLease(context.Background(), tenantID, "exec-absent", time.Minute)
+	if !errors.Is(err, port.ErrCheckpointNotFound) {
+		t.Fatalf("StampLease on missing checkpoint = %v, want ErrCheckpointNotFound", err)
 	}
 }
 
@@ -151,8 +154,25 @@ func TestLeaseStatusIsTenantScoped(t *testing.T) {
 	if _, err := store.StampLease(ctx, tenantID, "exec-scoped", time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	// 另一个租户读同一个 execution_id 必须查不到行，而不是读到别人的租约。
-	if _, err := store.LeaseStatus(ctx, other, "exec-scoped"); err == nil {
-		t.Fatal("expected LeaseStatus to fail for a tenant without the checkpoint")
+	// 阳性对照：异租户 schema 自身可用（同一路径写进去、读得出来）。缺了这一步，
+	// 下面「查不到」也可能是「schema 根本没建 / search_path 没生效」，用例就退化
+	// 成在验证 schema 缺失而不是租户隔离。
+	if err := store.Upsert(ctx, other, domain.AgentExecutionCheckpoint{
+		ExecutionID: "exec-scoped-other", TraceID: "t", AgentID: "a", UserID: "u",
+		Status: "running", ExpiresAt: time.Now().Add(time.Hour), RunGeneration: 1,
+	}); err != nil {
+		t.Fatalf("sanity: foreign tenant cannot write its own checkpoint: %v", err)
+	}
+	own, err := store.LeaseStatus(ctx, other, "exec-scoped-other")
+	if err != nil {
+		t.Fatalf("sanity: foreign tenant cannot read its own checkpoint: %v", err)
+	}
+	if own.Generation != 1 {
+		t.Fatalf("sanity: foreign tenant generation = %d, want 1", own.Generation)
+	}
+	// 另一个租户读同一个 execution_id 必须报「行不存在」这一确定原因，而不是
+	// 「有 error 就算通过」——那是跨租户隔离（风险红线第 3 条）的守门断言。
+	if _, err := store.LeaseStatus(ctx, other, "exec-scoped"); !errors.Is(err, port.ErrCheckpointNotFound) {
+		t.Fatalf("LeaseStatus(foreign tenant) = %v, want ErrCheckpointNotFound", err)
 	}
 }

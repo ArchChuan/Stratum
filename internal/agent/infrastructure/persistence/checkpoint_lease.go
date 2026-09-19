@@ -31,7 +31,10 @@ func (s *PgCheckpointStore) StampLease(
 		).Scan(&generation)
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
-		return 0, fmt.Errorf("checkpoint_store: stamp lease: no checkpoint %s", executionID)
+		// 缺行必须包成领域哨兵而不是裸错误串：调用方（以及守门的集成测试）要能
+		// 把「行不存在」与「连接断开 / search_path 未设 / SQL 语法错」区分开。
+		return 0, fmt.Errorf("checkpoint_store: stamp lease: no checkpoint %s: %w",
+			executionID, port.ErrCheckpointNotFound)
 	}
 	if err != nil {
 		return 0, fmt.Errorf("checkpoint_store: stamp lease: %w", err)
@@ -141,7 +144,11 @@ func (s *PgCheckpointStore) LeaseStatus(
 		).Scan(&status.Generation, &status.Active)
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
-		return port.LeaseStatus{}, fmt.Errorf("checkpoint_store: lease status: no checkpoint %s", executionID)
+		// 同 StampLease：这是跨租户隔离的守门错误，必须可被 errors.Is 精确断言，
+		// 否则「查不到」与任何基础设施故障在断言上不可区分（fail closed 的语义
+		// 仍在：返回值依旧是非 nil error，调用方的 err != nil 分支不变）。
+		return port.LeaseStatus{}, fmt.Errorf("checkpoint_store: lease status: no checkpoint %s: %w",
+			executionID, port.ErrCheckpointNotFound)
 	}
 	if err != nil {
 		return port.LeaseStatus{}, fmt.Errorf("checkpoint_store: lease status: %w", err)

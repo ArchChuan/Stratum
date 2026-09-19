@@ -10,6 +10,15 @@ import (
 // 推进（或已过期被抢）。调用方据此判定「没抢到」，转入 TAIL 读赢家的流。
 var ErrLeaseConflict = errors.New("agent: execution lease conflict")
 
+// ErrCheckpointNotFound 表示租户命名空间下不存在该 execution_id 的 checkpoint 行，
+// 租约操作因此无从施加（StampLease 是纯 UPDATE、LeaseStatus 是单行 SELECT）。
+//
+// 与 ErrLeaseConflict 分开的为什么不是「更细」而是「必需」：两者在调用方眼里
+// 的归档完全不同——Conflict 是并发竞争的常态（重读并订阅赢家），NotFound 是
+// 「这一行不存在」的事实，必须与「连接断开 / schema 未建 / SQL 语法错」这类
+// 基础设施故障可区分。只要求「有 error」的测试会让上述故障冒充 NotFound 通过。
+var ErrCheckpointNotFound = errors.New("agent: execution checkpoint not found")
+
 // 流事件名。事件名是流条目的固有属性（服务端据此识别终态与游标语义），
 // 与「是否下发 event: 行」是两件事——下发的白名单在 handler 层（spec §6.8）。
 const (
