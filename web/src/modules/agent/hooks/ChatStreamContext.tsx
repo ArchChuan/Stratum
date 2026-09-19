@@ -128,7 +128,10 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
 		s.error = null;
 		s.failure = null;
 		s.approvals = [];
-		s.executionId = null;
+		// 续跑路径(doApprovalResume/doFreshResume)的 payload 已携带 execution_id:
+		// 首帧 meta 到达前用户点停止也必须能发出 stop,否则整支落在「干等 2 分钟
+		// 孤儿超时」的旧回归里。全新执行 payload 无该字段,仍由首帧 onExecutionId 回填。
+		s.executionId = payload.execution_id ?? null;
 		s.delegateStatus = null;
 		s.conflict = false;
     notify();
@@ -216,7 +219,11 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
       agentApi.stopAgentExecution(agentId, executionId).catch((err) => {
         message.error({ content: err.response?.data?.error || '停止失败', duration: 3 });
       });
+      return;
     }
+    // 恢复键未就位（全新执行的首帧尚未到达）时 stop 无法投递，服务端 run 照旧
+    // 跑满 2 分钟孤儿超时。这是必须暴露的降级路径：静默会让用户误以为已停止。
+    message.warning({ content: '停止请求未发送：执行尚未建立，请稍后重试', duration: 3 });
   }, [notify]);
 
 	const clearStreamFailure = useCallback(() => {
