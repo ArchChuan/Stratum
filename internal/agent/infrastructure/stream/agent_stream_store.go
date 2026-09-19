@@ -14,6 +14,7 @@ import (
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/storage/redis"
 	"github.com/byteBuilderX/stratum/pkg/storage/tenantnaming"
+	"go.uber.org/zap"
 )
 
 // 流 key 中「流」段的段名，最终 key 为 agent:{tenant}:stream:{executionID}:{gen}。
@@ -26,21 +27,31 @@ type AgentStreamStore struct {
 	maxLen  int64
 	replay  int64
 	readBlk time.Duration
+	logger  *zap.Logger
 }
 
 var _ port.AgentStreamStore = (*AgentStreamStore)(nil)
 
 // NewAgentStreamStore 用默认时长装配；测试可用 NewAgentStreamStoreWith。
-func NewAgentStreamStore(s *redis.StreamStore) *AgentStreamStore {
+func NewAgentStreamStore(s *redis.StreamStore, logger *zap.Logger) *AgentStreamStore {
 	return NewAgentStreamStoreWith(s, constants.AgentStreamTTL, constants.AgentStreamMaxLen,
-		constants.AgentStreamReplayBatch, constants.AgentStreamReadBlock)
+		constants.AgentStreamReplayBatch, constants.AgentStreamReadBlock, logger)
 }
 
 // NewAgentStreamStoreWith 注入时长与容量，供跨实例测试把秒级等待压到毫秒级。
+// logger 为 nil 时归一化为 no-op（与 application 侧 deps.Logger == nil 同型）：
+// 续期失败的 WARN 是「key 可能没有 TTL」这一分支的唯一留痕，不能因忘传 logger
+// 而重新变成静默。
 func NewAgentStreamStoreWith(
 	s *redis.StreamStore, ttl time.Duration, maxLen, replay int64, readBlock time.Duration,
+	logger *zap.Logger,
 ) *AgentStreamStore {
-	return &AgentStreamStore{stream: s, ttl: ttl, maxLen: maxLen, replay: replay, readBlk: readBlock}
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	return &AgentStreamStore{
+		stream: s, ttl: ttl, maxLen: maxLen, replay: replay, readBlk: readBlock, logger: logger,
+	}
 }
 
 func (s *AgentStreamStore) Append(
@@ -56,8 +67,16 @@ func (s *AgentStreamStore) Append(
 	}
 	// TTL 在写路径搭车刷新，不额外起定时器。续期失败不阻断写入——流本身是尽力而为
 	// 的显示缓冲，丢一次续期最多让流早一小时过期，而这次写入对调用方已经成功。
-	// 刻意忽略该错误：errcheck 默认 check-blank=false，`_ =` 不会被报。
-	_ = s.stream.Expire(ctx, key, s.ttl)
+	//
+	// 但降级必须留痕，不能 `_ =` 静默吞掉：持续失败有两条都不可接受的后果——
+	// 运行中的 key 被提前过期删除（回放断档），或 key 从未拿到 TTL 而永不过期
+	// （内存按执行数累积）。WARN 而非 ERROR：单次失败确实是可容忍的降级。
+	if err := s.stream.Expire(ctx, key, s.ttl); err != nil {
+		s.logger.Warn("agent stream: ttl refresh failed",
+			zap.String("execution_id", executionID),
+			zap.Int("generation", generation),
+			zap.Error(err))
+	}
 	return id, nil
 }
 

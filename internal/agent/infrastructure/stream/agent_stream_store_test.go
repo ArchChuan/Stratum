@@ -3,6 +3,7 @@ package stream_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	goredis "github.com/redis/go-redis/v9"
@@ -11,6 +12,7 @@ import (
 	agentstream "github.com/byteBuilderX/stratum/internal/agent/infrastructure/stream"
 	pgcontext "github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/byteBuilderX/stratum/pkg/storage/redis"
+	"go.uber.org/zap"
 )
 
 func tenantCtx(tenantID string) context.Context {
@@ -24,7 +26,31 @@ func newStore(t *testing.T) *agentstream.AgentStreamStore {
 	mr := miniredis.RunT(t)
 	rdb := goredis.NewClient(&goredis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { _ = rdb.Close() })
-	return agentstream.NewAgentStreamStore(redis.NewStreamStore(rdb))
+	return agentstream.NewAgentStreamStore(redis.NewStreamStore(rdb), zap.NewNop())
+}
+
+// TestAgentStreamStoreNilLoggerIsNormalized 钉住构造点的 logger 归一化：续期失败
+// 的 WARN 是「key 可能没有 TTL」分支的唯一留痕，漏传 logger 不得让这条路径 panic
+// 或重新变成静默（与 application 侧 deps.Logger == nil → zap.NewNop() 同型）。
+func TestAgentStreamStoreNilLoggerIsNormalized(t *testing.T) {
+	mr := miniredis.RunT(t)
+	rdb := goredis.NewClient(&goredis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	store := agentstream.NewAgentStreamStoreWith(
+		redis.NewStreamStore(rdb), time.Minute, 100, 10, time.Second, nil)
+
+	if _, err := store.Append(tenantCtx("acme"), "exec-nil-logger", 1,
+		port.StreamEntry{Event: port.StreamEventToken, Payload: `{"token":"a"}`}); err != nil {
+		t.Fatalf("Append with a nil logger: %v", err)
+	}
+	// 写路径搭车续期：Append 之后 key 必须已带上 TTL（WARN 所守护的行为本身）。
+	keys := mr.Keys()
+	if len(keys) != 1 {
+		t.Fatalf("keys = %v, want exactly the appended stream", keys)
+	}
+	if ttl := mr.TTL(keys[0]); ttl != time.Minute {
+		t.Fatalf("stream TTL = %v, want 1m（写路径搭车续期）", ttl)
+	}
 }
 
 func TestAgentStreamStoreAppendAndReplay(t *testing.T) {

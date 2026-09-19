@@ -49,6 +49,7 @@ func wireAgentStreamResume(c *Container, a *Agent, deps *agent.AgentServiceDeps)
 	controlClient := c.Storage.Redis.Duplicate()
 	deps.StreamStore = agentstream.NewAgentStreamStore(
 		pkgredis.NewStreamStore(c.Storage.Redis.Client()),
+		c.Logger,
 	)
 	deps.ControlBus = agentstream.NewControlBus(controlClient.Client())
 	// a.Service 在 buildAgent 中稍后才赋值；hook 是延迟求值的闭包，且 buildAgent 在

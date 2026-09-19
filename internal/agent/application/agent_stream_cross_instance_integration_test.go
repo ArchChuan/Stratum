@@ -128,7 +128,7 @@ func newCrossInstanceRig(t *testing.T, cfg agent.StreamRunnerConfig) *crossInsta
 		tenantID:    tenantID,
 		ctx:         postgres.WithTenant(ctx, owner),
 		leaseStore:  persistence.NewPgCheckpointStore(pool),
-		streamStore: agentstream.NewAgentStreamStore(redis.NewStreamStore(rdb)),
+		streamStore: agentstream.NewAgentStreamStore(redis.NewStreamStore(rdb), zap.NewNop()),
 		controlBus:  agentstream.NewControlBus(rdb),
 		cfg:         cfg,
 		started:     make(chan struct{}),
