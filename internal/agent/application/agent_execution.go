@@ -304,11 +304,26 @@ func recordExecutionPreparationFailure(ctx context.Context, start time.Time, sta
 // 才放行，不区分「不存在」与「不属于你」（存在性 oracle 关闭）。
 //
 // 必须由调用方放在任何副作用之前（先授权、后读取与写入），否则读取腿已经完成泄露。
-// CheckpointStore 为 nil 时不存在任何持久化行（writeInitialCheckpoint 与
-// resumeFromCheckpoint 均提前返回），无可劫持目标，故直接放行。
+//
+// 未指定 execution_id（全新执行）时门不进：没有目标可归属。除此之外一律 fail closed，
+// 包括 CheckpointStore 未装配——原实现以「没有 store 就没有持久化行，无可劫持目标」
+// 为由放行，该论证本身成立，但它把闸门的安全性寄托在「resumeFromCheckpoint 与
+// writeInitialCheckpoint 两处提前返回同时不变」这条耦合上。本分支其它降级点
+// （streamDepsReady、track == nil）都选择拒绝而不是默认放行，这里保持一致：
+// 授权所依赖的持久层不可用时，唯一安全的答案是「不放行」（risk harness 第 1 条）。
+//
+// 有意为之的行为变更（owner 裁定，spec §9.1）：闸门只看 userID，**不设角色豁免**，
+// 因此 admin/owner 不能再借 /execute 携带他人 execution_id 代执行。这是收紧而不是
+// 缺陷：去 cancel() 之后，越权续跑还会经 Upsert 的 user_id = EXCLUDED.user_id 把
+// checkpoint 归属改写成调用者，从而绕过 stop 的所有权模型——角色豁免会把这条
+// 绕过重新打开。未来任何委派/代执行能力必须显式重开此闸门（带独立的所有权判定
+// 与审计），不得在闸门内以「actor 是 admin/owner」放行。
 func (s *AgentService) executeOwnershipGate(ctx context.Context, req ExecRequest, meta ExecMeta) error {
-	if meta.ExecutionID == "" || s.deps.CheckpointStore == nil {
+	if meta.ExecutionID == "" {
 		return nil
+	}
+	if s.deps.CheckpointStore == nil {
+		return ErrNotFound
 	}
 	cp, err := s.deps.CheckpointStore.GetLatest(ctx, meta.TenantID, meta.ExecutionID)
 	if err != nil {

@@ -75,11 +75,13 @@ func TestExecuteEnforcesOwnershipFailClosed(t *testing.T) {
 			wantProceed: true,
 		},
 		{
-			name:        "gate is skipped when no checkpoint store is wired",
+			// 降级不得默认放行：闸门不因「依赖未装配」而跳过，与本分支其它降级点
+			// （streamDepsReady 拒绝启动、track == nil 拒绝登记）同型。
+			name:        "gate fails closed when no checkpoint store is wired",
 			noStore:     true,
 			executionID: "e1",
 			userID:      owner,
-			wantProceed: true,
+			wantErr:     ErrNotFound,
 		},
 	}
 
@@ -107,16 +109,16 @@ func TestExecuteEnforcesOwnershipFailClosed(t *testing.T) {
 				if !errors.Is(err, tc.wantErr) {
 					t.Fatalf("err = %v, want %v", err, tc.wantErr)
 				}
-				// 越权分支不得取得任何写副作用，也不得进入执行（因此也不会
-				// resumeFromCheckpoint 读走他人快照）。
+				// 越权分支不得进入执行链——`repo.gets == 0` 是这条断言的唯一承重点，
+				// 也是唯一有判别力的：闸门被短路时它必然变成 1。
+				//
+				// 曾经同时断言 store.upserts/updateStatus == 0，但那条 Execute（非
+				// 流式）路径上 Upsert/UpdateStatus 根本不可达（两者的调用点只在
+				// pause / resume / approval 三个流程里），因此它们在放行分支里也
+				// 恒为 0：断言恒真、无判别力，已删除。写副作用的覆盖归
+				// resume_ownership_test.go——那里 UpdateStatus 真的会被调用。
 				if repo.gets != 0 {
 					t.Fatalf("Registry.Get calls = %d, want 0（越权不得进入执行链）", repo.gets)
-				}
-				if store.updateStatus != 0 {
-					t.Fatalf("UpdateStatus calls = %d, want 0", store.updateStatus)
-				}
-				if store.upserts != 0 {
-					t.Fatalf("Upsert calls = %d, want 0（越权不得写 checkpoint）", store.upserts)
 				}
 				return
 			}
