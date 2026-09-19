@@ -448,10 +448,16 @@ jobs:
       - name: Generate proto contracts
         run: make proto-gen
 
-      # 本 job 存在的理由:带 `//go:build integration` 的用例按设计不进默认测试二进制,
-      # 而 scripts/quality/run-planned-checks.sh 又显式 `env -u STRATUM_TEST_POSTGRES_URL`
-      # 且不带 tag——两支 PR 门禁都看不见它们,checkpoint_lease.go 的五个租约方法
-      # (整支续传设计唯一的互斥源,PG CAS)执行覆盖率因此停在 0.0%。本 job 用真实 PG
+      # 本 job 存在的理由:下面 -run 点名的 9 个用例在两支 PR 门禁里都不会真正执行,
+      # 但排除方式有两种,别混为一谈:
+      #   1) 编译期排除:agent_stream_cross_instance_integration_test.go 带
+      #      `//go:build integration`,不进默认测试二进制,只有 -tags=integration 才编译;
+      #   2) 运行期跳过:checkpoint_lease_integration_test.go 没有 build tag,会照常编进
+      #      默认二进制,但它只在 STRATUM_TEST_POSTGRES_URL 非空时开跑,而
+      #      scripts/quality/run-planned-checks.sh 显式 `env -u STRATUM_TEST_POSTGRES_URL`,
+      #      于是走 t.Skip——文件在二进制里,用例却不执行。
+      # 两条路径的净效果相同:checkpoint_lease.go 的五个租约方法
+      # (整支续传设计唯一的互斥源,PG CAS)执行覆盖率停在 0.0%。本 job 用真实 PG
       # 补上这块;测试自带 ProvisionPublicSchema/ProvisionTenantSchema,库存在即可。
       # Redis 无需 service:跨实例用例用进程内 miniredis 提供 Streams/Pub-Sub 语义。
       - name: Vet integration-tagged agent packages

@@ -221,9 +221,12 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
       });
       return;
     }
-    // 恢复键未就位（全新执行的首帧尚未到达）时 stop 无法投递，服务端 run 照旧
-    // 跑满 2 分钟孤儿超时。这是必须暴露的降级路径：静默会让用户误以为已停止。
-    message.warning({ content: '停止请求未发送：执行尚未建立，请稍后重试', duration: 3 });
+    // 恢复键未就位（全新执行的首帧尚未到达）时 stop 无法投递。不给「稍后重试」这类
+    // 不可执行的动作指引：此处 s.done 已置 true、s.ctrl 已置 null，停止按钮随之下线，
+    // 用户没有重试入口。改为说明服务端会自行收敛——run 的生命周期与 HTTP 请求解绑，
+    // 孤儿超时到期后会兜底取消，不需要用户再做任何事。这是必须暴露的降级路径：
+    // 静默会让用户误以为已停止。
+    message.warning({ content: '停止请求未发送：执行尚未建立，服务端会自行结束该执行', duration: 3 });
   }, [notify]);
 
 	const clearStreamFailure = useCallback(() => {

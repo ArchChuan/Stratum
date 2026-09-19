@@ -118,7 +118,7 @@ describe('ChatStreamContext cancelStream', () => {
 
     expect(mocks.stopAgentExecution).not.toHaveBeenCalled();
     expect(mocks.messageWarning).toHaveBeenCalledWith({
-      content: '停止请求未发送：执行尚未建立，请稍后重试',
+      content: '停止请求未发送：执行尚未建立，服务端会自行结束该执行',
       duration: 3,
     });
   });
