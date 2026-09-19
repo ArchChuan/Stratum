@@ -24,7 +24,7 @@ const controlQueueSize = 16
 
 // readyGate 是「某通道的订阅已建立」的一次性信号。
 //
-// 必须幂等：同一 execution_id 的第二次 Subscribe 会再次 markReady，而对已关闭
+// 必须幂等：同一 execution_id 的第二次 Subscribe 会再次 mark 同一把门，而对已关闭
 // 的 channel 再 close 会 panic（close of closed channel）——F5 重连、双 tab、
 // 跨实例 attach 都会走到这条路。
 type readyGate struct {
@@ -94,6 +94,8 @@ func (b *ControlBus) Subscribe(ctx context.Context, executionID string) (<-chan 
 	}
 
 	out := make(chan port.ControlMessage, controlQueueSize)
+	// 门在订阅确认之后取：Receive 失败时不该在 map 里留下无人认领的条目。
+	gate := b.gate(channel)
 	// 独立的消费 context：调用方传入的 ctx 往往是 HTTP 请求 context，
 	// 它的取消不该终止 runner 的控制订阅（订阅生命周期由 unsubscribe 决定）。
 	consumeCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
@@ -110,13 +112,14 @@ func (b *ControlBus) Subscribe(ctx context.Context, executionID string) (<-chan 
 		once.Do(func() {
 			cancel()
 			_ = sub.Close()
+			b.forgetGate(channel, gate)
 		})
 		// 等消费 goroutine 真正退出：返回后 out 已关闭、不会再有写入，
 		// 调用方（runner 的 defer unsubscribe）可以安全地不再读它。
 		<-done
 	}
 
-	b.markReady(channel)
+	gate.mark()
 	return out, unsubscribe, nil
 }
 
@@ -174,7 +177,24 @@ func (b *ControlBus) WaitSubscribed(ctx context.Context, executionID string) err
 	}
 }
 
-func (b *ControlBus) markReady(channel string) { b.gate(channel).mark() }
+// forgetGate 摘除某个订阅留下的门。gate 是 ready 的唯一写入点，若没有这个
+// 删除点，map 就会按「pod 生命周期内启动过的流式执行数」单调增长——生产
+// Subscribe 每启动一个 runner 取一次门，而条目永久驻留（无界增长）。
+//
+// 选择删除而非换成有界结构：门的唯一用途是弥合「订阅异步生效」与
+// WaitSubscribed 之间的竞态，订阅关闭后这个用途已经结束，删除是语义上精确的
+// 生命周期终点。有界 map 反而要引入淘汰策略，而淘汰一个仍被等待者持有的门
+// 会让 WaitSubscribed 永久等一个不再被 mark 的新门——比内存增长更糟。
+//
+// 只删自己那把门（cur == g）：同一 channel 上并存的第二个订阅（双 tab、跨实例
+// attach）仍可能被 WaitSubscribed 等待，先退出者不得把后者的门摘掉。
+func (b *ControlBus) forgetGate(channel string, g *readyGate) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if cur, ok := b.ready[channel]; ok && cur == g {
+		delete(b.ready, channel)
+	}
+}
 
 // gate 返回 channel 对应的信号门，不存在则创建。Subscribe 与 WaitSubscribed
 // 都经此取门，保证「先等后订」与「先订后等」都能拿到同一个门。
