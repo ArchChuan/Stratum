@@ -88,6 +88,9 @@ type localRunner struct {
 	cancel      context.CancelFunc
 	done        chan struct{}
 	closeOnce   sync.Once
+	// untrackOnce 让 untrack 幂等。finish 靠 closeOnce 已经幂等，但 wg.Done 没有：
+	// 多减一次会把计数压到负数，Wait 直接 panic（与 track 里 Add/Wait 误用同类）。
+	untrackOnce sync.Once
 }
 
 // finish 幂等关闭 done。
@@ -142,6 +145,16 @@ func (rs *runnerSet) track(executionID string, generation int, cancel context.Ca
 		cancel:      cancel,
 		done:        make(chan struct{}),
 	}
+	// 同 executionID 二次登记只可能来自「上一个 runner 还没走到 untrack」，而
+	// CancelAll 只认注册表里的句柄——直接覆盖会让被顶替者变成取消不到的孤儿，
+	// 恰好在 SIGTERM 落在这一瞬时不响应关闭（红线第 6 条）。选择「先取消被顶替者」
+	// 而不是「返回冲突」：track 的 nil 已经有「集合关闭」这一含义，再挤进一种
+	// 冲突语义会让调用方的判空与错误处理纠缠不清；而 cancel 是幂等的
+	// CancelFunc，被顶替者本来也会在下一轮续租 CAS 失败时自取消，这里只是把那
+	// 条路径提前并显式化（不依赖租约间隔）。
+	if prev, ok := rs.runs[executionID]; ok {
+		prev.cancel()
+	}
 	rs.runs[executionID] = r
 	// Add 必须在锁内：Add 与 Wait 的交叉是 Go 明文禁止的误用（计数归零时的
 	// Add 会 panic），且锁内 Add 保证「map 里可见」与「wg 计数」两个状态始终
@@ -150,7 +163,9 @@ func (rs *runnerSet) track(executionID string, generation int, cancel context.Ca
 	return r
 }
 
-// untrack 注销并等待该 runner 退出。
+// untrack 把 runner 从注册表摘除并归还 wg 计数。它**不等待** runner 退出——
+// 等待只在 CancelAll 的 wg.Wait() 里发生（等待自己的调用方会自锁）。幂等：
+// 重复调用对第二次是 no-op，只有第一次会 wg.Done。
 func (rs *runnerSet) untrack(r *localRunner) {
 	r.finish()
 	rs.mu.Lock()
@@ -158,7 +173,7 @@ func (rs *runnerSet) untrack(r *localRunner) {
 		delete(rs.runs, r.executionID)
 	}
 	rs.mu.Unlock()
-	rs.wg.Done()
+	r.untrackOnce.Do(rs.wg.Done)
 }
 
 // CancelAll 取消本进程所有在跑的 run 并等待它们退出（pod SIGTERM 路径）。

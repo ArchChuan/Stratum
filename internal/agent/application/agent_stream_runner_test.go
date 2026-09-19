@@ -174,6 +174,74 @@ func TestRunnerSetTrackRejectedAfterCancelAll(t *testing.T) {
 	}
 }
 
+// 同一 executionID 二次登记必须取消被顶替者：CancelAll 只认注册表里的句柄，
+// 静默覆盖会让旧 runner 变成取消不到的孤儿（SIGTERM 落在这一瞬时不响应关闭）。
+func TestRunnerSetTrackCancelsEvictedRunner(t *testing.T) {
+	rs := newRunnerSet()
+	firstCtx, firstCancel := context.WithCancel(context.Background())
+	first := rs.track("exec-1", 1, firstCancel)
+
+	secondCtx, secondCancel := context.WithCancel(context.Background())
+	defer secondCancel()
+	second := rs.track("exec-1", 2, secondCancel)
+	if second == nil {
+		t.Fatal("第二次 track 被拒绝：集合并未进入关闭流程")
+	}
+	select {
+	case <-firstCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("被顶替的 runner 未被取消：其取消句柄已随覆盖丢失")
+	}
+	if firstCtx.Err() != context.Canceled {
+		t.Fatalf("被顶替者 ctx.Err() = %v, want context.Canceled", firstCtx.Err())
+	}
+	// 注册表里必须是新 runner：取消的是被顶替者，而不是把自己也取消了。
+	rs.mu.Lock()
+	cur := rs.runs["exec-1"]
+	rs.mu.Unlock()
+	if cur != second {
+		t.Fatalf("runs[exec-1] = %p, want 新登记的 %p", cur, second)
+	}
+	select {
+	case <-secondCtx.Done():
+		t.Fatal("新登记的 runner 不得被自己的登记动作取消")
+	default:
+	}
+	// 两者都能正常摘除（被顶替者已不在 map 里，untrack 只归还 wg 计数），
+	// 且 wg 计数不被顶替事件弄乱：CancelAll 必须能收敛而不是挂死。
+	rs.untrack(first)
+	rs.untrack(second)
+	rs.CancelAll()
+
+	rs.mu.Lock()
+	remaining := len(rs.runs)
+	rs.mu.Unlock()
+	if remaining != 0 {
+		t.Fatalf("untrack 后 runs 剩余 %d 条，want 0", remaining)
+	}
+}
+
+// untrack 必须幂等：重复调用只在第一次归还 wg 计数，多减一次会让 Wait 在负数
+// 计数上 panic（与 track 里 Add/Wait 误用同类）。
+func TestRunnerSetUntrackIsIdempotent(t *testing.T) {
+	rs := newRunnerSet()
+	_, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	run := rs.track("exec-1", 1, cancel)
+
+	rs.untrack(run)
+	// 第二次必须是 no-op：若 wg.Done 再执行一次，CancelAll 的 Wait 会 panic。
+	rs.untrack(run)
+
+	rs.mu.Lock()
+	remaining := len(rs.runs)
+	rs.mu.Unlock()
+	if remaining != 0 {
+		t.Fatalf("untrack 后 runs 剩余 %d 条，want 0", remaining)
+	}
+	rs.CancelAll()
+}
+
 func TestRunnerSetCancelAllUnblocksRunners(t *testing.T) {
 	rs := newRunnerSet()
 	ctx, cancel := context.WithCancel(context.Background())
