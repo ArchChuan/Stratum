@@ -50,8 +50,11 @@ func (f *fakeStreamStore) Append(
 	return id, nil
 }
 
-func (f *fakeStreamStore) Replay(_ context.Context, _ string, _ int) ([]port.StreamEntry, error) {
-	return f.ReplayAfter(context.Background(), "", 0, "")
+// Replay 必须转发真实的 ctx：它由缺口路径（handleReplayGap 的全量重放）调用，
+// 转发 context.Background() 会让该路径上 replayCtxs 捕获到的永远是 Background，
+// 未来任何「ctx Values 抵达存储层」的断言在这条路径上都被静默掩盖。
+func (f *fakeStreamStore) Replay(ctx context.Context, _ string, _ int) ([]port.StreamEntry, error) {
+	return f.ReplayAfter(ctx, "", 0, "")
 }
 
 func (f *fakeStreamStore) ReplayAfter(ctx context.Context, _ string, _ int, afterID string) ([]port.StreamEntry, error) {
@@ -363,11 +366,15 @@ func assertResetThenFullReplay(t *testing.T, got []StreamFrame, oldest string) {
 // 不把带洞的半截答案交给用户。
 func TestSubscriptionReplayGapResetsThenReplaysFull(t *testing.T) {
 	store, oldest := seedThreeEntryStream(t)
+	store.replayCtxs = make(chan context.Context, 4)
 	if oldest != "1726483200000-1" {
 		t.Fatalf("oldest = %q, want 1726483200000-1", oldest)
 	}
 
-	sub := NewExecutionSubscription(context.Background(), ExecutionSubscriptionDeps{
+	const sentinel = "gap-path-caller-sentinel"
+	parent := context.WithValue(context.Background(), subscriptionSentinelKey{}, sentinel)
+
+	sub := NewExecutionSubscription(parent, ExecutionSubscriptionDeps{
 		Stream: store, Control: &fakeControlBus{}, ExecutionID: "e1", Generation: 1,
 		// 游标落在最老条目之前，但 ReplayAfter 仍返回非空（满足缺口检测前置条件）。
 		Plan: StreamPlan{Generation: 1, AfterID: "1726483200000-0"},
@@ -379,6 +386,31 @@ func TestSubscriptionReplayGapResetsThenReplaysFull(t *testing.T) {
 		return len(fs) > 0 && fs[len(fs)-1].Event == port.StreamEventDone
 	})
 	assertResetThenFullReplay(t, got, oldest)
+	// 缺口路径的第二次回放（Replay 全量重放）也必须拿到调用方 ctx 的 Values。
+	// 测试替身曾把 context.Background() 转发给 ReplayAfter，使这条路径上的捕获
+	// 恒为 Background——租户在那条路径上取不到时，任何基于捕获的断言都不会红。
+	assertReplayCtxsCarrySentinel(t, store.replayCtxs, sentinel)
+}
+
+// assertReplayCtxsCarrySentinel 排空已捕获的 ReplayAfter ctx，断言每一个都携带
+// 调用方 Value。排到空为终止条件——调用方已用「终态帧」确保发送 happened-before。
+func assertReplayCtxsCarrySentinel(t *testing.T, ctxs <-chan context.Context, want string) {
+	t.Helper()
+	seen := 0
+	for {
+		select {
+		case replayCtx := <-ctxs:
+			if got := replayCtx.Value(subscriptionSentinelKey{}); got != want {
+				t.Fatalf("ReplayAfter ctx[%d] 丢失调用方 Value：got %v, want %q", seen, got, want)
+			}
+			seen++
+		default:
+			if seen == 0 {
+				t.Fatal("ReplayAfter 未被调用，无法断言 ctx 透传")
+			}
+			return
+		}
+	}
 }
 
 // I1.2：FirstID 查询失败仍按缺口处理（fail closed）——宁可多发一次 reset 走
@@ -480,5 +512,32 @@ func TestSubscriptionStoreSeesCallerContextValues(t *testing.T) {
 		t.Fatalf("ReplayAfter 收到的 ctx 丢失调用方 Value：got %v, want %q"+
 			"（订阅 ctx 必须继承调用方 ctx 的 Values，否则存储层取不到租户而 fail closed）",
 			got, sentinel)
+	}
+}
+
+// 空闲看门狗依赖租约仓库，缺失时它永久失效（idleExceeded 在 nil 租约上直接返回
+// false），表现是流永不收敛、前端无限 spinner。降级方向（fail open，宁可多等）
+// 本身正确，但静默失效不可接受——必须留痕。
+func TestSubscriptionWarnsWhenLeaseRepoMissing(t *testing.T) {
+	core, logs := observer.New(zapcore.DebugLevel)
+	sub := NewExecutionSubscription(context.Background(), ExecutionSubscriptionDeps{
+		Stream:  &fakeStreamStore{block: 5 * time.Millisecond},
+		Control: &fakeControlBus{},
+		// Lease 刻意不装配。
+		ExecutionID: "e1", Generation: 1, Plan: StreamPlan{Generation: 1},
+		Cfg:    StreamSubscriptionConfig{Heartbeat: time.Hour, IdleExit: time.Hour, ReadBlock: 5},
+		Logger: zap.New(core),
+	})
+	defer sub.Close()
+
+	entries := logs.FilterMessage("agent stream: lease repo not wired, idle watchdog disabled").All()
+	if len(entries) != 1 {
+		t.Fatalf("warn 条目 = %d, want 1", len(entries))
+	}
+	if entries[0].Level != zapcore.WarnLevel {
+		t.Fatalf("level = %v, want warn", entries[0].Level)
+	}
+	if got := entries[0].ContextMap()["execution_id"]; got != "e1" {
+		t.Fatalf("execution_id = %v, want e1", got)
 	}
 }

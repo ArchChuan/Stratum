@@ -110,6 +110,14 @@ func NewExecutionSubscription(ctx context.Context, deps ExecutionSubscriptionDep
 	if deps.Logger == nil {
 		deps.Logger = zap.NewNop()
 	}
+	// 租约仓库缺失时空闲看门狗永久失效（idleExceeded 在 nil 租约上直接返回 false），
+	// 表现是流永不收敛、前端无限 spinner。生产装配（streamDepsReady）保证非 nil，
+	// 但降级不能是静默的：这里只留痕、不改控制流——fail open 的方向仍然正确
+	// （宁可多等，也不要把仍在跑的执行误判为中断），只是它必须看得见。
+	if deps.Lease == nil {
+		deps.Logger.Warn("agent stream: lease repo not wired, idle watchdog disabled",
+			zap.String("execution_id", deps.ExecutionID))
+	}
 
 	sub := &ExecutionSubscription{
 		frames: make(chan StreamFrame, constants.AgentStreamFrameBufferSize),
