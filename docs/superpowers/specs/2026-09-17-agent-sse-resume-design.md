@@ -284,7 +284,9 @@ F5 后 React 状态全部丢失，且 assistant 消息**不在数据库里**（`
 | `AgentViewerTimeout` | 15s（viewer 无心跳即摘除） | 同上 |
 | `AgentExecutionOrphanTimeout` | 2min | 同上 |
 
-TTL 在流创建时设一次，由 runner 已有心跳 tick（续租 interval）搭车 `EXPIRE`，订阅者 attach 时也续一次。**不新增定时器。**
+TTL 在流创建时设一次，之后只在**写路径**（`Append`）与 runner 已有心跳 tick（续租 interval）上搭车 `EXPIRE`。**不新增定时器。**
+
+**订阅者 attach 不单独续期**：孤儿看门狗已排除该场景——无活跃 viewer/runner 的执行会先被判为孤儿并取消，等不到 TTL 先过期，attach 时续期只是给每次 attach 加一次 Redis 写、行为上零收益。一致性由写路径保证：只有 `Append` 会产生流内容，而它每次写入都刷新 TTL。
 
 ### 6.8 事件清单与命名
 
@@ -421,6 +423,14 @@ const finalContent = streamResult.output || accumulatedContent;
 | 停止端点授权 | actor 必须对该 execution 有所有权，HTTP 层校验后才 PUBLISH |
 | Pub/Sub 通道 | **不承载鉴权**；`execution_id` 出现在通道名中，但通道不外网可达 |
 | 凭据 | 游标走 POST body，不进 URL；流不承载任何 token/cookie |
+
+### 9.1 `/execute` 归属闸门（行为变更，有意为之）
+
+`POST /execute` 携带既有 `execution_id` 时，与 `/stop`、`/resume` **同源**判定归属：两侧 userID 都非空且严格相等才放行，否则一律返回 `ErrNotFound`（不区分「不存在」与「不属于你」，见 §D4）。
+
+**闸门对 admin/owner 一视同仁，不设角色豁免**——因此 admin/owner **不再能借 `/execute` 代他人发起执行**。这是本次改造对既有运维/管理路径的一次静默收紧（去 `cancel()` 之后，越权续跑还会经 `Upsert` 把 checkpoint 的 `user_id` 改写成调用者，从而绕过 stop 的所有权模型），经 owner 裁定**有意为之，保持现状、不加豁免**。
+
+未来任何委派（delegation）/ 代执行（impersonation）能力必须**显式重新打开**这条闸门（新增明确的所有权判定与审计），不得以「actor 是 admin/owner」为由在闸门内放行。
 
 ## 10. 降级与失败路径
 
