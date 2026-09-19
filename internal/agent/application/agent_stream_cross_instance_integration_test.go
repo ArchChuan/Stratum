@@ -698,22 +698,55 @@ func waitCancelled(t *testing.T, rig *crossInstanceRig, within time.Duration, re
 	}
 }
 
+// 追平续传用例专属的时延常量。
+const (
+	// tailResumeHeartbeat 是心跳屏障的节拍。心跳只由 tailLoop 发出，也就是
+	// replay() 已经跑完之后——因此它是「重放已完成」的确定性观测点，取代 sleep。
+	tailResumeHeartbeat = 200 * time.Millisecond
+	// tailResumeBarrierBeats 是屏障要等的心跳条数。等两条而不是一条：一条心跳在
+	// 理论上要求「tick 不会早于第一轮 Tail 就绪」（本实现下 ticker 200ms 远大于
+	// 紧循环的一轮，成立），两条把这点理论依赖也去掉，任何可能的重复下发都落在
+	// 屏障之前。两条心跳的总代价 ~400ms。
+	tailResumeBarrierBeats = 2
+	// tailResumeBarrier 是屏障的失败上限，不是 sleep：正常 400–500ms 到达，这里
+	// 留足 -race 下的调度抖动；超时说明心跳压根没发出来（订阅已死），必须暴露。
+	tailResumeBarrier = 5 * time.Second
+)
+
+// tailResumeSubConfig 是本用例专属的订阅配置：Tail 单轮读周期压到 50ms，心跳压到
+// 200ms 以让屏障快速到达。IdleExit 保持默认 2min，测试窗口内看门狗不会触发。
+// 刻意不改 crossInstanceSubConfig——那个配置被失败路径子用例共用。
+func tailResumeSubConfig() agent.StreamSubscriptionConfig {
+	cfg := agent.DefaultStreamSubscriptionConfig()
+	cfg.ReadBlock = 50
+	cfg.Heartbeat = tailResumeHeartbeat
+	return cfg
+}
+
 // TestResumeAtTailDoesNotReplayStream 覆盖「客户端已追平流尾后重连」这条真实链路
 // （F5 刷新最常见的那一刻）：此刻流中没有新条目，若续传游标被规范化成空串／"0-0"，
 // 订阅会从流头重读并把整条流重复下发。
 //
-// 这条断言必须落在真实 AgentStreamStore 上：游标规范化发生在
-// pkg/storage/redis/stream.go 的 Tail（afterID == "" → "0-0"），Task 12 的单测用
-// fakeStreamStore，假 store 自己实现 Tail、不经过这层规范化，守护不到真实链路。
+// 它守护的是 replay() 的游标种子：种子若写死 ""，追平时重连会拿到空批次、游标仍是
+// ""，Tail 将其规范化成 "0-0" 后整条流重新下发（Task 12 修掉的 Critical）。因此
+// 承重断言必须落在**订阅产出**上——直接调 streamStore 只覆盖存储层，绕过了
+// PlanStream → replay() → tailLoop 整条链路，守护不到那个种子。
 //
-// 判据是真实 entry ID 集合，不是帧数、也不是 sleep：首帧之后收到的每一条流帧的 id
-// 都必须严格大于追平时的游标。
+// 驱动方式照本文件既有的那一条（经 AgentService 的 OpenStreamSubscription）：
+// ExecMeta.LastEventID 正是客户端续传游标进入 PlanStream 的入口。游标规范化发生在
+// pkg/storage/redis/stream.go 的 Tail（afterID == "" → "0-0"），这条路径必须带真实
+// AgentStreamStore：Task 12 的单测用 fakeStreamStore，假 store 自己实现 Tail、不经过
+// 这层规范化，守护不到真实链路。
+//
+// 判据是真实 entry ID 集合，不是帧数、也不是 sleep：屏障之前收到的每一条流帧的 id
+// 都必须严格晚于追平时的游标。
 func TestResumeAtTailDoesNotReplayStream(t *testing.T) {
 	rig := newCrossInstanceRig(t, crossInstanceRunnerConfig(0))
 	svc := rig.newService()
 	defer svc.ShutdownStreamRunners()
 
-	const subject = "exec-tail-resume"
+	// 流与 execution_id 同源：订阅侧按 handle.ExecutionID 取流，追平游标也来自它。
+	const executionID = "exec-tail-resume"
 	entries := []port.StreamEntry{
 		{Event: port.StreamEventMeta, Payload: `{"execution_id":"exec-tail-resume","generation":1}`},
 		{Event: port.StreamEventToken, Payload: `{"token":"alpha"}`},
@@ -721,7 +754,7 @@ func TestResumeAtTailDoesNotReplayStream(t *testing.T) {
 	}
 	cursor := ""
 	for _, e := range entries {
-		id, err := rig.streamStore.Append(rig.ctx, subject, 1, e)
+		id, err := rig.streamStore.Append(rig.ctx, executionID, 1, e)
 		if err != nil {
 			t.Fatalf("append: %v", err)
 		}
@@ -731,22 +764,9 @@ func TestResumeAtTailDoesNotReplayStream(t *testing.T) {
 		t.Fatal("stream is empty: the setup did not produce a cursor")
 	}
 
-	// 以追平后的游标续传：此刻没有新条目，游标必须原样传下去。
-	plan := agent.PlanStream(1, 1, cursor)
-	if plan.Reset || plan.AfterID != cursor {
-		t.Fatalf("plan = %+v, want no reset and AfterID %q", plan, cursor)
-	}
-	replayed, err := rig.streamStore.ReplayAfter(rig.ctx, subject, 1, plan.AfterID)
-	if err != nil {
-		t.Fatalf("ReplayAfter: %v", err)
-	}
-	if len(replayed) != 0 {
-		t.Fatalf("replay after the tail cursor returned %d entries, want 0 (no re-delivery)", len(replayed))
-	}
-
-	// 追平状态下若把游标丢掉，规范化会让 Tail 从流头重读——这条断言就是本用例存在的
-	// 理由：同一条真实链路上，"0-0" 会整条重放，而真实游标不会。
-	fromHead, err := rig.streamStore.ReplayAfter(rig.ctx, subject, 1, "")
+	// setup 自检：空结果不能是因为流本身是空的——从空游标能回放出全部条目。这是
+	// store 级对照，不是承重断言（承重断言在下面的订阅产出上）。
+	fromHead, err := rig.streamStore.ReplayAfter(rig.ctx, executionID, 1, "")
 	if err != nil {
 		t.Fatalf("ReplayAfter from head: %v", err)
 	}
@@ -754,15 +774,129 @@ func TestResumeAtTailDoesNotReplayStream(t *testing.T) {
 		t.Fatalf("replay from head returned %d entries, want %d", len(fromHead), len(entries))
 	}
 
-	tailed, err := rig.streamStore.Tail(rig.ctx, subject, 1, plan.AfterID, 20)
+	// 本用例的流由测试直接写入，没有真实 run 在跑；但续传仍必须经 ExecuteStream 的
+	// 「LeaseStatus.Active → 只订阅、不启动 runner」这一支，否则会起一个 runner
+	// （多一次 LLM 调用，且会往同一条流里写 meta/终态帧，覆盖流的语义）。
+	//
+	// 用 StampLease 而不是 brief 示例里的 ClaimLease：ClaimLease 在既有行上把
+	// run_generation 推进到 2，PlanStream(genClient=1, genNow=2) 会判成
+	// generation_changed 并下发 reset，与「追平后重连」的前提直接冲突。StampLease
+	// 是 NEW 路径声明租约的同一条真实入口，且不推进分代——gen 与流的代际都是 1。
+	seedTailResumeExecution(t, rig, executionID)
+	status, err := rig.leaseStore.LeaseStatus(rig.ctx, rig.tenantID, executionID)
 	if err != nil {
-		t.Fatalf("Tail: %v", err)
+		t.Fatalf("LeaseStatus: %v", err)
 	}
-	for _, e := range tailed {
-		if !streamIDAfter(e.ID, cursor) {
-			t.Fatalf("tail re-delivered entry %s at or before the cursor %s", e.ID, cursor)
+	if !status.Active || status.Generation != 1 {
+		t.Fatalf("seeded lease = %+v, want an active lease at generation 1", status)
+	}
+
+	// 追平后重连的订阅坐标：客户端分代 == 服务端分代 == 流的代际，游标 == 流尾。
+	// PlanStream 的纯函数结果只作为 setup 自检保留（它证明上面那三条前提成立），
+	// 不承担承重断言——承重断言是下面的订阅产出。
+	plan := agent.PlanStream(1, 1, cursor)
+	if plan.Reset || plan.AfterID != cursor {
+		t.Fatalf("plan = %+v, want no reset and AfterID %q", plan, cursor)
+	}
+
+	sub, err := svc.OpenStreamSubscription(rig.ctx, crossInstanceAgentID,
+		agent.ExecRequest{Query: "hi", UserID: crossInstanceOwner},
+		agent.ExecMeta{
+			TenantID:    rig.tenantID,
+			ExecutionID: executionID,
+			Generation:  1,
+			LastEventID: cursor, // ← 追平后的续传游标，F5 重连的那一刻
+		},
+		tailResumeSubConfig())
+	if err != nil {
+		t.Fatalf("OpenStreamSubscription: %v", err)
+	}
+	defer sub.Close()
+	if n := atomic.LoadInt64(&rig.llmCalls); n != 0 {
+		t.Fatalf("LLM calls = %d, want 0 (the resume must subscribe to the existing stream, not start a runner)", n)
+	}
+
+	// 屏障：读到第 tailResumeBarrierBeats 条心跳，即证明 replay() 早已跑完、若有重放
+	// 早已写出。断言只覆盖屏障之前的帧——本场景下屏障之后不可能再有帧（流无新条目）。
+	frames := collectThroughHeartbeats(t, sub, tailResumeBarrierBeats, tailResumeBarrier)
+	delivered := make([]string, 0, len(frames))
+	for _, frame := range frames {
+		if frame.ID == "" {
+			continue // 注释帧（心跳）没有游标，天然不参与判据
+		}
+		delivered = append(delivered, frame.ID)
+		if !streamIDAfter(frame.ID, cursor) {
+			t.Fatalf("resume re-delivered entry %s at or before the tail cursor %s; frames: %v",
+				frame.ID, cursor, describeFrames(frames))
 		}
 	}
+	t.Logf("追平游标 = %s；屏障前收到 %d 条流帧（期望 0）与 %d 条心跳；流帧 id = %v",
+		cursor, len(delivered), len(frames)-len(delivered), delivered)
+}
+
+// seedTailResumeExecution 造一条「有租约、无 runner」的可续传执行：checkpoint 行由
+// 真实 PgCheckpointStore 写入（UserID 必须是调用身份——ExecuteStream 的 D4 归属
+// 闸门按严格相等放行，两侧任一为空都 404），租约由真实租约仓库盖章使其 Active。
+func seedTailResumeExecution(t *testing.T, rig *crossInstanceRig, executionID string) {
+	t.Helper()
+	checkpoint := domain.AgentExecutionCheckpoint{
+		ExecutionID:   executionID,
+		AgentID:       crossInstanceAgentID,
+		UserID:        crossInstanceOwner,
+		Status:        "running",
+		ResumeReason:  "init",
+		UserQuery:     "hi",
+		RunGeneration: 1,
+		ExpiresAt:     time.Now().Add(time.Hour),
+	}
+	if err := rig.leaseStore.Upsert(rig.ctx, rig.tenantID, checkpoint); err != nil {
+		t.Fatalf("seed checkpoint: %v", err)
+	}
+	if _, err := rig.leaseStore.StampLease(rig.ctx, rig.tenantID, executionID, time.Minute); err != nil {
+		t.Fatalf("stamp lease: %v", err)
+	}
+}
+
+// collectThroughHeartbeats 读到第 want 条心跳注释帧为止，返回此前（含该帧）收到的
+// 全部帧。订阅提前关流、或屏障到达前出现终态帧，都直接失败：那两种情况下游标断言
+// 会退化成空转，必须暴露而不是静默通过。
+func collectThroughHeartbeats(
+	t *testing.T, sub *agent.ExecutionSubscription, want int, within time.Duration,
+) []agent.StreamFrame {
+	t.Helper()
+	deadline := time.After(within)
+	frames := make([]agent.StreamFrame, 0, want+4)
+	beats := 0
+	for beats < want {
+		select {
+		case frame, ok := <-sub.Frames():
+			if !ok {
+				t.Fatalf("subscription closed after %d heartbeat(s), want %d; frames seen: %v",
+					beats, want, describeFrames(frames))
+			}
+			frames = append(frames, frame)
+			if port.IsTerminalStreamEvent(frame.Event) {
+				t.Fatalf("terminal frame %q reached before the heartbeat barrier; frames seen: %v",
+					describeFrame(frame), describeFrames(frames))
+			}
+			if frame.Comment != "" {
+				beats++
+			}
+		case <-deadline:
+			t.Fatalf("timed out after %v waiting for %d heartbeat(s); frames seen: %v",
+				within, want, describeFrames(frames))
+		}
+	}
+	return frames
+}
+
+// describeFrames 把一批帧压成排障用的短标签列表，供超时 / 关流消息取证。
+func describeFrames(frames []agent.StreamFrame) []string {
+	labels := make([]string, 0, len(frames))
+	for _, frame := range frames {
+		labels = append(labels, describeFrame(frame))
+	}
+	return labels
 }
 
 // streamIDAfter 判定 Redis entry ID a 是否严格晚于 b（格式 "<ms>-<seq>"）。
