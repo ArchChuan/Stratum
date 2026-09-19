@@ -303,7 +303,9 @@ func (s *AgentService) OpenStreamSubscription(
 		return nil, err
 	}
 	plan := PlanStream(meta.Generation, handle.Generation, meta.LastEventID)
-	return NewExecutionSubscription(ExecutionSubscriptionDeps{
+	// 透传调用方 ctx：存储层经 tenantnaming.TenantKey 从订阅生命周期 ctx 取租户，
+	// 丢失它会让每一步存储调用 fail closed（订阅 ctx 构造见 subscriptionContext）。
+	return NewExecutionSubscription(ctx, ExecutionSubscriptionDeps{
 		Stream:      s.deps.StreamStore,
 		Control:     s.deps.ControlBus,
 		Lease:       s.deps.LeaseRepo,

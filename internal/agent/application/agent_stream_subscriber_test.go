@@ -31,6 +31,10 @@ type fakeStreamStore struct {
 	// tailCursors 记录每次 Tail 收到的游标，让「续传起点」能被确定性断言，
 	// 而不必靠「等一段时间看有没有帧」的时间窗赌博。nil 时投递被静默丢弃。
 	tailCursors chan string
+	// replayCtxs 记录每次 ReplayAfter 收到的 ctx——这条路径是订阅的第一步存储
+	// 调用，也是「调用方 ctx 的 Values 是否抵达存储层」的观测点。nil 时投递被
+	// 静默丢弃（与 tailCursors 同型）。
+	replayCtxs chan context.Context
 }
 
 func (f *fakeStreamStore) Append(
@@ -50,7 +54,12 @@ func (f *fakeStreamStore) Replay(_ context.Context, _ string, _ int) ([]port.Str
 	return f.ReplayAfter(context.Background(), "", 0, "")
 }
 
-func (f *fakeStreamStore) ReplayAfter(_ context.Context, _ string, _ int, afterID string) ([]port.StreamEntry, error) {
+func (f *fakeStreamStore) ReplayAfter(ctx context.Context, _ string, _ int, afterID string) ([]port.StreamEntry, error) {
+	// 非阻塞投递：容量满不阻塞被测代码；nil channel 走 default，安全。
+	select {
+	case f.replayCtxs <- ctx:
+	default:
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.afterLocked(afterID), nil
@@ -200,7 +209,7 @@ func TestSubscriptionReplaysThenStopsAtTerminal(t *testing.T) {
 	_, _ = store.Append(ctx, "e1", 1, port.StreamEntry{Event: port.StreamEventToken, Payload: `{"token":"a"}`})
 	_, _ = store.Append(ctx, "e1", 1, port.StreamEntry{Event: port.StreamEventDone, Payload: `{"done":true}`})
 
-	sub := NewExecutionSubscription(ExecutionSubscriptionDeps{
+	sub := NewExecutionSubscription(ctx, ExecutionSubscriptionDeps{
 		Stream: store, Control: &fakeControlBus{}, ExecutionID: "e1", Generation: 1,
 		Plan: StreamPlan{Generation: 1},
 		Cfg:  StreamSubscriptionConfig{Heartbeat: time.Hour, IdleExit: time.Hour, ReadBlock: 5},
@@ -228,7 +237,7 @@ func TestSubscriptionReplaysAfterCursor(t *testing.T) {
 	_, _ = store.Append(ctx, "e1", 1, port.StreamEntry{Event: port.StreamEventToken, Payload: `{"token":"b"}`})
 	_, _ = store.Append(ctx, "e1", 1, port.StreamEntry{Event: port.StreamEventDone, Payload: `{"done":true}`})
 
-	sub := NewExecutionSubscription(ExecutionSubscriptionDeps{
+	sub := NewExecutionSubscription(ctx, ExecutionSubscriptionDeps{
 		Stream: store, Control: &fakeControlBus{}, ExecutionID: "e1", Generation: 1,
 		Plan: StreamPlan{Generation: 1, AfterID: first},
 		Cfg:  StreamSubscriptionConfig{Heartbeat: time.Hour, IdleExit: time.Hour, ReadBlock: 5},
@@ -249,7 +258,7 @@ func TestSubscriptionEmitsResetFrameFirst(t *testing.T) {
 		Event: port.StreamEventDone, Payload: `{"done":true}`,
 	})
 
-	sub := NewExecutionSubscription(ExecutionSubscriptionDeps{
+	sub := NewExecutionSubscription(context.Background(), ExecutionSubscriptionDeps{
 		Stream: store, Control: &fakeControlBus{}, ExecutionID: "e1", Generation: 2,
 		Plan: StreamPlan{Generation: 2, Reset: true, ResetReason: ResetReasonGenerationChanged},
 		Cfg:  StreamSubscriptionConfig{Heartbeat: time.Hour, IdleExit: time.Hour, ReadBlock: 5},
@@ -295,7 +304,7 @@ func TestSubscriptionResumesAfterCaughtUpWithoutReplay(t *testing.T) {
 	_, _ = store.Append(ctx, "e1", 1, port.StreamEntry{Event: port.StreamEventToken, Payload: `{"token":"a"}`})
 	last, _ := store.Append(ctx, "e1", 1, port.StreamEntry{Event: port.StreamEventToken, Payload: `{"token":"b"}`})
 
-	sub := NewExecutionSubscription(ExecutionSubscriptionDeps{
+	sub := NewExecutionSubscription(ctx, ExecutionSubscriptionDeps{
 		Stream: store, Control: &fakeControlBus{}, ExecutionID: "e1", Generation: 1,
 		Plan: StreamPlan{Generation: 1, AfterID: last},
 		Cfg:  StreamSubscriptionConfig{Heartbeat: time.Hour, IdleExit: time.Hour, ReadBlock: 5},
@@ -358,7 +367,7 @@ func TestSubscriptionReplayGapResetsThenReplaysFull(t *testing.T) {
 		t.Fatalf("oldest = %q, want 1726483200000-1", oldest)
 	}
 
-	sub := NewExecutionSubscription(ExecutionSubscriptionDeps{
+	sub := NewExecutionSubscription(context.Background(), ExecutionSubscriptionDeps{
 		Stream: store, Control: &fakeControlBus{}, ExecutionID: "e1", Generation: 1,
 		// 游标落在最老条目之前，但 ReplayAfter 仍返回非空（满足缺口检测前置条件）。
 		Plan: StreamPlan{Generation: 1, AfterID: "1726483200000-0"},
@@ -378,7 +387,7 @@ func TestSubscriptionReplayGapFailClosedOnFirstIDError(t *testing.T) {
 	base, oldest := seedThreeEntryStream(t)
 	core, logs := observer.New(zapcore.DebugLevel)
 
-	sub := NewExecutionSubscription(ExecutionSubscriptionDeps{
+	sub := NewExecutionSubscription(context.Background(), ExecutionSubscriptionDeps{
 		Stream: &firstIDErrorStore{base}, Control: &fakeControlBus{}, ExecutionID: "e1", Generation: 1,
 		Plan:   StreamPlan{Generation: 1, AfterID: "1726483200000-0"},
 		Cfg:    StreamSubscriptionConfig{Heartbeat: time.Hour, IdleExit: time.Hour, ReadBlock: 5},
@@ -405,7 +414,7 @@ func TestSubscriptionTailFailureIsLoggedAndEmitsErrorFrame(t *testing.T) {
 	core, logs := observer.New(zapcore.DebugLevel)
 	store := &tailErrorStore{&fakeStreamStore{block: 5 * time.Millisecond}}
 
-	sub := NewExecutionSubscription(ExecutionSubscriptionDeps{
+	sub := NewExecutionSubscription(context.Background(), ExecutionSubscriptionDeps{
 		Stream: store, Control: &fakeControlBus{}, ExecutionID: "e1", Generation: 1,
 		Plan:   StreamPlan{Generation: 1},
 		Cfg:    StreamSubscriptionConfig{Heartbeat: time.Hour, IdleExit: time.Hour, ReadBlock: 5},
@@ -429,5 +438,47 @@ func TestSubscriptionTailFailureIsLoggedAndEmitsErrorFrame(t *testing.T) {
 	}
 	if got := entries[0].ContextMap()["execution_id"]; got != "e1" {
 		t.Fatalf("execution_id = %v, want e1", got)
+	}
+}
+
+// subscriptionSentinelKey 是私有 key 类型：挂在 parent ctx 上的 sentinel 值
+// 不可能由 context.Background() 派生出来，因此能坐实「Value 是否真的从调用方
+// 抵达了存储调用」，而不必在单测里 import 存储驱动去断言租户本身。
+type subscriptionSentinelKey struct{}
+
+// 订阅 ctx 必须继承调用方 ctx 的 Values——租户上下文是其中承重的一项：
+// AgentStreamStore 的每个方法都经 tenantnaming.TenantKey 取租户，取不到就
+// fail closed。旧实现用 context.Background() 造生命周期 ctx，丢掉了调用方的
+// 租户，于是生产上每一次 SSE 订阅都在回放第一步（ReplayAfter）就写出错误帧
+// 并断开。「必须真的是租户」由 integration 测试用真实 store 承担，本用例锁住
+// 「调用方 Values 被传递」这个更基础的不变量。
+func TestSubscriptionStoreSeesCallerContextValues(t *testing.T) {
+	store := &fakeStreamStore{
+		block:      5 * time.Millisecond,
+		replayCtxs: make(chan context.Context, 4),
+	}
+	_, _ = store.Append(context.Background(), "e1", 1,
+		port.StreamEntry{Event: port.StreamEventDone, Payload: `{"done":true}`})
+
+	const sentinel = "caller-tenant-sentinel"
+	parent := context.WithValue(context.Background(), subscriptionSentinelKey{}, sentinel)
+
+	sub := NewExecutionSubscription(parent, ExecutionSubscriptionDeps{
+		Stream: store, Control: &fakeControlBus{}, ExecutionID: "e1", Generation: 1,
+		Plan: StreamPlan{Generation: 1},
+		Cfg:  StreamSubscriptionConfig{Heartbeat: time.Hour, IdleExit: time.Hour, ReadBlock: 5},
+	})
+	defer sub.Close()
+
+	var replayCtx context.Context
+	select {
+	case replayCtx = <-store.replayCtxs:
+	case <-time.After(2 * time.Second):
+		t.Fatal("ReplayAfter 在 2s 内未被调用")
+	}
+	if got := replayCtx.Value(subscriptionSentinelKey{}); got != sentinel {
+		t.Fatalf("ReplayAfter 收到的 ctx 丢失调用方 Value：got %v, want %q"+
+			"（订阅 ctx 必须继承调用方 ctx 的 Values，否则存储层取不到租户而 fail closed）",
+			got, sentinel)
 	}
 }

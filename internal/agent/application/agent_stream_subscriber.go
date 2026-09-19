@@ -92,7 +92,8 @@ func (sub *ExecutionSubscription) Close() {
 }
 
 // NewExecutionSubscription 启动订阅。调用方必须在返回后用 defer Close()。
-func NewExecutionSubscription(deps ExecutionSubscriptionDeps) *ExecutionSubscription {
+// ctx 是调用方 ctx（携带租户上下文），订阅生命周期 ctx 由它派生。
+func NewExecutionSubscription(ctx context.Context, deps ExecutionSubscriptionDeps) *ExecutionSubscription {
 	cfg := deps.Cfg
 	if cfg.Heartbeat <= 0 {
 		cfg.Heartbeat = constants.SSEHeartbeatInterval
@@ -114,7 +115,7 @@ func NewExecutionSubscription(deps ExecutionSubscriptionDeps) *ExecutionSubscrip
 		frames: make(chan StreamFrame, constants.AgentStreamFrameBufferSize),
 		done:   make(chan struct{}),
 	}
-	sub.ctx, sub.cancel = subscriptionContext()
+	sub.ctx, sub.cancel = subscriptionContext(ctx)
 	go func() {
 		defer close(sub.done)
 		defer close(sub.frames)
@@ -123,12 +124,15 @@ func NewExecutionSubscription(deps ExecutionSubscriptionDeps) *ExecutionSubscrip
 	return sub
 }
 
-// subscriptionContext 构造一次订阅的生命周期 context，并把取消函数显式交还
-// 调用方（与 revisionExecutionContext 同型）。订阅的取消权归 ExecutionSubscription
-// 的 Close()，不是构造点——写成返回 cancel 而非就地持有，正是为了让这个所有权
-// 转移在签名上可见。
-func subscriptionContext() (context.Context, context.CancelFunc) {
-	return context.WithCancel(context.Background())
+// subscriptionContext 构造一次订阅的生命周期 context：继承调用方 ctx 的 Values
+// （租户上下文是其中承重的一项——存储层经 tenantnaming.TenantKey 从中取租户），
+// 但不继承调用方的取消传播。
+//
+// 用 WithoutCancel 而非直接 WithCancel(parent)，是为了让取消权仍然唯一归
+// ExecutionSubscription 的 Close()：客户端请求结束不该被解释成订阅结束。与
+// revisionExecutionContext（agent_execution.go）同型。
+func subscriptionContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithCancel(context.WithoutCancel(parent))
 }
 
 // runSubscription 是订阅的装配层：合成 reset 帧 → 回放 → 交给跟流主循环。
