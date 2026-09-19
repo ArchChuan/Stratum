@@ -46,6 +46,10 @@ func BuildContainer(cfg *config.Config, key *rsa.PrivateKey, logger *zap.Logger,
 				Registry: agentapp.NewRegistry(contractAgentRepo{}, logger),
 				Logger:   logger,
 				Metrics:  metrics,
+				// stop 端点的两个必需依赖（spec §496-500）：缺 ControlBus 直接报错、
+				// 缺 CheckpointStore 无法做归属判定，golden 就拿不到 200/404。
+				ControlBus:      contractControlBus{},
+				CheckpointStore: contractCheckpointRepo{},
 			})
 			svc.SetOperationGate(gate)
 			return &wiring.Agent{
