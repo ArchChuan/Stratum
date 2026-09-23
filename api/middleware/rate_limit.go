@@ -12,6 +12,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 	"golang.org/x/time/rate"
+
+	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
 const rateLimiterKeyPrefix = "rate_limit:"
@@ -57,7 +59,9 @@ type RateLimiterStore struct {
 }
 
 // NewRedisRateLimiterStore creates a replica-shared limiter. Redis failures are
-// returned to middleware and never degrade to a process-local quota.
+// returned to middleware and never degrade to a process-local quota; each call
+// is bounded by constants.RateLimitRedisTimeout so a Redis outage fails closed
+// fast instead of stalling every request on the client's own dial/read timeouts.
 func NewRedisRateLimiterStore(rdb *redis.Client, r rate.Limit, b int) *RateLimiterStore {
 	s := NewRateLimiterStore(r, b)
 	s.rdb = rdb
@@ -119,7 +123,9 @@ func (s *RateLimiterStore) allow(ctx context.Context, key string) (bool, time.Du
 		}
 		return false, localRetryAfter(s.r), nil
 	}
-	result, err := redisTokenBucket.Run(ctx, s.rdb, []string{rateLimiterKeyPrefix + key}, float64(s.r), s.b).Result()
+	budgetCtx, cancel := context.WithTimeout(ctx, constants.RateLimitRedisTimeout)
+	defer cancel()
+	result, err := redisTokenBucket.Run(budgetCtx, s.rdb, []string{rateLimiterKeyPrefix + key}, float64(s.r), s.b).Result()
 	if err != nil {
 		return false, 0, fmt.Errorf("distributed rate limit: %w", err)
 	}

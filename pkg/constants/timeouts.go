@@ -30,6 +30,15 @@ const (
 	// Router health-check probe
 	RouterHealthTimeout = 3 * time.Second
 
+	// RedisStartupPingTimeout 限制启动期 Redis 连通性探针。Redis 不可用时必须快速
+	// 降级启动，不能让 go-redis 的 DialTimeout × 重试把启动拖成分钟级。
+	RedisStartupPingTimeout = 3 * time.Second
+
+	// RateLimitRedisTimeout 限制单次分布式限流 Redis 调用。Redis 抖动时必须快速
+	// fail closed（503 rate limit unavailable）；没有这个预算时，被黑洞的 Redis 会让
+	// 每个认证/执行请求挂在 DialTimeout×MaxRetries 上（默认约 20s）。
+	RateLimitRedisTimeout = 500 * time.Millisecond
+
 	// MCP client connection idle
 	MCPIdleTimeout                 = 5 * time.Minute
 	RevisionObjectStoreInitTimeout = 10 * time.Second
