@@ -38,7 +38,8 @@ func wireAgentRepoDeps(
 // 关闭 hook。执行租约由 wireAgentRepoDeps 与其它 DB deps 一同装配。
 //
 // 降级：redis 不可用时 StreamStore/ControlBus 保持 nil，application 层 fail closed
-// （ExecuteStream 报错），不静默退化成「续传可用」。
+// （ExecuteStream 报错），不静默退化成「续传可用」。降级启动（redis 建连失败但客户端
+// 非 nil）不在此分支：此时读写会真实报错，同样 fail closed，且 redis 恢复后自动可用。
 func wireAgentStreamResume(c *Container, a *Agent, deps *agent.AgentServiceDeps) {
 	if c.Storage == nil || c.Storage.Redis == nil {
 		return
